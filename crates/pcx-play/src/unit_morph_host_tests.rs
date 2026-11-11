@@ -62,6 +62,21 @@ endfunction
 function off takes nothing returns boolean
 return IssueImmediateOrderById(U,OrderId("unform"))
 endfunction
+function root_order takes nothing returns boolean
+return IssueImmediateOrder(U,"root")
+endfunction
+function unroot_order takes nothing returns boolean
+return IssueImmediateOrder(U,"unroot")
+endfunction
+function unroot_by_id takes nothing returns boolean
+return IssueImmediateOrderById(U,OrderId("unroot"))
+endfunction
+function burrow_order takes nothing returns boolean
+return IssueImmediateOrder(U,"burrow")
+endfunction
+function move_order takes nothing returns boolean
+return IssuePointOrder(U,"gamma",72.,16.)
+endfunction
 function move_callback takes nothing returns nothing
 set Mode=2
 endfunction
@@ -86,6 +101,10 @@ fn registry_numeric() -> (
         ("delta", 2122),
         ("form", 2701),
         ("unform", 2702),
+        ("root", 2801),
+        ("unroot", 2802),
+        ("burrow", 2803),
+        ("unburrow", 2804),
     ]
     .iter()
     .enumerate()
@@ -113,10 +132,10 @@ fn registry_numeric() -> (
     boot.extend(va(0x1680).to_le_bytes());
     for target in [register, va(0x1200)] {
         boot.push(0xe8);
-        let next = va(0x1280) + boot.len() as u32 + 4;
+        let next = va(0x1900) + boot.len() as u32 + 4;
         boot.extend(target.wrapping_sub(next).to_le_bytes());
     }
-    image[0x1280..0x1280 + boot.len()].copy_from_slice(&boot);
+    image[0x1900..0x1900 + boot.len()].copy_from_slice(&boot);
     let mut window = |at, prefix: &[u8], id: i32| {
         let mut b = prefix.to_vec();
         b.extend(id.to_le_bytes());
@@ -141,7 +160,7 @@ fn registry_numeric() -> (
             digest: sha256(&code),
         },
         bootstrap: SourceWindow {
-            va: va(0x1280),
+            va: va(0x1900),
             len: boot.len() as u32,
             digest: sha256(&boot),
         },
@@ -149,7 +168,7 @@ fn registry_numeric() -> (
         register,
     };
     let registry =
-        Arc::new(crate::order_registry::Registry::read(&image, binding, budget, 6, 32).unwrap());
+        Arc::new(crate::order_registry::Registry::read(&image, binding, budget, 12, 32).unwrap());
     let activity = crate::unit_activity::Rules::read(
         &image,
         crate::unit_activity::Binding {
@@ -224,10 +243,20 @@ fn tables(cast: &str, duration: &str) -> DefaultTables {
             "Dur1",
             "Cool1",
         ],
-        &[&[
-            "X001", "Q987", "1", "0", "0", "0", "u001", "5", "0.25", "0.5", "u002", "7", cast,
-            duration, "0",
-        ]],
+        &[
+            &[
+                "X001", "Q987", "1", "0", "0", "0", "u001", "5", "0.25", "0.5", "u002", "7", cast,
+                duration, "0",
+            ],
+            &[
+                "X002", "R987", "1", "0", "0", "0", "1", "2", "0", "0", "u002", "0", "0", "2.5",
+                "0",
+            ],
+            &[
+                "X003", "Z987", "1", "0", "0", "0", "u001", "1", "0", "0", "u002", "0", "0",
+                "1.45", "0",
+            ],
+        ],
     );
     let metadata = sylk(
         &[
@@ -345,6 +374,9 @@ fn tables(cast: &str, duration: &str) -> DefaultTables {
     .unwrap()
 }
 fn open(cast: &str, duration: &str) -> (Vm, HandleId) {
+    open_with("X001", cast, duration)
+}
+fn open_with(abilities: &str, cast: &str, duration: &str) -> (Vm, HandleId) {
     let (registry, activity, numeric) = registry_numeric();
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = registry.binding().image_sha256;
@@ -354,15 +386,34 @@ fn open(cast: &str, duration: &str) -> (Vm, HandleId) {
         flight: Ok(crate::unit_morph_rules::FlightRules {
             minimum_target: 0.03125,
         }),
-        classes: vec![crate::unit_morph_rules::Class {
-            code: *b"Q987",
-            on: registry.id("form").unwrap(),
-            off: registry.id("unform").unwrap(),
-            uninterruptible: 1,
-            immediate_takeoff: 4,
-        }],
+        classes: vec![
+            crate::unit_morph_rules::Class {
+                code: *b"Q987",
+                on: registry.id("form").unwrap(),
+                off: registry.id("unform").unwrap(),
+                uninterruptible: 1,
+                immediate_takeoff: 4,
+            },
+            crate::unit_morph_rules::Class {
+                code: *b"Z987",
+                on: registry.id("burrow").unwrap(),
+                off: registry.id("unburrow").unwrap(),
+                uninterruptible: 1,
+                immediate_takeoff: 4,
+            },
+        ],
     };
-    let rules = rules.with_morph(Ok(morph));
+    let root = crate::unit_root_rules::Rules {
+        origin: registry.binding().origin.clone(),
+        image_sha256: registry.binding().image_sha256,
+        class: crate::unit_root_rules::Class {
+            code: *b"R987",
+            root: registry.id("root").unwrap(),
+            unroot: registry.id("unroot").unwrap(),
+            rooted_state_bit: 1 << 27,
+        },
+    };
+    let rules = rules.with_morph(Ok(morph)).with_root(Ok(root));
     let mut fields = hero_fields("STR");
     fields.push(column(
         b"mUpg",
@@ -377,7 +428,7 @@ fn open(cast: &str, duration: &str) -> (Vm, HandleId) {
         SlkId::UnitAbilities,
         "abilList",
         FieldKind::Token,
-        "X001",
+        abilities,
     ));
     fields.push(column(
         b"mHgt",
@@ -947,4 +998,82 @@ fn native_class_differs_from_owned_alias_and_interrupts_existing_attack_order() 
             .unwrap(),
         h.native("OrderId", &[Value::Str("form".into())]).unwrap()
     );
+}
+
+fn weapon_present(vm: &mut Vm, u: HandleId) -> bool {
+    vm.host()
+        .inner
+        .executed_unit(u)
+        .unwrap()
+        .combat
+        .as_ref()
+        .expect("combat admitted")
+        .weapon
+        .is_some()
+}
+
+#[test]
+fn unroot_is_accepted_once_and_applies_the_uprooted_attack_mask() {
+    let (mut vm, u) = open_with("X002", "0.125", "0.375");
+    assert!(weapon_present(&mut vm, u), "fixture unit starts armed");
+    assert!(!vm.host().inner.unit_uprooted(u));
+    // The class rejects `root` as an immediate order, rooted or not.
+    assert_eq!(vm.call("root_order", &[]).unwrap(), Value::Bool(false));
+    assert!(!vm.host().inner.unit_uprooted(u));
+    assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(true));
+    assert!(vm.host().inner.unit_uprooted(u));
+    // DataB is 2: attack 2 only, so the modelled attack 1 is disabled.
+    assert!(!weapon_present(&mut vm, u));
+    assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.call("unroot_by_id", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.call("root_order", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(
+        vm.host().inner.executed_unit(u).unwrap().definition.rawcode,
+        *b"u001",
+        "unroot changes no form"
+    );
+}
+
+#[test]
+fn movement_of_an_uprooted_unit_is_refused_precisely() {
+    let (mut vm, u) = open_with("X002", "0.125", "0.375");
+    vm.call("move_order", &[])
+        .expect("a rooted unit's order is unchanged");
+    assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(true));
+    let error = vm.call("move_order", &[]).unwrap_err().to_string();
+    assert!(error.contains("uprooted unit is not modelled"), "{error}");
+    assert!(vm.host().inner.unit_uprooted(u));
+}
+
+#[test]
+fn units_without_a_handling_ability_refuse_root_and_burrow_orders() {
+    for abilities in ["", "X001"] {
+        let (mut vm, u) = open_with(abilities, "0.125", "0.375");
+        let before = vm.host().inner.executed_unit(u).unwrap().clone();
+        for order in ["unroot_order", "unroot_by_id", "root_order", "burrow_order"] {
+            assert_eq!(vm.call(order, &[]).unwrap(), Value::Bool(false), "{order}");
+        }
+        assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+        assert!(!vm.host().inner.unit_uprooted(u));
+    }
+}
+
+#[test]
+fn unroot_with_issued_order_listeners_is_refused_before_any_change() {
+    let (mut vm, u) = open_with("X002", "0.125", "0.375");
+    vm.call("listen", &[]).unwrap();
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    let error = vm.call("unroot_order", &[]).unwrap_err().to_string();
+    assert!(error.contains("issued-order event delivery"), "{error}");
+    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+    assert!(!vm.host().inner.unit_uprooted(u));
+}
+
+#[test]
+fn burrow_class_form_without_immediate_change_is_refused_with_its_flags() {
+    let (mut vm, u) = open_with("X003", "0.125", "0.375");
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    let error = vm.call("burrow_order", &[]).unwrap_err().to_string();
+    assert!(error.contains("morph flags 0x1 of class Z987"), "{error}");
+    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
 }

@@ -8,7 +8,7 @@ fn identity() -> AssetIdentity {
 }
 fn fixture(shift: u32, _mask: u8) -> Vec<(u32, Vec<u8>, bool)> {
     let mut memory = Vec::new();
-    for (i, name) in ["CAbilityRavenForm"].iter().enumerate() {
+    for (i, name) in CLASS_NAMES.iter().enumerate() {
         let n = shift + 0x30000 + i as u32 * 0x1000;
         let f = shift + 0x10000 + i as u32 * 0x1000;
         let table = shift + 0x40000 + i as u32 * 0x1000;
@@ -116,9 +116,20 @@ fn selected_original_raven_class_binds() {
     )
     .unwrap();
     assert!(rules.flight.is_ok(), "{:?}", rules.flight);
-    assert_eq!(rules.classes.len(), 1);
+    assert_eq!(rules.classes.len(), 2);
     assert_eq!(rules.classes[0].code, *b"Arav");
-    assert_ne!(rules.classes[0].on, rules.classes[0].off);
+    assert_eq!(rules.classes[1].code, *b"Abur");
+    assert_eq!(
+        rules.classes[1].uninterruptible,
+        rules.classes[0].uninterruptible
+    );
+    assert_eq!(
+        rules.classes[1].immediate_takeoff,
+        rules.classes[0].immediate_takeoff
+    );
+    for class in &rules.classes {
+        assert_ne!(class.on, class.off);
+    }
 }
 
 #[test]

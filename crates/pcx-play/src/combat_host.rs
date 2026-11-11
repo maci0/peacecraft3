@@ -284,6 +284,16 @@ pub(super) fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, Str
     }
 }
 
+/// Weapon 1 when bit 0 of an attack-enable mask is set. Weapon 2 (bit 1) is not modelled, so a
+/// mask without bit 0 leaves the unit with no weapon.
+pub(super) fn weapon_for_mask(d: &Definition, mask: i32) -> Result<Option<Weapon>, String> {
+    if mask & 1 == 0 {
+        Ok(None)
+    } else {
+        read_weapon(d, 1)
+    }
+}
+
 /// Weapon `n` (1 or 2) of the unit's `UnitWeapons` row. Weapon 2 is absent when its `weapTp2`
 /// cell is a placeholder; only weapon 1 carries the splash columns.
 pub(super) fn read_weapon(d: &Definition, n: u8) -> Result<Option<Weapon>, String> {
@@ -359,11 +369,7 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
         .ok_or_else(|| format!("unsupported defense type {defense_name}"))?;
     let armor = num(SlkId::UnitBalance, "def")?.unwrap_or(0.0);
     let enabled = num(SlkId::UnitWeapons, "weapsOn")?.unwrap_or(0.0) as i32;
-    let weapon = if enabled & 1 == 0 {
-        None
-    } else {
-        read_weapon(d, 1)?
-    };
+    let weapon = weapon_for_mask(d, enabled)?;
     Ok(Combat {
         weapon,
         armor,

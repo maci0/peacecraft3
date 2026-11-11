@@ -31,6 +31,8 @@ pub struct ObjectHost {
     summoning: Option<unit_summon::State>,
     mirror_image: Option<unit_mirror_image::State>,
     morph_active: Vec<HandleId>,
+    /// Units that left the rooted state through an accepted `unroot`; see `unit_root_host.rs`.
+    uprooted: std::collections::BTreeSet<HandleId>,
     morph_fault: Option<String>,
     unit_expirations: std::collections::BTreeMap<HandleId, f64>,
     training: unit_training::State,
@@ -332,6 +334,7 @@ impl ObjectHost {
             summoning: None,
             mirror_image: None,
             morph_active: Vec::new(),
+            uprooted: std::collections::BTreeSet::new(),
             morph_fault: None,
             unit_expirations: std::collections::BTreeMap::new(),
             indicators: None,
@@ -951,6 +954,9 @@ impl Host for ObjectHost {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.weather_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
+        if let Some(result) = self.root_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.morph_native(name, args) {
@@ -1688,6 +1694,9 @@ mod unit_morph;
 pub use unit_morph::{
     Context as MorphEventContext, EventPhase as MorphEventPhase, MorphPhase, UnitMorph,
 };
+
+#[path = "unit_root_host.rs"]
+mod unit_root;
 
 #[path = "unit_mirror_image_host.rs"]
 mod unit_mirror_image;

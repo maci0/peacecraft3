@@ -468,6 +468,11 @@ impl ObjectHost {
     ) -> Option<Result<Arc<crate::unit_morph_rules::Rules>, String>> {
         Some(self.units.as_ref()?.heroes.as_ref()?.rules.morph.clone())
     }
+    pub(crate) fn admitted_root_rules(
+        &self,
+    ) -> Option<Result<Arc<crate::unit_root_rules::Rules>, String>> {
+        Some(self.units.as_ref()?.heroes.as_ref()?.rules.root.clone())
+    }
     pub(crate) fn admitted_mirror_rules(
         &self,
     ) -> Option<Result<Arc<crate::mirror_image_rules::Rules>, String>> {

@@ -34,7 +34,7 @@ fn set_autocast(abilities: &mut UnitAbilities, alias: [u8; 4], on: bool) {
 }
 
 impl ObjectHost {
-    fn autocast_order_id(&self, name: &str, args: &[Value]) -> Option<i32> {
+    pub(crate) fn immediate_order_id(&self, name: &str, args: &[Value]) -> Option<i32> {
         let [_, order] = args else { return None };
         match (name, order) {
             ("IssueImmediateOrder", Value::Str(s)) => self.order_registry.as_ref()?.id(s),
@@ -54,7 +54,7 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        let order = self.autocast_order_id(name, args)?;
+        let order = self.immediate_order_id(name, args)?;
         if !self.recognizes_autocast(order) {
             return None;
         }
@@ -375,7 +375,7 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Result<Option<ScriptCall>, Error> {
-        let Some(order) = self.autocast_order_id(name, args) else {
+        let Some(order) = self.immediate_order_id(name, args) else {
             return Ok(None);
         };
         if !self.recognizes_autocast(order) {

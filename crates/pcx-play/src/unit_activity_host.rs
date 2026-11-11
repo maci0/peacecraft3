@@ -7,6 +7,9 @@ use pcx_sim::world::{Definition, FieldValue};
 #[path = "unit_follow_host.rs"]
 mod follow;
 
+/// Refusal for orders that would move a unit left uprooted by `unroot`.
+const UPROOTED_MOVEMENT: &str = "movement of an uprooted unit is not modelled: unroot clears the rooted state, but the movement it enables is not decoded";
+
 pub(super) struct State {
     rules: Rules,
     route_work: usize,
@@ -827,6 +830,11 @@ impl ObjectHost {
                         Failure::UnitActivity("finite destination required".into()),
                     ));
                 }
+                if self.unit_uprooted(unit) {
+                    return Err(self
+                        .inner
+                        .error(name, Failure::UnitActivity(UPROOTED_MOVEMENT.into())));
+                }
                 if !activity.can_start_motion() {
                     return Ok(Value::Bool(false));
                 }
@@ -1600,6 +1608,9 @@ impl ObjectHost {
         name: &str,
     ) -> Result<Option<PreparedSteer>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
+        if destination.is_some() && self.unit_uprooted(unit) {
+            return Err(fail(UPROOTED_MOVEMENT));
+        }
         let route_work = self
             .unit_activity
             .as_ref()

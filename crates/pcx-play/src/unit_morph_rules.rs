@@ -6,6 +6,9 @@ use crate::{
     scripts::AssetIdentity,
 };
 
+/// Native classes sharing one morph base: same virtual layout, different order getters.
+const CLASS_NAMES: [&str; 2] = ["CAbilityRavenForm", "CAbilityBurrow"];
+
 #[derive(Clone, Debug)]
 pub struct Class {
     pub code: [u8; 4],
@@ -97,8 +100,7 @@ impl Rules {
             unique(matches.into_iter())
         };
         let mut classes = Vec::new();
-        {
-            let name = "CAbilityRavenForm";
+        for name in CLASS_NAMES {
             let name_va = find(&data, format!("{name}\0").as_bytes())?;
             let mut getter = vec![0xb8];
             getter.extend(name_va.to_le_bytes());
@@ -205,8 +207,12 @@ impl Spec {
         let flags = cell("DataB", FieldKind::Int)?
             .parse::<u32>()
             .map_err(|_| "morph malformed source flags")?;
-        if flags != u32::from(class.uninterruptible | class.immediate_takeoff) {
-            return Err("morph flag combination is not qualified".into());
+        let qualified = u32::from(class.uninterruptible | class.immediate_takeoff);
+        if flags != qualified {
+            return Err(format!(
+                "morph flags {flags:#x} of class {}: only {qualified:#x} (uninterruptible with an immediate form change) is qualified; a form that changes at the second phase is not decoded",
+                String::from_utf8_lossy(&class.code),
+            ));
         }
         let mut number = |key, kind| -> Result<f32, String> {
             let value = cell(key, kind)?

@@ -23,6 +23,7 @@ pub struct Binding {
 pub struct Rules {
     pub morph: Result<std::sync::Arc<crate::unit_morph_rules::Rules>, String>,
     pub autocast: Result<std::sync::Arc<crate::autocast_rules::Rules>, String>,
+    pub root: Result<std::sync::Arc<crate::unit_root_rules::Rules>, String>,
     pub mirror_image: Result<std::sync::Arc<crate::mirror_image_rules::Rules>, String>,
     pub(crate) experience: Option<std::sync::Arc<crate::hero_experience::Rules>>,
     pub(crate) binding: Binding,
@@ -41,6 +42,17 @@ impl Rules {
         self.morph = rules.and_then(|rules| {
             if rules.image_sha256 != self.binding.image_sha256 {
                 Err("morph source differs from ability admission".into())
+            } else {
+                Ok(std::sync::Arc::new(rules))
+            }
+        });
+        self
+    }
+
+    pub fn with_root(mut self, rules: Result<crate::unit_root_rules::Rules, String>) -> Self {
+        self.root = rules.and_then(|rules| {
+            if rules.image_sha256 != self.binding.image_sha256 {
+                Err("root source differs from ability admission".into())
             } else {
                 Ok(std::sync::Arc::new(rules))
             }
@@ -235,6 +247,7 @@ impl Rules {
         Ok(Self {
             morph: Err("morph source not admitted".into()),
             autocast: Err("autocast source not admitted".into()),
+            root: Err("root source not admitted".into()),
             mirror_image: Err("Mirror Image source not admitted".into()),
             experience: None,
             binding,
