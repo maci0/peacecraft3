@@ -123,6 +123,36 @@ each effect through its player-level virtual method; zero enumerates units and c
 unit-level method. The player-level behavior is effect-specific and remains undecoded.
 The editor labels alone do not establish additional behavior.
 
+### Player-level dispatch and `rtma` (open)
+
+Verified in the reviewed image by disassembly of `0x6e0b80` to `0x6e0c8d`:
+
+- The dispatcher reads the four 12-byte effect records at upgrade object `+0x3c` and resolves
+  each through `0x7fc7e0`. When the global flag is set it takes the player object (`0x4777d0`,
+  index at `+0x24`) and calls vtable slot 30 (`0x78`) of each resolved effect with
+  `(player, arg0, arg1)`. Otherwise `0x68ea00` enumerates units and calls `0x6dd240`, which
+  calls vtable slot 31 (`0x7c`) with `(unit, arg0, arg1)`.
+- The effect factory switch at `0x6e0446` has a case for `rtma` (`0x72746d61`). That case calls
+  `0x6dd4a0`, which resolves the `rtma` object from a registry keyed by the id function
+  `0x6b0960`. The registration is in `0x6b81b0`.
+- The `rtma` id getter is `0x6a5460` (virtual, returns the id). `0x6b0960` returns the same id as a
+  plain function.
+
+Not established:
+
+- The vtable of the object `rtma` resolves to, so the body of its slot 30 routine is unknown. The
+  registration at `0x6b81b0` names the static object `0x113ee44`, and that object's vtable
+  (`0xea02c0`) returns `ratd` from slot 11 (`0x6a6170`). The table at `0xe9fd80` holds the `rtma`
+  getter at slot 0, but its slot 30 is null and its slot 31 is string data, so it is not a
+  complete vtable.
+- The slot used for the unit-level apply. An earlier reading placed it at slot 31. In the `rmnx`
+  table at `0xe9f61c`, the `rmnx` apply `0x6a4430` is at slot 24, and slot 31 is a scalar
+  deleting destructor (`0x6a4650`). Confirm the dispatched slot on an object the dispatcher
+  actually reaches before relying on either reading.
+- Consequently the `rtma` rule is undecoded: which units the routine replaces, the carried
+  hit point and mana ratios, position, orders and experience, the training list, and the tech
+  availability counts. The host refuses `rtma` with the reason above.
+
 The host refuses a level change that moves any slot of a `global` upgrade (applied or
 unapplied effect), naming each moved effect with its slot and code column. A change that
 moves no slot is accepted. No player-level routine is decoded, so no effect id is applied
@@ -215,6 +245,13 @@ on the synthetic tests. `ratd` 1/1 of `Rhst` remains unapplied.
   seconds later they had 13.165 and 6.666 mana respectively. The 6.499 difference
   is consistent with the selected top-level row's 0.65 rate increase for ten seconds;
   it does not establish item or hero interactions.
+- `UpgradeData` rows read from the selected `War3x.mpq`: `Robk` (row 40) has `global` 1 and
+  `inherit` 1, slot 1 `rtma` base 1 code `ohun`, slot 2 `rtma` base -1 code `otbk`. `Rhrt`
+  (row 18) has the same flags and slots with codes `hmtt` and `hrtt`.
+- Locked-chapter startup probe on the selected install, before this change, all refused at the
+  `rtma` player-level path: OrcX01 (run timed out during the cold build; rerun on a warm build
+  refused), OrcX02, OrcX03a (`Robk`), HumanX03, UndeadX06 (`Rhrt`). The refusal names each
+  `rtma` slot and code. No behavior changed.
 - Locked-chapter startup probe (`selected_install_locked_chapter_startup_probe`, selected
   install, headless): OrcX01, OrcX02, OrcX03a, HumanX03 and UndeadX06 fail at their
   `SetPlayerTechResearched` call for `Robk` or `Rhrt`, before and after this change; the
