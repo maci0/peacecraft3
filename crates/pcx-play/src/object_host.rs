@@ -60,6 +60,7 @@ pub struct ObjectHost {
     autocast_ticks: Vec<(HandleId, [u8; 4], f64)>,
     order_queue: Option<order_queue::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
+    unit_ids: Option<unit_id::UnitIds>,
     inner: EnumHost,
     group_limit: Option<usize>,
     group_orders: Option<crate::group_order_rules::Rules>,
@@ -308,6 +309,7 @@ impl ObjectHost {
             destructables: None,
             units: None,
             order_registry: None,
+            unit_ids: None,
             unit_activity: None,
             harvest: None,
             autocast_ticks: Vec::new(),
@@ -1101,6 +1103,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.order_registry_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.unit_id_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.harvest_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1491,6 +1496,9 @@ pub use trigger_runtime::{TriggerDelivery, TriggerRuntimeInput};
 
 #[path = "order_registry_host.rs"]
 mod order_registry;
+
+#[path = "unit_id_host.rs"]
+mod unit_id;
 #[path = "unit_range_runtime_host.rs"]
 mod unit_ranges;
 pub use unit_ranges::UnitRangeEntry;

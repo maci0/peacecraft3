@@ -782,7 +782,8 @@ fn assemble_inner(
         .with_unit_states(budgets.unit_states)?
         .with_resource_amounts(Arc::clone(&defend.tables))?
         .with_defend_ability(&defend.tables, &defend.alias)?
-        .with_militia_ability(&defend.tables, abilities)?;
+        .with_militia_ability(&defend.tables, abilities)?
+        .with_unit_id_lookup(Arc::clone(&defend.tables))?;
     if let Some(rules) = unit_blend {
         object.admit_unit_blend(rules)?;
     }
