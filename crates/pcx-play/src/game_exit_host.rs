@@ -15,6 +15,7 @@ const CAMPAIGN: &str = "SetCampaignAvailable";
 const NEXT_LEVEL: &str = "SetNextLevel";
 const CHANGE_LEVEL: &str = "ChangeLevel";
 const CAMPAIGN_SELECT: &str = "ForceCampaignSelectScreen";
+const DO_NOT_SAVE_REPLAY: &str = "DoNotSaveReplay";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GameExitRequest {
@@ -25,7 +26,7 @@ pub struct GameExitRequest {
 }
 
 pub(super) struct GameExits {
-    admitted: [bool; 6],
+    admitted: [bool; 7],
     max_pending: usize,
     requests: Vec<GameExitRequest>,
     progress: Option<(Progress, Arc<dyn Storage>)>,
@@ -45,7 +46,7 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<GameExitRequest>(max_pending)
             .map_err(|_| self.inner.error(END_GAME, Failure::Capacity))?;
-        let mut admitted = [false; 6];
+        let mut admitted = [false; 7];
         for (index, (name, args)) in [
             (END_GAME, &["boolean"][..]),
             (MISSION, &["integer", "integer", "boolean"][..]),
@@ -53,6 +54,7 @@ impl ObjectHost {
             (CHANGE_LEVEL, &["string", "boolean"][..]),
             (CAMPAIGN, &["integer", "boolean"][..]),
             (CAMPAIGN_SELECT, &[][..]),
+            (DO_NOT_SAVE_REPLAY, &[][..]),
         ]
         .into_iter()
         .enumerate()
@@ -223,6 +225,9 @@ impl ObjectHost {
         if name == CAMPAIGN_SELECT && state.admitted[5] {
             return Some(self.force_campaign_select(args));
         }
+        if name == DO_NOT_SAVE_REPLAY && state.admitted[6] {
+            return Some(self.do_not_save_replay(args));
+        }
         if name != END_GAME || !state.admitted[0] {
             return None;
         }
@@ -321,6 +326,19 @@ impl ObjectHost {
             next_level: Some(next_level),
         });
         // The host returns to the VM caller after queueing the request.
+        Ok(Value::Null)
+    }
+
+    /// The original native (`0x48fc50`) jumps to `0x5ac290`, which closes and deletes the
+    /// replay file being recorded. No replay is recorded here (the score screen's Save
+    /// Replay is refused for that reason), so there is nothing to discard.
+    fn do_not_save_replay(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let [] = args else {
+            return Err(self.inner.error(
+                DO_NOT_SAVE_REPLAY,
+                Failure::ClockState("DoNotSaveReplay takes no arguments"),
+            ));
+        };
         Ok(Value::Null)
     }
 

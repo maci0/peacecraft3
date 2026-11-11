@@ -429,3 +429,43 @@ fn force_campaign_select_screen_refuses_arguments_and_needs_its_declaration() {
     let undeclared = host(program(DECLARATION, "", ""), 4);
     assert!(!undeclared.campaign_select_requested());
 }
+
+const DO_NOT_SAVE_REPLAY_DECLARATION: &str =
+    "native DoNotSaveReplay takes nothing returns nothing\n";
+
+#[test]
+fn do_not_save_replay_returns_to_the_caller_and_records_no_exit() {
+    let p = program(
+        &format!("{DECLARATION}{DO_NOT_SAVE_REPLAY_DECLARATION}"),
+        "",
+        r#"
+globals
+integer progress = 0
+endglobals
+function credits takes nothing returns integer
+call DoNotSaveReplay()
+set progress = progress + 4
+return progress
+endfunction
+"#,
+    );
+    let mut vm = Vm::new(&p, host(p.clone(), 4));
+    vm.init_globals().unwrap();
+    assert_eq!(vm.call("credits", &[]).unwrap(), Value::Int(4));
+    assert!(vm.host().game_exit_requests().is_empty());
+    assert!(!vm.host().has_pending_game_exit());
+}
+
+#[test]
+fn do_not_save_replay_refuses_arguments_and_needs_its_declaration() {
+    let p = program(
+        &format!("{DECLARATION}{DO_NOT_SAVE_REPLAY_DECLARATION}"),
+        "",
+        "",
+    );
+    let mut h = host(p, 4);
+    assert!(h.native("DoNotSaveReplay", &[Value::Int(1)]).is_err());
+    assert!(h.native("DoNotSaveReplay", &[]).is_ok());
+    let mut undeclared = host(program(DECLARATION, "", ""), 4);
+    assert!(undeclared.native("DoNotSaveReplay", &[]).is_err());
+}

@@ -26,7 +26,10 @@ returns to its caller. The calling thread continues; the request does not clear
 the executing VM. `RestartGame` (wrapper `0x4a5620`, which calls `0x47c740`) is a
 different native and is not covered here.
 
-No equivalent wrapper inspection or runtime observation covers `ChangeLevel`.
+The `ChangeLevel` wrapper (`0x48a700`) was read later: it stores the target and the score flag in
+the game object and moves no game state (see
+[chapter-startup-refusals.md](chapter-startup-refusals.md), route section). `DoNotSaveReplay`
+(`0x48fc50`) is admitted with these natives and has no effect here, as no replay is recorded.
 Returning to the VM caller after queuing its request is a host scheduling choice,
 not a claim of native teardown or transition parity. The selected declaration's
 `Async only` comment is the only scheduling evidence recorded here.
