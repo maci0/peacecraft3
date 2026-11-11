@@ -176,6 +176,34 @@ Those transitions return true. Repeating the current state returns false.
 Missing research stays unset, and unsupported levels refuse without a write.
 Units remain independent and orders do not resolve or copy the unit catalog.
 
+### Unmet requirement (native decode)
+
+Image: Legacy `Warcraft III.exe` 1.29.2.9231, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`; static
+disassembly only.
+
+- `IssueImmediateOrder` (registration push `0x49e03a`, handler `0x49a610`, then
+  `0x49a670`) converts the order string to an id and calls `0x6a16b0`. That routine
+  asks every ability on the unit (list at unit `+0x3e8`) for its order check
+  (virtual `+0x264`) and keeps the smallest error code, starting at `0xdd`. The
+  native returns true only for error `0` or `0xdc`.
+- `CAbilityDefend` has class code `Adef` (`0xbea820`) and the on and off order ids
+  `0xd0057` and `0xd0058` (`0xbeaa80`, `0xbeaa90`). Its order check is the shared
+  `0xcb6180`: it first runs the class order validator (`0xb994b0`, virtual `+0x30c`),
+  then the usability virtual (`+0x268`, base `0x46ac20`), and answers `0xb8` when the
+  ability is not usable.
+- `0x46ac20` is usable when the dependency check passes. The check is `0x4bd5e0`, which
+  compares the owner's level of each required upgrade (`0x513620`) with the authored
+  amount. With the requirement unmet, usability then needs the `0x4bd5e0` out value to
+  be nonzero and bit `0x100` of a global option word (`0x46e030`) to be set.
+- Recreation: an ON or OFF request whose owner's applied level of the required
+  upgrade is below the authored level returns false and writes nothing. An absent
+  level, an unavailable research model and a level above the authored one still
+  refuse. Open: the writer of the global option word `0x46e030` tests (read here as
+  clear, with no recreation state) and the meaning of the `0x4bd5e0` out value.
+- HumanX03 issues `defend` on `hfoo` units (`Adef` plus `Aihn`) at map creation,
+  before any research for the owner.
+
 Unmatched strings stay unsupported until the order registry is bound. In
 particular, the original control's invalid-string false result is still an open
 part of the general order native. A different valid order must not silently be

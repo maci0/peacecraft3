@@ -2902,12 +2902,13 @@ fn defend_uses_applied_upgrade_levels_without_falling_back_to_raw_requests() {
             crate::upgrade_research::fixture(&context.sources.catalog),
         )
         .unwrap();
-    assert!(issue(&mut vm, "A", "engage").is_err());
+    // An applied level below the required one fails the usability check: false, no state write.
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(false));
     research(&mut vm, *b"Qtec", 9);
     assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(true));
     assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(true));
     research(&mut vm, *b"Qtec", -3);
-    assert!(issue(&mut vm, "A", "engage").is_err());
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(false));
     research(&mut vm, *b"Qtec", 1);
     assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(true));
     assert_eq!(issue(&mut vm, "A", "release").unwrap(), Value::Bool(true));
@@ -2946,8 +2947,7 @@ fn owned_vm_defend_tracks_selected_ability_and_owner_research() {
     let other_tech = issue(&mut vm, "A", "engage").unwrap_err();
     assert!(other_tech.contains("unsupported"), "{other_tech}");
     research(&mut vm, *b"Qtec", 0);
-    let explicit_zero = issue(&mut vm, "A", "engage").unwrap_err();
-    assert!(explicit_zero.contains("unsupported"), "{explicit_zero}");
+    assert_eq!(issue(&mut vm, "A", "engage").unwrap(), Value::Bool(false));
     research(&mut vm, *b"Qtec", 2);
     let unobserved = issue(&mut vm, "A", "engage").unwrap_err();
     assert!(unobserved.contains("unsupported"), "{unobserved}");

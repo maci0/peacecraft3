@@ -2939,12 +2939,15 @@ impl ObjectHost {
         if turning_off && !active {
             return Some(Ok(Value::Bool(false)));
         }
-        let ready = matches!(
-            self.stored_tech_level(owner, tech),
-            TechRead::Level(level) if level == required_level
-        );
-        if !ready {
-            return None;
+        match self.stored_tech_level(owner, tech) {
+            TechRead::Level(level) if level == required_level => {}
+            // The ability usability check (`0xcb6180` through `0x46ac20`) answers
+            // an unmet requirement with error `0xb8`, which `IssueImmediateOrder`
+            // (`0x49a670`) turns into false before any state write.
+            TechRead::Level(level) if level < required_level => {
+                return Some(Ok(Value::Bool(false)));
+            }
+            _ => return None,
         }
         let next = if turning_on && !active {
             Some(true)
