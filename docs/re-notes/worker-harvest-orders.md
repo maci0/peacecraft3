@@ -449,3 +449,20 @@ and the invalid-target path of `0xb7a2e0` are not decoded.
 Repo: `harvest_runtime.rs` returns false for a target-form `autoharvestlumber` before any harvest
 branch. Test: `autoharvestlumber_target_form_issues_nothing_and_returns_false` (fails before the
 change with `IssueTargetOrder is unsupported`).
+
+## Work swing animation request and wisps (2026-11-11)
+
+Image `Warcraft III.exe` 1.29.2.9231. `0xb7ac20` (the swing) calls unit slot `+0x8c(6, 0, 1)` then
+slot `+0x90(4, 0, 1)`: the tag registry at `0x6db0e0` gives `attack` = 6 and `stand` = 4, so the
+swing requests `attack` and queues `stand`. The carry tags `gold` (`0x23`) and `lumber` (`0x24`) are
+added at `0xb79190`/`0xb79230` and `ready` (`0x13`) at `0xb7ac02`. The sequence chooser `0x966c10`
+calls `0x9632b0`, which scores each sequence with `0x9630f0`: request slot 0 (the primary tag) sets
+the highest mask bit, and the best mask must contain it (`0x9633d6`); otherwise the candidate list
+is empty and `0x966d37` returns without starting a sequence. The Wisp model carries only `stand`,
+`Birth`, `Death`, `Stand Lumber` and `Stand Work`, so `attack` selects nothing and the unit keeps
+its animation.
+
+Repo: a worker without an `attack` sequence no longer refuses; the swing request is dropped
+(`harvest_runtime.rs`, `WORK_SEQUENCE`). Not implemented: the `stand` queue with carry tags
+(`Stand Lumber`). TFT NightElfX06 reaches this through `IssueTargetDestructableOrder(ewsp,
+"harvest", tree)` (`war3map.j:4225`), not through `autoharvestlumber`.

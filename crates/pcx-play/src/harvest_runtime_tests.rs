@@ -615,6 +615,23 @@ fn open_harvest_configured(
     sources: (&str, &str),
     configure: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> (Vm, HandleId) {
+    open_harvest_model(
+        tables, catalog, tree, fields, budget, sources, configure, true,
+    )
+}
+
+/// `attack_sequence` renames one fixture sequence to `Attack`; false keeps a model with none.
+#[allow(clippy::too_many_arguments)]
+fn open_harvest_model(
+    tables: Arc<DefaultTables>,
+    catalog: DestructableCatalog,
+    tree: crate::playercolor_host::PlacedDestructable,
+    fields: Vec<([u8; 4], ObjectField)>,
+    budget: crate::playercolor_host::harvest_runtime::Budget,
+    sources: (&str, &str),
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+    attack_sequence: bool,
+) -> (Vm, HandleId) {
     let mut h = host_fields_with_placed_source(
         65536,
         &fields,
@@ -642,8 +659,10 @@ fn open_harvest_configured(
         .windows(12)
         .position(|b| b == b"Stand Defend")
         .expect("fixture sequence");
-    bytes[at..at + 80].fill(0);
-    bytes[at..at + 6].copy_from_slice(b"Attack");
+    if attack_sequence {
+        bytes[at..at + 80].fill(0);
+        bytes[at..at + 6].copy_from_slice(b"Attack");
+    }
     let model = Arc::new(
         crate::unit_model::Model::read(
             model.origin.clone(),
@@ -3211,4 +3230,27 @@ fn an_explicit_gold_order_accepts_a_depot_near_the_mine_but_far_from_the_worker(
     gold_role(&mut vm, depot, "Argl", true, None);
     gold_role(&mut vm, mine, "Agld", true, Some(500));
     start_gold(&mut vm, worker, mine);
+}
+
+#[test]
+fn a_worker_model_without_an_attack_sequence_harvests_and_keeps_its_animation() {
+    let (mut vm, tree) = open_harvest_model(
+        harvest_tables_for_range("9", "18", "4", "8"),
+        tree_catalog(),
+        placed_tree_at(52.0, 32.0),
+        harvest_fields(),
+        crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
+        ("", MAP),
+        |host| host,
+        false,
+    );
+    let worker = create_unit(&mut vm, *b"hpea", 46.0, 32.0);
+    let _depot = create_unit(&mut vm, *b"htow", 100.0, 96.0);
+    start_harvest(&mut vm, worker);
+
+    tick(&mut vm, 0.5);
+    tick(&mut vm, 2.5);
+
+    assert_eq!(tree_life(&mut vm, tree), 62.0);
+    assert!(!animation_name(&mut vm, worker).starts_with("Attack"));
 }

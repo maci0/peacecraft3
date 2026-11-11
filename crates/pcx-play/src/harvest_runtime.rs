@@ -22,6 +22,8 @@ use super::unit_activity::PreparedSteer;
 use super::{Entry, Error, Failure, ObjectHost};
 
 pub const ORDER: &str = "autoharvestlumber";
+/// Animation tag the harvest swing requests (`0xb7ac20`).
+const WORK_SEQUENCE: &str = "attack";
 const HARVEST_ORDER: &str = "harvest";
 const RESUME_ORDER: &str = "resumeharvesting";
 const RETURN_ORDER: &str = "returnresources";
@@ -611,9 +613,11 @@ impl ObjectHost {
                 .animation
                 .clone()
                 .expect("work animation preflighted");
-            animation
-                .select("attack", now, None)
-                .map_err(|detail| self.harvest_error(detail))?;
+            if animation.has_sequence(WORK_SEQUENCE) {
+                animation
+                    .select(WORK_SEQUENCE, now, None)
+                    .map_err(|detail| self.harvest_error(detail))?;
+            }
             Some(animation)
         } else {
             None
@@ -1389,11 +1393,8 @@ impl ObjectHost {
         let Entry::Unit { record } = self.inner.entry(unit)? else {
             return Err(self.harvest_error("unit handle required"));
         };
-        let Some(animation) = &record.animation else {
+        if record.animation.is_none() {
             return Err(self.harvest_error("worker lacks an admitted animation model"));
-        };
-        if !animation.has_sequence("attack") {
-            return Err(self.harvest_error("worker lacks the attack work sequence"));
         }
         Ok(())
     }
@@ -1405,11 +1406,14 @@ impl ObjectHost {
         let Some(animation) = &mut record.animation else {
             return Err(self.harvest_error("worker lacks an admitted animation model"));
         };
-        if !animation.has_sequence("attack") {
-            return Err(self.harvest_error("worker lacks the attack work sequence"));
+        if !animation.has_sequence(WORK_SEQUENCE) {
+            // The swing requests the `attack` tag (`0xb7ac20`, unit slot `+0x8c`); the sequence
+            // chooser (`0x9632b0`) yields nothing when no sequence carries it, so the request is
+            // dropped and the unit keeps its animation (wisps). See worker-harvest-orders.md.
+            return Ok(());
         }
         animation
-            .select("attack", now, None)
+            .select(WORK_SEQUENCE, now, None)
             .map_err(|detail| self.harvest_error(detail))?;
         Ok(())
     }
