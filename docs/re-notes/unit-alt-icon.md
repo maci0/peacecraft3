@@ -27,6 +27,8 @@ portrait or selection-panel reader of bit 0x200 was found.
 The state is recorded on the executed unit (`ExecutedUnit::uses_alt_icon`,
 `unit_alt_icon_host.rs`). The recreation has no presentation consumer for it.
 The command-card icon choice and the portrait are unchanged by this native.
+The icon the flagged units use is set by `SetAltMinimapIcon`
+(`local-ui-natives.md`).
 
 ## Chapters that call it
 

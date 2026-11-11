@@ -83,3 +83,53 @@ fn a_program_without_the_declaration_leaves_the_native_unsupported() {
     assert!(error.contains("unsupported"), "{error}");
     assert_eq!(host.reserved_local_hero_buttons(), None);
 }
+
+const ALT_ICON: &str = "native SetAltMinimapIcon takes string iconPath returns nothing\n";
+
+#[test]
+fn alt_minimap_icon_keeps_the_last_accepted_path() {
+    let mut s = open_extra(ALT_ICON);
+    s.vm.init_globals().unwrap();
+    let host = &mut s.vm.host().inner;
+    assert_eq!(host.alt_minimap_icon(), None);
+    host.native("SetAltMinimapIcon", &[Value::Str("UI\\Minimap\\A".into())])
+        .unwrap();
+    assert_eq!(host.alt_minimap_icon(), Some("UI\\Minimap\\A"));
+    host.native("SetAltMinimapIcon", &[Value::Str("UI\\Minimap\\B".into())])
+        .unwrap();
+    assert_eq!(host.alt_minimap_icon(), Some("UI\\Minimap\\B"));
+}
+
+#[test]
+fn alt_minimap_icon_ignores_a_null_or_empty_path_instead_of_clearing() {
+    let mut s = open_extra(ALT_ICON);
+    s.vm.init_globals().unwrap();
+    let host = &mut s.vm.host().inner;
+    host.native("SetAltMinimapIcon", &[Value::Null]).unwrap();
+    host.native("SetAltMinimapIcon", &[Value::Str("".into())])
+        .unwrap();
+    assert_eq!(host.alt_minimap_icon(), None);
+    host.native("SetAltMinimapIcon", &[Value::Str("x".into())])
+        .unwrap();
+    host.native("SetAltMinimapIcon", &[Value::Null]).unwrap();
+    host.native("SetAltMinimapIcon", &[Value::Str("".into())])
+        .unwrap();
+    assert_eq!(host.alt_minimap_icon(), Some("x"));
+}
+
+#[test]
+fn alt_minimap_icon_refuses_trigger_strings_and_bad_arguments_without_a_write() {
+    let mut s = open_extra(ALT_ICON);
+    s.vm.init_globals().unwrap();
+    let host = &mut s.vm.host().inner;
+    host.native("SetAltMinimapIcon", &[Value::Str("keep".into())])
+        .unwrap();
+    let trigger = host
+        .native("SetAltMinimapIcon", &[Value::Str("trigstr_12".into())])
+        .unwrap_err();
+    assert!(trigger.contains("map string table"), "{trigger}");
+    for args in [&[][..], &[Value::Int(1)][..]] {
+        assert!(host.native("SetAltMinimapIcon", args).is_err());
+    }
+    assert_eq!(host.alt_minimap_icon(), Some("keep"));
+}

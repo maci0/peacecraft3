@@ -1533,6 +1533,9 @@ mod unit_alt_icon;
 #[path = "hero_button_reserve_host.rs"]
 mod hero_button_reserve;
 
+#[path = "alt_minimap_icon_host.rs"]
+mod alt_minimap_icon;
+
 #[path = "placement_events_host.rs"]
 mod placement_events;
 

@@ -317,6 +317,8 @@ impl ObjectHost {
             // unit_pause_host.rs
             "IsUnitPaused",
             "PauseUnit",
+            // alt_minimap_icon_host.rs
+            "SetAltMinimapIcon",
             // hero_button_reserve_host.rs
             "SetReservedLocalHeroButtons",
             // unit_alt_icon_host.rs
