@@ -105,7 +105,7 @@ the additive shape.
 | `rmvx`, `rmov` | Native adds a movement bonus (`0xb67690`); its interaction with the speed limits and the slow buff is not decoded. `rmov` multiplies by a movement property (`+0x74`). |
 | `rhpo` | Native scales a value from a virtual query at `+0x138` that is not decoded. |
 | `rman` | Native scales a unit type value read at `0x67b740` (`+0x88`); the column is not confirmed. |
-| `rlev`, `rlum`, `ratr`, `rats`, `rspi`, `rhpr`, `rsig`, `ratc`, `radl`, `rmin`, `rrai`, `rent`, `renw`, `raud`, `rasd`, `rasr`, `rroo`, `ruro`, `rart`, `rtma`, `rauv` | The apply routine is not decoded. `rtma` and `rlum` style effects are likely player-level, which is not established. |
+| `rlev`, `rlum`, `ratr`, `rats`, `rspi`, `rhpr`, `rsig`, `ratc`, `radl`, `rmin`, `rrai`, `rent`, `renw`, `raud`, `rasd`, `rasr`, `rroo`, `ruro`, `rart`, `rauv` | The unit-level apply routine is not decoded. Their player-level routine is the no-op `0x6a4da0`, so a global upgrade changes nothing for them. |
 
 The host reads `inherit` and `global` from the selected rows and map edits. Stock `Rhst` has `inherit` 1 and
 `global` 0. `UpgradeMetaData` maps them to editor labels in the selected
@@ -119,51 +119,99 @@ player's existing units. The unit's owner is then changed and its new owner's le
 applied from zero (`0x69d4ca`, `0x69d4e9`, `0x6dd280`).
 
 For `global`, `0x6e0b80` reads the flag through `0x6b1db0`. A nonzero value dispatches
-each effect through its player-level virtual method; zero enumerates units and calls the
-unit-level method. The player-level behavior is effect-specific and remains undecoded.
-The editor labels alone do not establish additional behavior.
+each effect through its player-level virtual method (slot 30); zero enumerates units and
+calls the unit-level method (slot 31). Decoded below. The editor labels alone do not
+establish additional behavior.
 
-### Player-level dispatch and `rtma` (open)
+### Player-level dispatch and `rtma` (decoded from the executable; no runtime observation)
 
-Verified in the reviewed image by disassembly of `0x6e0b80` to `0x6e0c8d`:
+`rtma` is not a unit replacement. Its class is `CUpgradeAddTechMaxAllowed` (name getter
+`0x6a5450`): the effect changes the owning player's maximum allowed count of the unit type
+in the slot's `code` column. No unit is converted, and nothing is carried over because
+nothing is created or changed.
 
-- The dispatcher reads the four 12-byte effect records at upgrade object `+0x3c` and resolves
-  each through `0x7fc7e0`. When the global flag is set it takes the player object (`0x4777d0`,
-  index at `+0x24`) and calls vtable slot 30 (`0x78`) of each resolved effect with
-  `(player, arg0, arg1)`. Otherwise `0x68ea00` enumerates units and calls `0x6dd240`, which
-  calls vtable slot 31 (`0x7c`) with `(unit, arg0, arg1)`.
-- The effect factory switch at `0x6e0446` has a case for `rtma` (`0x72746d61`). That case calls
-  `0x6dd4a0`, which resolves the `rtma` object from a registry keyed by the id function
-  `0x6b0960`. The registration is in `0x6b81b0`.
-- The `rtma` id getter is `0x6a5460` (virtual, returns the id). `0x6b0960` returns the same id as a
-  plain function.
+Dispatch (disassembly of `0x6e0b80` to `0x6e0c8d`):
+
+- The dispatcher resolves the four 12-byte effect records at upgrade object `+0x3c`
+  (`0x7fc7e0`). With the global flag set it takes the player (`0x4777d0`, index at `+0x24`)
+  and calls vtable slot 30 (`+0x78`) of each resolved effect in slot order with
+  `(player, from, to)`. Otherwise `0x68ea00` enumerates units and `0x6dd240` calls slot 31
+  (`+0x7c`) with `(unit, from, to)`.
+- Research callers `0x6e0895` and `0x6e0979` pass `(level, level + 1)`; the removal callers
+  `0x6e0775` and `0x6e084b` pass `(level, level - 1)`. A multi-level change is one dispatch
+  per adjacent level, each visiting all four slots.
+- Unit creation (`0x6dd280`) calls slot 31 directly with `(0, level)` and does not read the
+  global flag.
+
+Resolving the class (this settles the earlier "unresolved vtable" question): the factory
+switch case at `0x6e0446` calls `0x6dd4a0`, a typed lookup in the class registry keyed by
+`0x6b0960` (`rtma`). The registration at `0x6b81b0` passes the static factory object
+`0x113ee44`, whose constructor `0x408ac0` stores vtable `0xea02c0` (a three-slot factory
+table; slot 0 is `0x6a6180`). `0x6a6180` allocates from the pool at `0x113ee48` and
+installs the effect vtable `0xe9fd64` (`0x6a61d3`). The earlier reading of `0xea02c0` as
+the effect vtable (returning `ratd`) was wrong: `0xea02d0` is the separate `ratd` vtable
+that follows it in `.rdata`.
+
+Vtable indexing (resolves the `rmnx` slot conflict): each effect vtable starts at the word
+after its RTTI pointer, and slot 7 is the id getter. For `rmnx` the base is `0xe9f600`, so
+`0xe9f61c` is slot 7, slot 30 is `0xe9f678` (`0x6a4da0`, `ret 0xc`) and slot 31 is
+`0xe9f67c` (`0x6a4430`, the apply routine). The earlier "slot 24" came from taking
+`0xe9f61c` as the base. For `rtma` the base is `0xe9fd64`: slot 7 `0x6a5460` (id), slot 30
+`0x6a5480`, slot 31 `0x6a4d50` (`ret 0xc`, a no-op).
+
+A scan of every `.rdata` vtable whose slot 7 returns an `r***` id (script
+`.scratch/vt_scan.py`, not committed) found slot 30 equal to the no-op `0x6a4da0` for every
+upgrade effect class except `rtma`. So a global upgrade changes nothing for any other
+effect id, and `rtma` is a no-op for non-global upgrades.
+
+Slot 30 of `rtma` (`0x6a5480`), with `from`, `to` the dispatched levels:
+
+1. `delta = trunc(value(to) - value(from))`, with `value` from `0x6acc50` (zero at level 0,
+   `base + mod * (level - 1)` otherwise), the subtraction `0x9a00b0` and the integer
+   conversion `0x9a07b0` (truncates toward zero).
+2. `cur` = the player's maximum allowed count for the type `code` (`this + 0x34`), read by
+   `0x4bd4d0` through `0x513720`: the record's field at `+0x18`, or `0x7fffffff` when the
+   player has no record for the type.
+3. The count written by `0x4c0de0` (a record is created if missing, `0x5149a0`):
+   - `cur == 0x7fffffff`: `delta - 1`.
+   - `cur == 0` and `delta == -1`: `0x7fffffff`.
+   - any other `cur`: `cur` unchanged.
+
+So `ohun` (base 1) takes an unlimited type to 0 and `otbk` (base -1) takes a type at 0 back
+to unlimited. Removing the level is symmetric for those two cases. A type with no record
+and a negative delta ends at `delta - 1` (for `otbk` -2); native writes it, and a later
+removal leaves it. Only the two cases above change a count; the routine does not add the
+delta to other counts. `SetPlayerTechMaxAllowed` (`0x4a98f0`) uses the same setter and
+then calls `0x5f6e50(0)`; `rtma` does not.
 
 Not established:
 
-- The vtable of the object `rtma` resolves to, so the body of its slot 30 routine is unknown. The
-  registration at `0x6b81b0` names the static object `0x113ee44`, and that object's vtable
-  (`0xea02c0`) returns `ratd` from slot 11 (`0x6a6170`). The table at `0xe9fd80` holds the `rtma`
-  getter at slot 0, but its slot 30 is null and its slot 31 is string data, so it is not a
-  complete vtable.
-- The slot used for the unit-level apply. An earlier reading placed it at slot 31. In the `rmnx`
-  table at `0xe9f61c`, the `rmnx` apply `0x6a4430` is at slot 24, and slot 31 is a scalar
-  deleting destructor (`0x6a4650`). Confirm the dispatched slot on an object the dispatcher
-  actually reaches before relying on either reading.
-- Consequently the `rtma` rule is undecoded: which units the routine replaces, the carried
-  hit point and mana ratios, position, orders and experience, the training list, and the tech
-  availability counts. The host refuses `rtma` with the reason above.
+- Whether the starting maximum for `otbk` or `hmtt`, `hrtt` is already 0 from a source
+  outside the effect. The only non-native writer of the count in the image is this effect
+  (callers of `0x4c0de0`: `0x4a990a` for the native, `0x6a54d6`, `0x6a54f9`), and the
+  game does not read it from `UnitBalance`; a missing record is unlimited.
+- How the training and construction checks treat a negative count. The count getter
+  `0x494be0` (reached through the vtable word at `0x49e5c8`; no direct callers) takes
+  `min(x, count)` with an unsigned compare (`cmovb`), which would make a negative count
+  effectively unlimited, but its callers were not traced. The host keeps refusing a
+  training decision on a negative count.
+- Training availability beyond the count (requirements, hidden buttons) and any UI refresh.
 
-The host refuses a level change that moves any slot of a `global` upgrade (applied or
-unapplied effect), naming each moved effect with its slot and code column. A change that
-moves no slot is accepted. No player-level routine is decoded, so no effect id is applied
-for a `global` upgrade, and the unit-level formulas above do not transfer to it.
+The host applies this to the owner's `tech_max` records, one adjacent level at a time, for
+each slot whose effect is `rtma` in a global upgrade. It refuses (level and counts
+unchanged) when the slot's `code` is not four bytes, when the delta is not representable
+as `i32`, when player tech limits are not admitted, or when the new records exceed the
+admitted record budget. A global upgrade applies nothing for other effect ids and lists
+nothing as unapplied; a non-global `rtma` slot is likewise ignored. Inherited research
+(transfer) goes through the same planner, so the receiving player's counts change.
+
 The `global` flag is set only in the selected `UpgradeData` sets `Units\` and `Custom_V1\`
-(TFT): `Robk` (`rtma` for `ohun` and `otbk`), `Rhrt` (`rtma` for `hmtt` and `hrtt`) and `Roch`
-(no slot). The `Custom_V0\` set (Reign of Chaos) has no `global` row. Five TFT chapters
-research `Robk` or `Rhrt` in startup `InitUpgrades_PlayerN` and still refuse on `rtma`:
-OrcX01, OrcX02, OrcX03a (`Robk`) and HumanX03, UndeadX06 (`Rhrt`). `rtma` is not decoded.
-Its tooltip for `Robk` reads “Transforms Headhunters into Troll Berserkers”, which names the
-units without establishing the mechanism.
+(TFT): `Robk` (`rtma` for `ohun` base 1 and `otbk` base -1), `Rhrt` (`rtma` for `hmtt` and
+`hrtt`) and `Roch` (no slot). The `Custom_V0\` set (Reign of Chaos) has no `global` row.
+Five TFT chapters research `Robk` or `Rhrt` in startup `InitUpgrades_PlayerN`: OrcX01,
+OrcX02, OrcX03a (`Robk`) and HumanX03, UndeadX06 (`Rhrt`). The tooltip for `Robk`
+("Transforms Headhunters into Troll Berserkers") describes the player-visible outcome of
+the availability swap. This effect touches no existing unit; whether another mechanism converts living Headhunters was not examined.
 
 For ownership changes the host stages removal of the old owner's supported effects,
 inherited research and its effects on the receiving player's units, and application of
@@ -252,8 +300,17 @@ on the synthetic tests. `ratd` 1/1 of `Rhst` remains unapplied.
   `rtma` player-level path: OrcX01 (run timed out during the cold build; rerun on a warm build
   refused), OrcX02, OrcX03a (`Robk`), HumanX03, UndeadX06 (`Rhrt`). The refusal names each
   `rtma` slot and code. No behavior changed.
-- Locked-chapter startup probe (`selected_install_locked_chapter_startup_probe`, selected
-  install, headless): OrcX01, OrcX02, OrcX03a, HumanX03 and UndeadX06 fail at their
-  `SetPlayerTechResearched` call for `Robk` or `Rhrt`, before and after this change; the
-  refusal now names `rtma` with its codes. OrcX05 (RoC) passes, and OrcX08 (RoC) fails on an
-  unrelated `CreateUnit` missile-speed refusal.
+- Locked-chapter startup probe after implementing `rtma` (selected install, headless).
+  Before: all five failed at `SetPlayerTechResearched` for `Robk` or `Rhrt`. After: each
+  passes that call and stops at a later, unrelated refusal:
+  - OrcX01 and OrcX02: `CreateUnit`, unit animation asset
+    `Doodads\Terrain\LOSBlocker\IntentionallyLeftBlank.mdx` absent from every mounted layer.
+  - OrcX03a: `UnitAddItemToSlotById`, unsupported passive ability `AIbm` (code `AImm`) on `pmna`.
+  - HumanX03: `IssueImmediateOrder` `"defend"` on an `hfoo` unit, unsupported by the host.
+  - UndeadX06: `SetReservedLocalHeroButtons` is unsupported by the host.
+- Executable evidence for `rtma` is disassembly only (rizin, `Warcraft III.exe` 1.29.2.9231).
+  No runtime observation of a count after `Robk` research in the client exists. The
+  routines are pinned in `upgrade_effects::PROFILE` and `DATA_PROFILE`.
+- `cargo test -p pcx-play --lib upgrade_effects`: 36 cases, including the `rtma` rule from
+  synthetic slots (close and open, removal, step-by-step levels, truncation, inheritance,
+  refusals, budget) and the global no-op for other effect ids.

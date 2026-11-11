@@ -7,7 +7,10 @@
 use super::current_research::definition_upgrade_codes;
 use super::{Entry, Error, Failure, ObjectHost};
 use crate::playercolor_host::{ExecutedUnit, Vitals};
-use crate::upgrade_effects::{Effect, Slot, Unapplied, change_max_life, change_max_mana};
+use crate::upgrade_effects::{
+    Effect, Slot, TECH_MAX_UNLIMITED, Unapplied, change_max_life, change_max_mana, tech_max_delta,
+    tech_max_step, tech_max_target,
+};
 use pcx_script::{HandleId, Value};
 
 const NATIVE: &str = "SetPlayerTechResearched";
@@ -23,7 +26,11 @@ fn projection_fits(from: i32, to: i32, units: usize, effects: usize) -> bool {
 /// Effects of one level change, computed before any write.
 struct Plan {
     number: i32,
+    owner: HandleId,
     upgrade: i32,
+    /// Maximum allowed counts the player-level effects write, as `(unit type, count)`. A later
+    /// plan of the same ownership transfer repeats the earlier writes it builds on.
+    tech: Vec<(i32, i32)>,
     target: i32,
     pools: Vec<(HandleId, Vitals)>,
     pending: Vec<Unapplied>,
@@ -35,6 +42,13 @@ pub(in super::super) struct TransferPlan {
     pools: Vec<(HandleId, Vitals)>,
     research: Vec<Plan>,
     new_records: usize,
+}
+
+/// Writes of earlier plans of one ownership transfer, which a later plan builds on.
+#[derive(Clone, Copy, Default)]
+struct Prior<'a> {
+    pools: &'a [(HandleId, Vitals)],
+    tech: &'a [(i32, i32)],
 }
 
 /// Supported slots and their effects.
@@ -52,6 +66,8 @@ fn split<'a>(
     let (mut applied, mut pending) = (Vec::new(), Vec::new());
     for slot in slots {
         match table.classify(&slot.effect) {
+            // The unit-level routine does nothing; `plan_tech_max` handles the player level.
+            Effect::PlayerTechMax => {}
             Effect::Pending { reason, additive } => {
                 if !additive || slot.delta(from, to) != 0.0 {
                     pending.push((slot, reason));
@@ -104,7 +120,9 @@ fn change_pools(
                 }
                 vitals.regen.mana_per_second = rate;
             }
-            Effect::Pending { .. } => unreachable!("pending effects are split out"),
+            Effect::Pending { .. } | Effect::PlayerTechMax => {
+                unreachable!("split removes effects without a unit-level routine")
+            }
         }
     }
     match ObjectHost::projected_pool_problem(&vitals) {
@@ -226,6 +244,7 @@ impl ObjectHost {
         let mut levels = new.research_levels.clone();
         let mut pools = Vec::new();
         let mut research = Vec::new();
+        let mut tech: Vec<(i32, i32)> = Vec::new();
         let old_factor = self.owner_health_handicap(old_owner)?;
         let new_factor = self.owner_health_handicap(new_owner)?;
         if old_factor != new_factor {
@@ -305,8 +324,13 @@ impl ObjectHost {
             if target == current {
                 continue;
             }
+            let prior = Prior {
+                pools: &pools,
+                tech: &tech,
+            };
             let mut plan =
-                self.plan_level_change(new.number, new_owner, upgrade, current, target, &pools)?;
+                self.plan_level_change(new.number, new_owner, upgrade, current, target, prior)?;
+            tech.clone_from(&plan.tech);
             for (id, vitals) in plan.pools.drain(..) {
                 if let Some((_, stored)) = pools.iter_mut().find(|(unit, _)| *unit == id) {
                     *stored = vitals
@@ -420,7 +444,8 @@ impl ObjectHost {
                 _ => return self.apply_player(NATIVE, args),
             }
         };
-        let plan = self.plan_level_change(number, owner, *upgrade, current, target, &[])?;
+        let plan =
+            self.plan_level_change(number, owner, *upgrade, current, target, Prior::default())?;
         let result = self.apply_player(NATIVE, args)?;
         self.commit_level_change(plan)?;
         Ok(result)
@@ -433,7 +458,7 @@ impl ObjectHost {
         upgrade: i32,
         from: i32,
         to: i32,
-        prior: &[(HandleId, Vitals)],
+        prior: Prior<'_>,
     ) -> Result<Plan, Error> {
         let fail = |detail: String| self.inner.error(NATIVE, Failure::UnitActivity(detail));
         let model = self
@@ -443,33 +468,24 @@ impl ObjectHost {
             .expect("routed upgrade model");
         let table = model.rules.effects().map_err(fail)?;
         let code = upgrade.to_be_bytes();
-        let (applied, pending) = split(table, table.slots(upgrade), from, to);
-        if table.flags(upgrade).is_some_and(|(_, global)| global) {
-            // A global upgrade dispatches each effect to a player-level routine, which is not
-            // decoded for any effect id. A level change that moves no slot dispatches nothing.
-            let moved: Vec<String> = applied
-                .iter()
-                .map(|(slot, _)| slot)
-                .chain(pending.iter().map(|(slot, _)| slot))
-                .map(|slot| {
-                    let effect = String::from_utf8_lossy(&slot.effect);
-                    if slot.code.is_empty() {
-                        format!("{effect} (slot {})", slot.number)
-                    } else {
-                        format!("{effect} (slot {}, code {})", slot.number, slot.code)
-                    }
-                })
-                .collect();
-            if !moved.is_empty() {
-                return Err(fail(format!(
-                    "global upgrade {}: player-level routines are not decoded for {}",
-                    String::from_utf8_lossy(&code),
-                    moved.join(", ")
-                )));
-            }
-        }
+        let global = table.flags(upgrade).is_some_and(|(_, global)| global);
+        // A global upgrade dispatches each effect to its player-level routine (vtable slot 30,
+        // `0x6e0b80`) and visits no unit. Only `rtma` has one; every other effect class shares
+        // the no-op `0x6a4da0` there.
+        let (applied, pending) = if global {
+            (Vec::new(), Vec::new())
+        } else {
+            split(table, table.slots(upgrade), from, to)
+        };
+        let tech = if global {
+            self.plan_tech_max(owner, table.slots(upgrade), from, to, prior.tech)?
+        } else {
+            prior.tech.to_vec()
+        };
         let mut plan = Plan {
             number,
+            owner,
+            tech,
             upgrade,
             target: to,
             pools: Vec::new(),
@@ -517,19 +533,20 @@ impl ObjectHost {
         let mut work = usize::MAX;
         for id in owned {
             let record = self.executed_unit(id)?;
-            let mut vitals = if let Some((_, vitals)) = prior.iter().find(|(unit, _)| *unit == id) {
-                *vitals
-            } else {
-                let mut vitals = record.vitals.expect("filtered to vitals");
-                if let Some((life, mana)) =
-                    self.project_regen_unit(id, &bonuses, now, None, &mut work)?
-                {
-                    vitals.life = life;
-                    vitals.mana = mana;
-                    vitals.regen.through = now;
-                }
-                vitals
-            };
+            let mut vitals =
+                if let Some((_, vitals)) = prior.pools.iter().find(|(unit, _)| *unit == id) {
+                    *vitals
+                } else {
+                    let mut vitals = record.vitals.expect("filtered to vitals");
+                    if let Some((life, mana)) =
+                        self.project_regen_unit(id, &bonuses, now, None, &mut work)?
+                    {
+                        vitals.life = life;
+                        vitals.mana = mana;
+                        vitals.regen.through = now;
+                    }
+                    vitals
+                };
             let dead = record.combat.as_ref().is_some_and(|c| c.dead);
             let mut level = from;
             while level != to {
@@ -543,7 +560,105 @@ impl ObjectHost {
         Ok(plan)
     }
 
+    /// The `rtma` player-level routine (`0x6a5480`) of a global upgrade for every level step from
+    /// `from` to `to`: each step dispatches the slots in order, each slot first reading the
+    /// owner's maximum allowed count of its unit type (unlimited when it has no record).
+    /// Returns `prior` with this change's writes applied; nothing is stored until commit.
+    fn plan_tech_max(
+        &self,
+        owner: HandleId,
+        slots: &[Slot],
+        from: i32,
+        to: i32,
+        prior: &[(i32, i32)],
+    ) -> Result<Vec<(i32, i32)>, Error> {
+        let fail = |detail: String| self.inner.error(NATIVE, Failure::UnitActivity(detail));
+        let players = self.players.as_ref().expect("checked player rows");
+        let table = players
+            .upgrade_research
+            .as_ref()
+            .expect("routed upgrade model")
+            .rules
+            .effects()
+            .map_err(fail)?;
+        let mut targets = Vec::new();
+        for slot in slots {
+            if table.classify(&slot.effect) == Effect::PlayerTechMax {
+                targets.push((slot, tech_max_target(&slot.code).map_err(fail)?));
+            }
+        }
+        let mut work = prior.to_vec();
+        if targets.is_empty() {
+            return Ok(work);
+        }
+        let limit = players.tech.as_ref().ok_or_else(|| {
+            fail(
+                "rtma needs the player tech limits (SetPlayerTechMaxAllowed) to be admitted".into(),
+            )
+        })?;
+        let row = players
+            .rows
+            .iter()
+            .find(|row| row.identity == owner)
+            .ok_or_else(|| fail("owner row is missing".into()))?;
+        if !projection_fits(from, to, 1, targets.len()) {
+            return Err(fail("rtma level projection work limit exceeded".into()));
+        }
+        let mut level = from;
+        while level != to {
+            let next = if level < to { level + 1 } else { level - 1 };
+            for &(slot, tech) in &targets {
+                let delta = tech_max_delta(slot.delta(level, next))
+                    .map_err(|e| fail(format!("slot {}: {e}", slot.number)))?;
+                let current = work
+                    .iter()
+                    .chain(&row.tech_max)
+                    .find(|(id, _)| *id == tech)
+                    .map_or(TECH_MAX_UNLIMITED, |&(_, count)| count);
+                let count = tech_max_step(current, delta);
+                match work.iter_mut().find(|(id, _)| *id == tech) {
+                    Some(entry) => entry.1 = count,
+                    None => work.push((tech, count)),
+                }
+            }
+            level = next;
+        }
+        let added = work
+            .iter()
+            .filter(|(tech, _)| row.tech_max.iter().all(|(id, _)| id != tech))
+            .count();
+        if added > limit.max_records.saturating_sub(limit.records) {
+            return Err(fail("player tech limit record budget exceeded".into()));
+        }
+        Ok(work)
+    }
+
     fn commit_level_change(&mut self, plan: Plan) -> Result<(), Error> {
+        if !plan.tech.is_empty() {
+            let players = self.players.as_mut().expect("planned players");
+            let row = players
+                .rows
+                .iter_mut()
+                .find(|row| row.identity == plan.owner)
+                .expect("planned owner row");
+            let added = plan
+                .tech
+                .iter()
+                .filter(|(tech, _)| row.tech_max.iter().all(|(id, _)| id != tech))
+                .count();
+            row.tech_max
+                .try_reserve(added)
+                .map_err(|_| self.inner.error(NATIVE, Failure::Capacity))?;
+            for &(tech, count) in &plan.tech {
+                match row.tech_max.iter_mut().find(|(id, _)| *id == tech) {
+                    Some(entry) => entry.1 = count,
+                    None => row.tech_max.push((tech, count)),
+                }
+            }
+            if let Some(limit) = players.tech.as_mut() {
+                limit.records += added;
+            }
+        }
         for (id, vitals) in plan.pools {
             match self.inner.entry_mut(id)? {
                 Entry::Unit { record } => record.vitals = Some(vitals),

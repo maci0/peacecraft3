@@ -218,26 +218,22 @@ fn refused_ownership_projection_leaves_research_and_units_unchanged() {
 }
 
 #[test]
-fn global_upgrade_refuses_each_moved_effect_before_changing_research_or_units() {
+fn a_global_upgrade_visits_no_unit_and_its_other_effects_do_nothing() {
+    // The player-level routine of every effect class except `rtma` is a no-op (`0x6a4da0`).
     let table = table().synthetic_flags(code(b"Qeff"), false, true);
     let (mut vm, a, _) = open_with(table, "Qeff");
     let player = owner(&mut vm, a);
     let before = pools(&mut vm, a);
-    let refusal = research(&mut vm, player, b"Qeff", 1).unwrap_err();
-    // The zero-delta `ratd` slot moves nothing and is not named.
-    assert!(
-        refusal.contains("rmnx (slot 1), rhpx (slot 2)"),
-        "{refusal}"
-    );
-    assert!(!refusal.contains("ratd"), "{refusal}");
+    research(&mut vm, player, b"Qeff", 1).unwrap();
     assert_eq!(pools(&mut vm, a), before);
+    assert!(vm.host().inner.unapplied_upgrade_effects().is_empty());
     assert!(
         vm.host()
             .inner
             .player_settings(player)
             .unwrap()
             .research_levels
-            .is_empty()
+            .contains(&(code(b"Qeff"), 1))
     );
 }
 
@@ -481,14 +477,8 @@ fn unestablished_effects_are_recorded_with_reasons_and_cleared_at_level_zero() {
         .map(|u: &Unapplied| (u.slot, u.effect, u.from, u.to))
         .collect();
     // The zero-delta `rmnr` slot is a no-op of a decoded additive routine and is not listed.
-    assert_eq!(
-        list,
-        [
-            (1, *b"ratd", 0, 2),
-            (2, *b"rtma", 0, 2),
-            (4, *b"zzzz", 0, 2)
-        ]
-    );
+    // The `rtma` slot of a non-global upgrade is a no-op at the unit level (`0x6a4d50`).
+    assert_eq!(list, [(1, *b"ratd", 0, 2), (4, *b"zzzz", 0, 2)]);
     assert!(
         vm.host()
             .inner
@@ -580,4 +570,194 @@ fn an_id_with_no_upgrade_row_stores_its_level_without_effect_or_error() {
             .all(|(id, _)| *id != code(b"Qzzz"))
     );
     assert_eq!(pools(&mut vm, a), before);
+}
+
+/// Fixture unit types the `rtma` slots name, and the global upgrade that closes the first and
+/// opens the second (the shape of the stock `Robk` and `Rhrt` rows, with synthetic ids).
+const CLOSED: &[u8; 4] = b"Zold";
+const OPENED: &[u8; 4] = b"Znew";
+
+fn tech_slot(number: u8, base: f32, modifier: f32, unit: &str) -> Slot {
+    Slot {
+        code: unit.into(),
+        ..slot(number, b"rtma", base, modifier)
+    }
+}
+
+fn swap_table(global: bool, inherit: bool) -> Table {
+    Table::synthetic(
+        &[*b"rmnx", *b"rtma"],
+        vec![(
+            code(b"Qswp"),
+            vec![
+                tech_slot(1, 1.0, 0.0, "Zold"),
+                tech_slot(2, -1.0, 0.0, "Znew"),
+            ],
+        )],
+    )
+    .synthetic_flags(code(b"Qswp"), inherit, global)
+}
+
+fn tech_max(vm: &mut Vm, player: HandleId, unit: &[u8; 4]) -> Option<i32> {
+    vm.host()
+        .inner
+        .player_settings(player)
+        .unwrap()
+        .tech_max
+        .iter()
+        .find(|(id, _)| *id == code(unit))
+        .map(|(_, count)| *count)
+}
+
+fn set_tech_max(vm: &mut Vm, player: HandleId, unit: &[u8; 4], count: i32) {
+    vm.host()
+        .native(
+            "SetPlayerTechMaxAllowed",
+            &[
+                Value::Handle(player),
+                Value::Int(code(unit)),
+                Value::Int(count),
+            ],
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_global_rtma_upgrade_closes_one_type_and_opens_the_other_for_its_player_only() {
+    let (mut vm, a, b) = open_with(swap_table(true, false), "Qswp");
+    let (player, other) = (owner(&mut vm, a), owner(&mut vm, b));
+    // The opened type was closed beforehand, as a map or the rules close a locked type.
+    set_tech_max(&mut vm, player, OPENED, 0);
+    let before = pools(&mut vm, a);
+    research(&mut vm, player, b"Qswp", 1).unwrap();
+    // No record means unlimited: +1 gives 0. A closed type with -1 becomes unlimited.
+    assert_eq!(tech_max(&mut vm, player, CLOSED), Some(0));
+    assert_eq!(tech_max(&mut vm, player, OPENED), Some(i32::MAX));
+    assert_eq!(tech_max(&mut vm, other, CLOSED), None);
+    assert_eq!(tech_max(&mut vm, other, OPENED), None);
+    // No unit is converted or changed: the effect is a player-level count.
+    assert_eq!(pools(&mut vm, a), before);
+    assert!(vm.host().inner.unapplied_upgrade_effects().is_empty());
+    // Removing the level undoes both: 0 with -1 is unlimited, unlimited with +1 is 0.
+    research(&mut vm, player, b"Qswp", 0).unwrap();
+    assert_eq!(tech_max(&mut vm, player, CLOSED), Some(i32::MAX));
+    assert_eq!(tech_max(&mut vm, player, OPENED), Some(0));
+}
+
+#[test]
+fn an_rtma_decrease_on_a_type_without_a_record_writes_delta_minus_one() {
+    let (mut vm, a, _) = open_with(swap_table(true, false), "Qswp");
+    let player = owner(&mut vm, a);
+    research(&mut vm, player, b"Qswp", 1).unwrap();
+    assert_eq!(tech_max(&mut vm, player, OPENED), Some(-2));
+    // A count that is neither unlimited nor zero-with--1 is written back unchanged.
+    research(&mut vm, player, b"Qswp", 0).unwrap();
+    assert_eq!(tech_max(&mut vm, player, OPENED), Some(-2));
+    assert_eq!(tech_max(&mut vm, player, CLOSED), Some(i32::MAX));
+}
+
+#[test]
+fn an_rtma_level_jump_dispatches_each_level_step() {
+    // Level values 2 and 1: the steps are +2 then -1, not one step of +1.
+    let table = Table::synthetic(
+        &[*b"rtma"],
+        vec![(code(b"Qjmp"), vec![tech_slot(1, 2.0, -1.0, "Zold")])],
+    )
+    .synthetic_flags(code(b"Qjmp"), false, true);
+    let (mut vm, a, _) = open_with(table, "Qjmp");
+    let player = owner(&mut vm, a);
+    research(&mut vm, player, b"Qjmp", 2).unwrap();
+    assert_eq!(tech_max(&mut vm, player, CLOSED), Some(1));
+}
+
+#[test]
+fn a_fractional_rtma_delta_truncates_toward_zero() {
+    let table = Table::synthetic(
+        &[*b"rtma"],
+        vec![(code(b"Qfrc"), vec![tech_slot(1, 1.9, 0.0, "Zold")])],
+    )
+    .synthetic_flags(code(b"Qfrc"), false, true);
+    let (mut vm, a, _) = open_with(table, "Qfrc");
+    let player = owner(&mut vm, a);
+    research(&mut vm, player, b"Qfrc", 1).unwrap();
+    assert_eq!(tech_max(&mut vm, player, CLOSED), Some(0));
+}
+
+#[test]
+fn a_non_global_rtma_slot_changes_no_count_and_is_not_listed() {
+    let (mut vm, a, _) = open_with(swap_table(false, false), "Qswp");
+    let player = owner(&mut vm, a);
+    research(&mut vm, player, b"Qswp", 1).unwrap();
+    assert_eq!(tech_max(&mut vm, player, CLOSED), None);
+    assert_eq!(tech_max(&mut vm, player, OPENED), None);
+    assert!(vm.host().inner.unapplied_upgrade_effects().is_empty());
+}
+
+#[test]
+fn an_inherited_global_rtma_level_reaches_the_receiving_player() {
+    let (mut vm, a, b) = open_with(swap_table(true, true), "Qswp");
+    let (old, new) = (owner(&mut vm, a), owner(&mut vm, b));
+    research(&mut vm, old, b"Qswp", 1).unwrap();
+    assert_eq!(tech_max(&mut vm, new, CLOSED), None);
+    vm.host()
+        .inner
+        .native(
+            "SetUnitOwner",
+            &[Value::Handle(a), Value::Handle(new), Value::Bool(false)],
+        )
+        .unwrap();
+    assert_eq!(tech_max(&mut vm, new, CLOSED), Some(0));
+    assert_eq!(tech_max(&mut vm, new, OPENED), Some(-2));
+    // The old owner keeps its level and counts.
+    assert_eq!(tech_max(&mut vm, old, CLOSED), Some(0));
+}
+
+#[test]
+fn an_unreadable_rtma_slot_refuses_and_leaves_level_and_counts_unchanged() {
+    let table = Table::synthetic(
+        &[*b"rtma"],
+        vec![
+            (code(b"Qbad"), vec![tech_slot(1, 1.0, 0.0, "Zo")]),
+            (code(b"Qhug"), vec![tech_slot(1, 3.0e9, 0.0, "Zold")]),
+        ],
+    )
+    .synthetic_flags(code(b"Qbad"), false, true)
+    .synthetic_flags(code(b"Qhug"), false, true);
+    let (mut vm, a, _) = open_with(table, "Qbad");
+    let player = owner(&mut vm, a);
+    for (upgrade, reason) in [(b"Qbad", "four-byte"), (b"Qhug", "integer count")] {
+        let error = research(&mut vm, player, upgrade, 1).unwrap_err();
+        assert!(error.contains(reason), "{error}");
+    }
+    assert_eq!(tech_max(&mut vm, player, CLOSED), None);
+    assert!(
+        vm.host()
+            .inner
+            .player_settings(player)
+            .unwrap()
+            .research_levels
+            .is_empty()
+    );
+}
+
+#[test]
+fn rtma_refuses_when_the_new_records_exceed_the_tech_limit_budget() {
+    // The fixture admits 8 records; fill all but one with unrelated types.
+    let (mut vm, a, _) = open_with(swap_table(true, false), "Qswp");
+    let player = owner(&mut vm, a);
+    for index in 0..7 {
+        set_tech_max(&mut vm, player, &[b'Y', b'0', b'0', b'0' + index], 5);
+    }
+    // One free record, two needed.
+    let error = research(&mut vm, player, b"Qswp", 1).unwrap_err();
+    assert!(error.contains("record budget"), "{error}");
+    assert_eq!(tech_max(&mut vm, player, CLOSED), None);
+    assert!(
+        vm.host()
+            .inner
+            .player_settings(player)
+            .unwrap()
+            .research_levels
+            .is_empty()
+    );
 }

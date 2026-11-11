@@ -59,6 +59,9 @@ pub enum Effect {
     MaxLife,
     /// `rmnr`: mana regeneration rate.
     ManaRegen,
+    /// `rtma`: the player-level routine adjusts the maximum allowed count of the slot's unit
+    /// type (`0x6a5480`). The unit-level routine does nothing (`0x6a4d50`).
+    PlayerTechMax,
     /// Application not established. `additive` records that the decoded routine adds the
     /// value delta, so a zero delta changes nothing.
     Pending {
@@ -78,6 +81,7 @@ pub fn classify(effect: &EffectId, defined: bool) -> Effect {
         b"rmnx" => Effect::MaxMana,
         b"rhpx" => Effect::MaxLife,
         b"rmnr" => Effect::ManaRegen,
+        b"rtma" => Effect::PlayerTechMax,
         b"ratd" | b"ratx" => pending(
             "the native routine converts the delta to an integer and updates selected weapons; the selection mask's source-field and enum mappings are not decoded",
             true,
@@ -100,6 +104,40 @@ pub fn classify(effect: &EffectId, defined: bool) -> Effect {
         ),
         _ if defined => pending(NOT_DECODED, false),
         _ => pending(NOT_IN_METADATA, false),
+    }
+}
+
+/// A unit type without a limit record has this maximum allowed count (`0x513720`).
+pub const TECH_MAX_UNLIMITED: i32 = i32::MAX;
+
+/// The unit type id of an `rtma` slot, from its `code` column.
+pub fn tech_max_target(code: &str) -> Result<i32, String> {
+    <[u8; 4]>::try_from(code.as_bytes())
+        .map(i32::from_be_bytes)
+        .map_err(|_| format!("rtma code {code:?} is not a four-byte id"))
+}
+
+/// The slot's level delta as the native integer conversion gives it (`0x9a07b0`): truncated
+/// toward zero. A value outside `i32` is refused; the native shift would wrap.
+pub fn tech_max_delta(delta: f32) -> Result<i32, String> {
+    const LIMIT: f32 = 2_147_483_648.0;
+    if !delta.is_finite() || delta <= -LIMIT || delta >= LIMIT {
+        return Err(format!("rtma level change {delta} is not an integer count"));
+    }
+    Ok(delta as i32)
+}
+
+/// The maximum allowed count after one `rtma` level step (`0x6a5480`), given the count before
+/// (`TECH_MAX_UNLIMITED` when the player has no record) and the truncated delta. Only two
+/// starting values change: unlimited becomes `delta - 1`, and zero with a delta of `-1` becomes
+/// unlimited. Any other count is written back unchanged.
+pub fn tech_max_step(current: i32, delta: i32) -> i32 {
+    if current == TECH_MAX_UNLIMITED {
+        delta.wrapping_sub(1)
+    } else if current == 0 && delta == -1 {
+        TECH_MAX_UNLIMITED
+    } else {
+        current
     }
 }
 
@@ -453,19 +491,76 @@ const PROFILE: &[(u32, usize, &str)] = &[
         0x69,
         "712cf978701a5201f23be5641c3044a8e635d6feff8d97338c84ac22082178ee",
     ),
+    // `rtma`: id getter, player-level routine (vtable slot 30), unit-level routine (slot 31, a
+    // no-op), the factory that installs its vtable, and the maximum-allowed accessors.
+    (
+        0x6a5460,
+        0x6,
+        "393dbd944dca16bded59e2fc3da0252d81fc73cc9ba73efcf24dfd6cd5d17ca9",
+    ),
+    (
+        0x6a5480,
+        0x86,
+        "bac7a55c197495ab11d2119885e6ac197507697a271cb680eb5f2699c75b5a89",
+    ),
+    (
+        0x6a4d50,
+        0x3,
+        "dbd1a662565b07272069f88faadf4327acaf51b7d14f236c84c0a9679d07cef3",
+    ),
+    // The player-level no-op (`ret 0xc`) in slot 30 of every other effect class.
+    (
+        0x6a4da0,
+        0x3,
+        "dbd1a662565b07272069f88faadf4327acaf51b7d14f236c84c0a9679d07cef3",
+    ),
+    (
+        0x6a6180,
+        0x6b,
+        "04b5f491f2d70d630dce29221c514a9956f88460f5f074c19c366d6de85b117e",
+    ),
+    (
+        0x4bd4d0,
+        0x23,
+        "05418a750e59c13be6d37297f1131c3365e85f1f9921a6e8b3dc615e5bf6f159",
+    ),
+    (
+        0x4c0de0,
+        0x21,
+        "92c0cdf0cae6fe9967f8cb2ac9fff05dbfd2446bfac359a86cf37be0bf82e79c",
+    ),
+    (
+        0x5149a0,
+        0x2b,
+        "36504199b1f24898cc582af8254177c9cde868c9c7e43cdcf2a3534789de282d",
+    ),
+    (
+        0x513720,
+        0x36,
+        "8a1596ed76c9ff408cab33abb53bc329c2e86cc56dee06b0d437f55734c03e0a",
+    ),
 ];
+
+/// Initialized data the implemented effects rely on: the `rtma` vtable, 32 slots from `0xe9fd64`.
+const DATA_PROFILE: &[(u32, usize, &str)] = &[(
+    0xe9fd64,
+    0x80,
+    "3cfba2a916db8e253c3dc13343e45530d84459e4f8bdd9531f9c85770a09d134",
+)];
 
 /// Refuse an executable whose upgrade-effect routines differ from the reviewed ones.
 pub(crate) fn verify_profile(pe: &Pe<'_>) -> Result<(), String> {
-    for &(va, len, digest) in PROFILE {
-        let bytes = pe
-            .read_from(va, true)
-            .map_err(|e| e.to_string())?
-            .get(..len)
-            .ok_or_else(|| format!("truncated upgrade-effect routine {va:#x}"))?;
-        let actual: String = sha256(bytes).iter().map(|b| format!("{b:02x}")).collect();
-        if actual != digest {
-            return Err(format!("unsupported upgrade-effect routine {va:#x}"));
+    for (code, pins) in [(true, PROFILE), (false, DATA_PROFILE)] {
+        for &(va, len, digest) in pins {
+            let bytes = pe
+                .read_from(va, code)
+                .map_err(|e| e.to_string())?
+                .get(..len)
+                .ok_or_else(|| format!("truncated upgrade-effect routine {va:#x}"))?;
+            let actual: String = sha256(bytes).iter().map(|b| format!("{b:02x}")).collect();
+            if actual != digest {
+                return Err(format!("unsupported upgrade-effect routine {va:#x}"));
+            }
         }
     }
     Ok(())
@@ -861,13 +956,7 @@ mod tests {
             classify(b"ratd", true),
             Effect::Pending { additive: true, .. }
         ));
-        assert!(matches!(
-            classify(b"rtma", true),
-            Effect::Pending {
-                additive: false,
-                reason: NOT_DECODED
-            }
-        ));
+        assert_eq!(classify(b"rtma", true), Effect::PlayerTechMax);
         assert!(matches!(
             classify(b"zzzz", false),
             Effect::Pending {
@@ -875,5 +964,44 @@ mod tests {
                 reason: NOT_IN_METADATA
             }
         ));
+    }
+
+    #[test]
+    fn tech_max_step_changes_only_unlimited_and_zero_with_minus_one() {
+        // Unlimited plus a delta of +1 closes the type; -1 reads as unlimited again.
+        assert_eq!(tech_max_step(TECH_MAX_UNLIMITED, 1), 0);
+        assert_eq!(tech_max_step(TECH_MAX_UNLIMITED, -1), -2);
+        assert_eq!(tech_max_step(TECH_MAX_UNLIMITED, 0), -1);
+        assert_eq!(tech_max_step(TECH_MAX_UNLIMITED, i32::MIN), i32::MAX);
+        assert_eq!(tech_max_step(0, -1), TECH_MAX_UNLIMITED);
+        assert_eq!(tech_max_step(0, 1), 0);
+        assert_eq!(tech_max_step(0, 0), 0);
+        // Other counts are written back unchanged, whatever the delta.
+        assert_eq!(tech_max_step(3, 1), 3);
+        assert_eq!(tech_max_step(3, -1), 3);
+        assert_eq!(tech_max_step(-2, 1), -2);
+    }
+
+    #[test]
+    fn tech_max_delta_truncates_toward_zero_and_refuses_unrepresentable_values() {
+        assert_eq!(tech_max_delta(1.0), Ok(1));
+        assert_eq!(tech_max_delta(-1.0), Ok(-1));
+        assert_eq!(tech_max_delta(1.9), Ok(1));
+        assert_eq!(tech_max_delta(-1.9), Ok(-1));
+        assert_eq!(tech_max_delta(0.5), Ok(0));
+        assert_eq!(tech_max_delta(-0.5), Ok(0));
+        assert_eq!(tech_max_delta(-2_147_483_520.0), Ok(-2_147_483_520));
+        assert!(tech_max_delta(2_147_483_648.0).is_err());
+        assert!(tech_max_delta(-2_147_483_648.0).is_err());
+        assert!(tech_max_delta(f32::NAN).is_err());
+        assert!(tech_max_delta(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn tech_max_target_is_the_big_endian_four_byte_code() {
+        assert_eq!(tech_max_target("ohun"), Ok(i32::from_be_bytes(*b"ohun")));
+        assert!(tech_max_target("").is_err());
+        assert!(tech_max_target("ohu").is_err());
+        assert!(tech_max_target("ohunx").is_err());
     }
 }

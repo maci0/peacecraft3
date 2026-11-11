@@ -407,7 +407,7 @@ fn open_fixture_with(
     }
     if upgrade_list || defend.is_some() {
         extra.push_str(
-            "\nconstant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\n",
+            "\nconstant native SetPlayerTechResearched takes player whichPlayer, integer techid, integer setToLevel returns nothing\nconstant native SetPlayerTechMaxAllowed takes player whichPlayer, integer techid, integer maximum returns nothing\nconstant native GetPlayerTechMaxAllowed takes player whichPlayer, integer techid returns integer\n",
         );
     }
     if defend.is_some() {
@@ -458,6 +458,8 @@ constant native GetPlayerTechResearched takes player whichPlayer, integer techid
         .unwrap();
     if upgrade_list || defend.is_some() {
         h = h
+            .with_player_tech_limits(crate::playercolor_host::TechLimitBudget { max_records: 8 })
+            .unwrap()
             .with_player_tech_researched(crate::playercolor_host::TechLimitBudget {
                 max_records: 8,
             })
