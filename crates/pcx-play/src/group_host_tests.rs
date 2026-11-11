@@ -166,7 +166,7 @@ fn null_wrong_family_unknown_and_unowned_group_handles_refuse_without_mutation()
     for args in [
         vec![],
         vec![g.clone()],
-        vec![g.clone(), Value::Null],
+        vec![Value::Null, a.clone()],
         vec![g.clone(), timer.clone()],
         vec![timer, a.clone()],
         vec![unowned, a.clone()],
@@ -188,6 +188,30 @@ fn null_wrong_family_unknown_and_unowned_group_handles_refuse_without_mutation()
     );
     assert_eq!(h.memberships(), 0);
     assert_eq!(first(&mut h, &g), Value::Null);
+}
+#[test]
+fn null_unit_is_no_member_for_add_and_remove_but_a_null_group_still_refuses() {
+    let mut h = host(10, 4);
+    let g = create(&mut h);
+    let a = unit(&mut h);
+    h.native("GroupAddUnit", &[g.clone(), a.clone()]).unwrap();
+    let handles = h.inner.handles();
+    assert!(matches!(
+        h.native("GroupAddUnit", &[g.clone(), Value::Null]),
+        Ok(Value::Null)
+    ));
+    assert!(matches!(
+        h.native("GroupRemoveUnit", &[g.clone(), Value::Null]),
+        Ok(Value::Null)
+    ));
+    assert_eq!(h.memberships(), 1);
+    assert_eq!(first(&mut h, &g), a);
+    assert_eq!(h.inner.handles(), handles);
+    assert!(
+        h.native("GroupAddUnit", &[Value::Null, Value::Null])
+            .is_err()
+    );
+    assert!(h.native("IsUnitInGroup", &[Value::Null, g]).is_err());
 }
 #[test]
 fn incompatible_group_native_shape_type_or_function_override_refuses_admission() {

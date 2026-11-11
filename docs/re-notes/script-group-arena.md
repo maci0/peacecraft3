@@ -34,8 +34,11 @@ original gameplay traces. Unit arguments must already be typed identities in the
 owning arena. This slice does not create simulated units or prove association
 with a World entity. World enumeration, orders, filters and `ForGroup` callbacks
 remain explicit refusals; no candidate units or successful callback stubs are
-invented. Null, invalid, wrong-family and destroyed inputs refuse contextually;
-native exceptional-input behavior is unverified.
+invented. A null unit passed to `GroupAddUnit` or `GroupRemoveUnit` is no member
+and returns without change (the shipped TFT NightElfX06 caravan init adds
+`udg_CaravanUnitArray[7]` before a later trigger creates it). Null groups, null
+units in `IsUnitInGroup`, invalid, wrong-family and destroyed inputs refuse
+contextually; native exceptional-input behavior for those is unverified.
 
 ## Verification
 

@@ -612,6 +612,13 @@ impl ObjectHost {
             _ => Err(self.inner.error(name, Failure::WrongFamily)),
         }
     }
+    /// `None` is the null `unit` value, which JASS accepts for any unit parameter.
+    fn optional_unit(&self, value: &Value, name: &str) -> Result<Option<HandleId>, Error> {
+        match value {
+            Value::Null => Ok(None),
+            _ => self.unit(value, name).map(Some),
+        }
+    }
     fn unit(&self, value: &Value, name: &str) -> Result<HandleId, Error> {
         let Value::Handle(id) = value else {
             return Err(self.inner.error(name, Failure::GroupArguments));
@@ -638,7 +645,7 @@ impl ObjectHost {
         let (group, member) = match (name, args) {
             ("IsUnitInGroup", [unit, group]) => (group, Some(self.unit(unit, name)?)),
             ("GroupAddUnit" | "GroupRemoveUnit", [group, unit]) => {
-                (group, Some(self.unit(unit, name)?))
+                (group, self.optional_unit(unit, name)?)
             }
             ("DestroyGroup" | "GroupClear" | "FirstOfGroup", [group]) => (group, None),
             _ => return Err(self.inner.error(name, Failure::GroupArguments)),
@@ -660,10 +667,12 @@ impl ObjectHost {
                 .find(|(group, _)| *group == id)
                 .map_or(Value::Null, |(_, unit)| Value::Handle(*unit))),
             "GroupAddUnit" => {
-                let pair = (
-                    id,
-                    member.ok_or_else(|| self.inner.error(name, Failure::GroupArguments))?,
-                );
+                // A null unit is no member. The shipped TFT NightElfX06 caravan init adds
+                // `udg_CaravanUnitArray[7]`, still null until a later trigger creates it.
+                let Some(unit) = member else {
+                    return Ok(Value::Null);
+                };
+                let pair = (id, unit);
                 if !self.members.contains(&pair) {
                     if self.members.len() >= max_members {
                         return Err(self.inner.error(name, Failure::Budget("group membership")));
