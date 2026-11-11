@@ -1340,3 +1340,60 @@ fn weapons_on_of_attack_two_alone_arms_attack_two() {
     assert_eq!(weapon.range, 700.);
     assert_eq!(weapon.splash.map(|s| s.quarter), Some(125.));
 }
+
+#[test]
+fn pausing_a_burrowing_unit_does_not_stop_the_form_timer() {
+    // `PauseUnit` suspends ability timers only through the ability pause virtual (`0xbacde0`),
+    // which stops the `0xd01db` duration timer; the delayed swap timer `0xd01c4` (`0xbafb00`)
+    // keeps running, so the form changes `Dur` after the order whether or not the unit is paused.
+    let (mut vm, u) = open_with("X003", "0.125", "0.375");
+    vm.call("listen", &[]).unwrap();
+    let ordered = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("burrow_order", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, ordered + 0.5);
+    let pause = |vm: &mut Vm, on: bool| {
+        vm.host()
+            .inner
+            .native("PauseUnit", &[Value::Handle(u), Value::Bool(on)])
+            .unwrap();
+    };
+    pause(&mut vm, true);
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(u)
+            .unwrap()
+            .paused_since
+            .is_some()
+    );
+    advance(&mut vm, ordered + 1.4);
+    assert_eq!(rawcode(&mut vm, u), *b"u001");
+    advance(&mut vm, ordered + 1.46);
+    assert_eq!(rawcode(&mut vm, u), *b"u002");
+    assert_eq!(vm.global("Finishes"), Value::Int(1));
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(u)
+            .unwrap()
+            .paused_since
+            .is_some()
+    );
+    pause(&mut vm, false);
+    assert!(
+        vm.host()
+            .inner
+            .executed_unit(u)
+            .unwrap()
+            .paused_since
+            .is_none()
+    );
+    // Unpausing mid-phase leaves the timer alone too.
+    let ordered = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("unburrow_order", &[]).unwrap(), Value::Bool(true));
+    pause(&mut vm, true);
+    advance(&mut vm, ordered + 0.7);
+    pause(&mut vm, false);
+    advance(&mut vm, ordered + 1.46);
+    assert_eq!(rawcode(&mut vm, u), *b"u001");
+}

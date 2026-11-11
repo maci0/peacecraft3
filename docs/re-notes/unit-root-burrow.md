@@ -179,6 +179,35 @@ UndeadX02 uses the stock `ucry` and takes the swap. `ucry` and `ucrm` differ in 
 (`ucrm` lacks `Aweb`) and life regeneration (`regenType` `blight`, `regenHP` 2 against `always`, 5);
 `HP` 550, `manaN`, armor and defense type are equal.
 
+## Unit pause and the delayed form timer (decoded 2026-11-11)
+
+`PauseUnit(unit, true)` runs `0x69c6e0` (flag `0x200000` on `[unit+0x164]`, tested first so a repeat
+does nothing); its steps are `0x6d80e0(1)`, `0x6d60f0(1, 1, 0, 0)` and `0x694a90(0)`.
+`PauseUnit(unit, false)` is `0x69c750`, the inverse.
+
+- `0x6d80e0` adds to the unit's ability pause count `[unit+0x3e0]` and calls ability virtual
+  `+0xbc` (pause) or `+0xc0` (resume) on every ability. The base routines (`0x46a410`, `0x46a440`)
+  count `[ability+0x48]` and call virtual `+0xe8` on the 0 to 1 edge and `+0xec` on the 1 to 0
+  edge. `CAbilityRavenForm` and `CAbilityBurrow` share `+0xe8` = `0xbacde0` and `+0xec` = `0xbace20`:
+  they stop and re-arm only the timer at `[ability+0xfc]`, event `0xd01db` (`0xbace7d`), keeping
+  the remaining time in `[ability+0x198]`. `0xd01db` is the form-duration timer armed after a swap
+  (`0xbaf282`, from `HeroDur`; `0` stops it).
+- The delayed swap timer (`0xd01c4`, `[ability+0xe8]`, armed by `0xbafb00`) is a different member
+  and is not touched by those virtuals. Its handler path (`0xcb0050`, `0xbadd40`, `0xbaf000`,
+  `0xbaf580`) tests no pause flag. So pausing the unit does not freeze the burrow delay: the form
+  swaps `Dur` after the order whether the unit is paused or not, and unpausing leaves the timer
+  alone.
+- `0x6d60f0(1, 1, 0, 0)` adds to `[unit+0x3d0]` and calls `0x46e0c0` on each ability whose virtual
+  `+0xcc` answers true (`CAbilityBurrow`: `0x46a490` returns 1): `[ability+0x3c]` goes up, which the
+  order check reads as busy (`0x6a16b0`, answer `0xb9`). A paused unit therefore refuses
+  `burrow` and `unburrow`, as the recreation already does.
+- `0x694a90(0)` increments `[unit+0x15c]` and, for the first pause, builds a command with order `0xd0005` (the
+  same count that sends `0xb99b50` to its deferred path; not traced further). How that order interacts with the pending
+  `Abur` change was not traced; the recreation keeps the swap on its timer.
+
+Not decoded: the Raven form-duration timer under pause beyond the virtuals above (the recreation
+refuses a pause during any Raven phase), and the `0xd0005` order's effect.
+
 ## Recreation
 
 - `unit_root_rules.rs` reads the class from the selected image (name, getter, vtable, order ids, the
@@ -222,3 +251,8 @@ UndeadX02 uses the stock `ucry` and takes the swap. `ucry` and `ucrm` differ in 
 - A unit whose type is not the source form of the direction (UndeadX04's `u000`) takes the same
   phase without the swap, as `0xbaf580` does. A unit created as the alternate form is refused
   (its initial burrowed state, `0xbacd75`, is not modelled).
+- `PauseUnit` during a delayed change (the `0xd01c4` phase, no flight) is accepted and changes
+  nothing about the swap: it still lands at `now + Dur`, paused or not, and the finish events
+  follow it (`UnitMorph::delayed_timer_only`, `unit_morph_host.rs`). A pause during any other form
+  phase, and a unit death during a delayed phase, still refuse. The new form's animation
+  timestamps shift at unpause by the usual pause rule (recreation choice).

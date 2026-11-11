@@ -122,6 +122,15 @@ impl UnitMorph {
         (self.phase == MorphPhase::Landing && pending.stage != EventPhase::Begin)
             .then_some(change.normal_movement)
     }
+    /// A delayed change in progress and nothing else: the form swap is the `0xd01c4` timer on the
+    /// ability (`0xbafb00`), which the unit pause does not stop (`docs/re-notes/unit-root-burrow.md`).
+    fn delayed_timer_only(&self) -> bool {
+        self.flight.is_none()
+            && self
+                .pending
+                .as_ref()
+                .is_some_and(|p| matches!(p.change, Change::Delayed(_)))
+    }
     fn order(&self) -> Option<i32> {
         self.pending
             .as_ref()
@@ -872,10 +881,10 @@ impl ObjectHost {
             .iter()
             .filter_map(|u| {
                 let record = self.executed_unit(*u).ok()?;
-                if record.paused_since.is_some() {
+                let m = record.morph.as_ref()?;
+                if record.paused_since.is_some() && !m.delayed_timer_only() {
                     return None;
                 }
-                let m = record.morph.as_ref()?;
                 let phase = m
                     .pending
                     .as_ref()
@@ -921,7 +930,7 @@ impl ObjectHost {
                 continue;
             };
             let record = self.executed_unit(unit)?;
-            if record.paused_since.is_some() {
+            if record.paused_since.is_some() && !m.delayed_timer_only() {
                 return Err(self.morph_error("pause during an active form phase is not qualified"));
             }
             if record.combat.as_ref().is_some_and(|c| c.dead) {
@@ -1056,7 +1065,9 @@ impl ObjectHost {
         operation: &str,
     ) -> Result<(), Error> {
         if self.executed_unit(unit)?.morph.as_ref().is_some_and(|m| {
-            if matches!(operation, "PauseUnit" | "unit death") {
+            if operation == "PauseUnit" {
+                (m.pending.is_some() || m.flight.is_some()) && !m.delayed_timer_only()
+            } else if operation == "unit death" {
                 m.pending.is_some() || m.flight.is_some()
             } else {
                 m.order().is_some()
