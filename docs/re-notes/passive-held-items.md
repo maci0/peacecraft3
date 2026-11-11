@@ -563,13 +563,16 @@ speed to `base * (1 - 0.5)` through the speed host, and subtracts 0.25 from the 
 multiplier the combat step uses. The duration is `HeroDur1` for a hero target (inferred from
 `0xcaf450`, as for `AIcb`) and `Dur1` otherwise. A second hit restarts the timer; the decreases
 never stack. Expiry, `UnitRemoveBuffs` and death end it. The decreases come from the `Misc` profiles
-(stock then map), a missing key reads 0, and a value outside `[0, 1)` refuses (the native
-multiplier at or below 0 is a stall state, counter `[+0x84]`, not modelled).
+(stock then map), a missing key reads 0, and a value outside `[0, 1)` refuses (kept as a bound on
+the `Misc` input; the speed model itself accepts a multiplier at or below 0, see
+`unit-move-speed-model.md`).
 
-Refused or open: a frost hit on a slowed (`Aslo`) or polymorphed unit, and a slow or polymorph on a
-frosted unit, refuse at runtime, because the client adds every decrease into one multiplier and the
-recreation's slow keeps its own base speed. That attack-side object is the attack speed
-multiplier is inferred from the key name and the item text. The `Bfro` dispel class and
+Speed model (updated): the movement decrease is a delta on the unit's speed multiplier
+(`unit-move-speed-model.md`), so frost and a slow add on one multiplier and both can be active. A frost
+hit on a slowed unit and a slow on a frosted unit no longer refuse. A polymorphed unit still refuses
+(the speed writes of the polymorph type change are not decoded), as does a polymorph on a frosted
+unit. That the attack-side object is the attack speed multiplier is inferred from the key name and
+the item text. The `Bfro` dispel class and
 `Targetart`/`Specialart` are not modelled. Tests: `inventory_orb_tests.rs` (frost rows, `Misc`
 profiles, registration) and `inventory_frost_host_tests.rs` (speeds, timers, refresh, removal,
 missile impact, death).
@@ -737,23 +740,49 @@ in `UNMODELED_PASSIVE_CLASSES` (`crates/pcx-play/src/inventory_powerup.rs`), tes
   unit-type record; that this field is `spd` is inferred from the unit-creation call order).
   Result: `speed = limit((max(AIms DataA1) + base) * multiplier)`, so the bonus is added before the
   slow multiplier, and `SetUnitMoveSpeed` leaves the bonus in place.
-- `MiscGame.txt` `MoveSpeedBonusesStack` (stock 0): attach (`0xbbeee0`), detach (`0xbbefc0`) and
-  the other `AIms` handlers read it with `0x4304c0`. With 0 they call the recompute `0xb69430`
-  (the maximum rule above). With nonzero they set flag `0x80` on the ability and skip the
-  recompute; that stacking path is not decoded.
-- Why it stays refused: the recreation keeps one clamped speed per unit (`activity.speed`). Neither
-  the base nor the multiplier can be recovered from it when a slow, frost, polymorph or
-  `SetUnitMoveSpeed` has touched it, and the limit also depends on unit-type `minSpd`/`maxSpd`
-  (fields `+0x1d8`/`+0x1dc`) that the recreation does not read. Admitting the bonus needs a
-  base/multiplier speed model; it is not built.
+- `MiscGame.txt` `MoveSpeedBonusesStack` (string `0xf55f08`): attach (`0xbbeee0`), detach
+  (`0xbbefc0`) and the other `AIms` handlers read it with `0x4304c0`. With 0 they call the
+  recompute `0xb69430` (the maximum rule above). With nonzero they set flag `0x80` on the ability
+  and skip the recompute (the update handler slot 15, `0xbbf3c0`, sets the flag from the key and
+  clears it for an illusion when `Misc/IllusionsGetMoveSpeedBonus` is 0). While the flag is set,
+  slots 181 and 182 (`0xbbf330`, `0xbbf370`) store `DataA1` at `+0x28` of a bonus record that the
+  routine around `0x6d6960` (call site `0x6d69c0`, virtual `+0x2d4`) sums over the unit's
+  abilities; for the flat damage class the same slot (`0xbc2be0`) fills the attack damage fields
+  of such a record. Where the `+0x28` total reaches the speed is not decoded. Values in the shipped
+  files: root `Units\MiscGame.txt` 0, `Melee_V0` 0, `Custom_V0` and `Custom_V1` 1. The
+  campaign chapters run with the custom rule sets, so they use the undecoded path.
+- Implemented (2026-11-11): the full decode of the speed formula, the limit and the multiplier
+  writers is in `unit-move-speed-model.md`. The pickup binds `AIms`: each held item sets its `DataA1` as a
+  per-item entry of the unit's bonus list, the largest entry counts, dropping the item (also on
+  death or removal) takes it out, and the bonus is added to the base before the multiplier and the
+  limit. Refused: a nonzero `MoveSpeedBonusesStack` (the stacking path above; this keeps the
+  campaign chapters that carry boots blocked, because the custom rule sets set it), a map-modified `AIms`
+  row (the overrides are not decoded), a unit without the speed host, position or clock, and a
+  polymorphed holder. Tests: `inventory_speed_host_tests.rs` and the `speed_bonus_*` tests in
+  `inventory_orb_tests.rs`.
 
-### Locked-chapter probe: frost, spell resistance, boots
+### `AIau` (Legion Doom-Horn `lgdh`, code `AUau`): still refused
 
-`selected_install_locked_chapter_startup_probe` on the selected install, first refusal before and
-after the `AIob` and `AIsr` admission.
+Decoded so far (no runtime capture):
 
-| Chapter | Before | After |
-|---|---|---|
-| TFT OrcX03a | `AIob` on `ofro` | `AIms` on `bspd` (speed-multiplier reason) |
-| TFT HumanX06 | `AIsr` on `brac` | `AIau` (code `AUau`) on `lgdh` (not a decoded class) |
-| RoC Undead02 | `AIms` on `bspd` | unchanged |
+- Class (observed): `AIau` is a row whose `code` is `AUau`, the class of the hero spell Unholy Aura.
+  Registration window `0xc657d0`: descriptor `0x11b8be0`, base class id `aura` (from `0xb90db0`),
+  class id getter `0xc65710`. The buff is `BUau` (getter `0xc65720`), registered at `0xc657f0` over
+  base `BAUR` (from `0x6f4b60`), a different base from the `BSPD` of slow and frost.
+- Rows (shipped): `AIau` has `Area1` 900, `targs1` `air,ground,friend,self,vuln,invu`, `DataA1`
+  0.1, `DataB1` 0.5, `DataC1` 0, `BuffID1` `BUau`. The editor metadata rows `Uau1`, `Uau2`, `Uau3`
+  (data columns A, B, C) are labelled "Movement Speed Increase (%)", "Life Regeneration Increase (%)"
+  and "Percent Bonus" (bool). The item text says it grants the Hero and friendly nearby units
+  increased life regeneration and movement speed and does not stack with Unholy Aura.
+- Buff movement half (observed): the `BUau` apply routine `0xc65560` sets flag `0x200` on the buff
+  and shifts the unit's speed multiplier by the value at buff `+0xe8` through `0xb67720`, unless the
+  unit has flag `0x40000000` and `Misc/IllusionsGetMoveSpeedBonus` (string `0xea7520`, stock 1) is
+  0. The flag is the one `IllusionsCanRestoreLife` pairs with illusions (inferred). The speed model
+  of `unit-move-speed-model.md` can take this delta; the recreation has no aura host to call it.
+- Life regeneration half: the class getter `0xc65750` reads the `Misc` key
+  `IllusionsCanRestoreLife` for illusions. Where `DataB1`/`DataC1` reach the regeneration is not
+  decoded.
+- Open, hence refused with a message naming the class (`UNMODELED_PASSIVE_CLASSES`): the base
+  class `aura` scan (period, the unit filter against `targs1`, how a unit leaving the range loses the
+  buff), the `BUau` duration and refresh, the stacking rule with the hero spell, and the life
+  regeneration addition.

@@ -517,3 +517,13 @@ Open after this lane:
 
 - A unit without an `Asid` or `Asud` ability stores stock here; the native returns silently for it.
 - Attack speed: that agility and the cooldown consumer use the same multiplier object, and the illusion gate, are inferred or not modelled (see passive-held-items.md).
+
+## Movement speed model and boots
+
+First refusal of `selected_install_locked_chapter_startup_probe`, before (the table above) and after the speed model (`unit-move-speed-model.md`) and the `AIms` admission. Boots bind when `Misc/MoveSpeedBonusesStack` is 0 (root `MiscGame.txt`, `Melee_V0`); the chapters run with `Custom_V0` or `Custom_V1`, which set it to 1, so they stay on the undecoded stacking path.
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX03a | `AIms` on `bspd` (speed-multiplier reason) | `UnitAddItemToSlotById` refused: `AIms` on `bspd`, `Misc/MoveSpeedBonusesStack` is set, where the summed bonus record reaches the speed is not decoded (`passive-held-items.md`) |
+| RoC Undead02 | `AIms` on `bspd` | same refusal as OrcX03a |
+| TFT HumanX06 | `AIau` (code `AUau`) on `lgdh` (not a decoded class) | `UnitAddItem` refused: `AIau` on `lgdh`, with the decoded parts named (class `aura`, buff `BUau`); the aura scan, buff duration and regeneration addition are open |
