@@ -60,6 +60,8 @@ const ALARM_NATIVES: [(&str, &[&str]); 2] = [
     ("UnitIgnoreAlarm", &["unit", "boolean"]),
     ("UnitIgnoreAlarmToggled", &["unit"]),
 ];
+/// `(unit, integer) returns boolean`: adds a signed delta to a hero's unspent skill points.
+const MODIFY_SKILL_POINTS: &str = "UnitModifySkillPoints";
 
 #[cfg(test)]
 mod cached_tests {
@@ -444,6 +446,8 @@ pub(super) struct Admission {
     ability_edit: [bool; 2],
     /// Admitted `UnitIgnoreAlarm`, `UnitIgnoreAlarmToggled` in `ALARM_NATIVES` order.
     alarm_natives: [bool; 2],
+    /// Admitted `UnitModifySkillPoints`.
+    modify_skill_points: bool,
 }
 
 impl ObjectHost {
@@ -644,6 +648,21 @@ impl ObjectHost {
                 alarm_natives[index] = true;
             }
         }
+        let mut modify_skill_points = false;
+        if let Some(native) = self.inner.program.natives().get(MODIFY_SKILL_POINTS) {
+            Self::contract(
+                &self.inner,
+                MODIFY_SKILL_POINTS,
+                &["unit", "integer"],
+                "boolean",
+                false,
+                Some(KIND),
+            )?;
+            if native.source != units.declaration_source {
+                return Err(self.inner.error(MODIFY_SKILL_POINTS, Failure::Source));
+            }
+            modify_skill_points = true;
+        }
         let mut experience_natives = [false; experience::NATIVES.len()];
         if rules.experience.is_some() {
             for (index, (name, params, result)) in experience::NATIVES.into_iter().enumerate() {
@@ -678,6 +697,7 @@ impl ObjectHost {
             experience_natives,
             ability_edit,
             alarm_natives,
+            modify_skill_points,
         });
         Ok(self)
     }
@@ -812,6 +832,11 @@ impl ObjectHost {
         if let Some(index) = ATTRIBUTES.iter().position(|(native, _)| *native == name) {
             let (_, stat) = ATTRIBUTES[index];
             return input.attributes[index].then(|| self.hero_attribute(name, stat, args));
+        }
+        if name == MODIFY_SKILL_POINTS {
+            return input
+                .modify_skill_points
+                .then(|| self.unit_modify_skill_points(args));
         }
         if let Some(index) = [ADD_ABILITY, REMOVE_ABILITY]
             .iter()
@@ -955,6 +980,59 @@ impl ObjectHost {
     /// when the alias is not listed. Hero progression entries refuse, since their learn and
     /// remove effects are not derived here. Removal also refuses the families whose runtime
     /// state is keyed by the unit, and aliases holding cooldown or autocast-off records.
+    /// `UnitModifySkillPoints` (`0x4af4b0` -> `0x697730` -> `0xb3f670`, see
+    /// `docs/re-notes/hero-skill-points.md`). Null, removed, non-hero and illusion units return
+    /// false. A decrease is limited to the unspent points and an increase to the unlearned ranks
+    /// of the hero skill slots; the call is true whenever the first limit leaves a nonzero delta,
+    /// even when the second limit then applies nothing.
+    fn unit_modify_skill_points(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let [unit, Value::Int(delta)] = args else {
+            return Err(self.hero_error(MODIFY_SKILL_POINTS, "unit and delta required".into()));
+        };
+        let unit = match unit {
+            Value::Null => return Ok(Value::Bool(false)),
+            Value::Handle(unit) => *unit,
+            _ => return Err(self.hero_error(MODIFY_SKILL_POINTS, "unit identity required".into())),
+        };
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
+            return Ok(Value::Bool(false));
+        }
+        let record = self.created_unit(unit, MODIFY_SKILL_POINTS)?;
+        if record.illusion.is_some() {
+            return Ok(Value::Bool(false));
+        }
+        let state = record.abilities.as_ref().ok_or_else(|| {
+            self.hero_error(MODIFY_SKILL_POINTS, "ability state not admitted".into())
+        })?;
+        let Some(hero) = &state.hero else {
+            return Ok(Value::Bool(false));
+        };
+        // The native negates in 32 bits, so i32::MIN is not clamped by the unspent points.
+        let mut change = *delta;
+        if change.wrapping_neg() > hero.skill_points {
+            change = hero.skill_points.wrapping_neg();
+        }
+        if change == 0 {
+            return Ok(Value::Bool(false));
+        }
+        let room = state
+            .capacity()
+            .map_err(|e| self.hero_error(MODIFY_SKILL_POINTS, e))?;
+        let points = hero.skill_points.wrapping_add(change.min(room));
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!()
+        };
+        record
+            .abilities
+            .as_mut()
+            .expect("admitted")
+            .hero
+            .as_mut()
+            .expect("hero")
+            .skill_points = points;
+        Ok(Value::Bool(true))
+    }
+
     fn unit_ability_edit(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let [unit, Value::Int(ability)] = args else {
             return Err(self.hero_error(name, "unit and ability rawcode required".into()));

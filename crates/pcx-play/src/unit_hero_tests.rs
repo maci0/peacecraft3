@@ -1831,3 +1831,74 @@ fn a_custom_ability_over_a_missing_base_still_refuses_creation() {
     let error = create_unit(&mut vm, *b"hund").unwrap_err();
     assert!(error.contains("no shipped object Qqqq"), "{error}");
 }
+
+const POINTS_NATIVES: &str = "native SelectHeroSkill takes unit u, integer ability returns nothing\nconstant native GetHeroLevel takes unit u returns integer\nconstant native GetHeroSkillPoints takes unit u returns integer\nconstant native GetUnitAbilityLevel takes unit u, integer ability returns integer\nnative UnitModifySkillPoints takes unit u, integer delta returns boolean\n";
+
+fn modify_points(
+    vm: &mut pcx_script::OwnedVm<crate::scripts::OwnedLocalizedHost<ObjectHost>>,
+    unit: Value,
+    delta: i32,
+) -> bool {
+    match vm
+        .host()
+        .inner
+        .native("UnitModifySkillPoints", &[unit, Value::Int(delta)])
+        .unwrap()
+    {
+        Value::Bool(changed) => changed,
+        other => panic!("boolean result expected, got {other:?}"),
+    }
+}
+
+#[test]
+fn modify_skill_points_clamps_to_unspent_points_and_unlearned_ranks() {
+    // L001 has three ranks and L002 one, so four ranks can be held; the hero starts with three points.
+    let mut vm = host(POINTS_NATIVES, "L001,L002", Overlay::default(), "", 8);
+    vm.call("setup", &[]).unwrap();
+    let hero = vm.global("H");
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 3);
+    assert!(!modify_points(&mut vm, hero.clone(), 0), "zero is false");
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 3);
+    assert!(modify_points(&mut vm, hero.clone(), 1));
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 4);
+    assert!(
+        modify_points(&mut vm, hero.clone(), 5),
+        "a gain is limited to the four unlearned ranks, not to the resulting points"
+    );
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 8);
+    assert!(modify_points(&mut vm, hero.clone(), -9));
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 0);
+    assert!(
+        !modify_points(&mut vm, hero.clone(), -1),
+        "nothing to remove is false"
+    );
+    assert!(modify_points(&mut vm, hero.clone(), 2));
+    learn(&mut vm, *b"L001");
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 1);
+    assert!(modify_points(&mut vm, hero.clone(), 10));
+    assert_eq!(
+        query(&mut vm, "GetHeroSkillPoints", None),
+        4,
+        "two ranks of L001 and one of L002 are unlearned, so the gain is 3"
+    );
+    assert!(modify_points(&mut vm, hero, i32::MIN));
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 4 + i32::MIN);
+}
+
+#[test]
+fn modify_skill_points_returns_false_for_null_and_non_hero_units() {
+    let mut vm = host(POINTS_NATIVES, "L001,L002", Overlay::default(), "", 8);
+    vm.call("setup", &[]).unwrap();
+    let plain = vm.global("N");
+    assert!(!modify_points(&mut vm, Value::Null, 1));
+    assert!(!modify_points(&mut vm, plain, 1));
+    let hero = vm.global("H");
+    assert!(
+        vm.host()
+            .inner
+            .native("UnitModifySkillPoints", &[hero])
+            .is_err(),
+        "a missing delta is refused"
+    );
+    assert_eq!(query(&mut vm, "GetHeroSkillPoints", None), 3);
+}
