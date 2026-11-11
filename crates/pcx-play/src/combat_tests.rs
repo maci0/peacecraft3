@@ -5542,6 +5542,14 @@ fn initial_weapon_mask_missing_alternate_and_multiple_sources_are_refused() {
     for mask in ["2", "3"] {
         let mut fields = flee_fields("1", "8");
         set_weapon_mask(&mut fields, mask);
+        // Creation reads attack 2 when `weapsOn` enables it; the unit has no such attack.
+        fields.push(column(
+            b"W021",
+            SlkId::UnitWeapons,
+            "weapTp2",
+            FieldKind::Token,
+            "_",
+        ));
         let (mut vm, a, b) = flee_fixture(&fields);
         let error = flee_decision(&mut vm, a, b, 20.0).expect_err("noninitial mask");
         assert!(

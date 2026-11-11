@@ -72,7 +72,7 @@ pub struct Weapon {
     pub missile_speed: MissileSpeed,
     /// `UnitWeapons` `minRange`; zero when the cell is empty.
     pub min_range: f32,
-    /// The weapon-1 splash columns, when all five are numeric.
+    /// The weapon's splash columns, when all five are numeric.
     pub splash: Option<Splash>,
     /// Whether the weapon's `targs` list names air; `None` when the unit has no `targs` column.
     /// Only a held orb consults it: attack eligibility by target class is not otherwise modelled.
@@ -80,7 +80,7 @@ pub struct Weapon {
 }
 
 /// `Farea1`/`Harea1`/`Qarea1` radii with the `Hfact1`/`Qfact1` damage factors of the
-/// middle and outer rings, and the `splashTargs1` classes.
+/// middle and outer rings, and the `splashTargs1` classes (the columns of the weapon's number).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Splash {
     pub full: f32,
@@ -284,18 +284,40 @@ pub(super) fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, Str
     }
 }
 
-/// Weapon 1 when bit 0 of an attack-enable mask is set. Weapon 2 (bit 1) is not modelled, so a
-/// mask without bit 0 leaves the unit with no weapon.
+/// The modelled weapon of an attack-enable mask (bit 0 attack 1, bit 1 attack 2). The model
+/// holds one weapon: attack 1 when it is enabled, else attack 2, else none. Both enabled
+/// attacks at once are not modelled.
 pub(super) fn weapon_for_mask(d: &Definition, mask: i32) -> Result<Option<Weapon>, String> {
-    if mask & 1 == 0 {
-        Ok(None)
-    } else {
+    if mask & 1 != 0 {
         read_weapon(d, 1)
+    } else if mask & 2 != 0 {
+        read_weapon(d, 2)
+    } else {
+        Ok(None)
     }
 }
 
+/// The modelled weapon of an ability's attack mask (the root class `DataA`/`DataB`). A slot the
+/// mask enables on a unit that has no such attack (placeholder `weapTp`, as on a Hunter's Hall)
+/// enables nothing, so the next enabled slot is tried before giving up.
+pub(super) fn weapon_for_ability_mask(d: &Definition, mask: i32) -> Result<Option<Weapon>, String> {
+    for n in [1u8, 2] {
+        if mask & (1 << (n - 1)) == 0 {
+            continue;
+        }
+        let name = format!("weapTp{n}");
+        let kind = column(d, SlkId::UnitWeapons, &name)?
+            .ok_or_else(|| format!("unit field {name} is empty"))
+            .and_then(|v| text(v, &name))?;
+        if !matches!(kind, "_" | "-" | "") {
+            return read_weapon(d, n);
+        }
+    }
+    Ok(None)
+}
+
 /// Weapon `n` (1 or 2) of the unit's `UnitWeapons` row. Weapon 2 is absent when its `weapTp2`
-/// cell is a placeholder; only weapon 1 carries the splash columns.
+/// cell is a placeholder. Both weapons carry their own splash columns.
 pub(super) fn read_weapon(d: &Definition, n: u8) -> Result<Option<Weapon>, String> {
     let num = |slk, name: &str| match column(d, slk, name)? {
         Some(v) => number(v, name),
@@ -347,7 +369,7 @@ pub(super) fn read_weapon(d: &Definition, n: u8) -> Result<Option<Weapon>, Strin
         attack,
         missile_speed,
         min_range: optional_number(d, "minRange")?.unwrap_or(0.0),
-        splash: if n == 1 { read_splash(d)? } else { None },
+        splash: read_splash(d, n)?,
         reaches_air,
     }))
 }
@@ -398,19 +420,20 @@ fn optional_number(d: &Definition, name: &str) -> Result<Option<f32>, String> {
     optional_column(d, name)?.map_or(Ok(None), |v| number(v, name))
 }
 
-/// The weapon-1 splash columns; `None` unless all five numbers are present.
-fn read_splash(d: &Definition) -> Result<Option<Splash>, String> {
+/// The splash columns of weapon `n`; `None` unless all five numbers are present.
+fn read_splash(d: &Definition, n: u8) -> Result<Option<Splash>, String> {
     let (Some(full), Some(half), Some(quarter), Some(half_factor), Some(quarter_factor)) = (
-        optional_number(d, "Farea1")?,
-        optional_number(d, "Harea1")?,
-        optional_number(d, "Qarea1")?,
-        optional_number(d, "Hfact1")?,
-        optional_number(d, "Qfact1")?,
+        optional_number(d, &format!("Farea{n}"))?,
+        optional_number(d, &format!("Harea{n}"))?,
+        optional_number(d, &format!("Qarea{n}"))?,
+        optional_number(d, &format!("Hfact{n}"))?,
+        optional_number(d, &format!("Qfact{n}"))?,
     ) else {
         return Ok(None);
     };
-    let targets = match optional_column(d, "splashTargs1")? {
-        Some(v) => SplashTargets::parse(text(v, "splashTargs1")?),
+    let targets_column = format!("splashTargs{n}");
+    let targets = match optional_column(d, &targets_column)? {
+        Some(v) => SplashTargets::parse(text(v, &targets_column)?),
         None => SplashTargets::default(),
     };
     Ok(Some(Splash {

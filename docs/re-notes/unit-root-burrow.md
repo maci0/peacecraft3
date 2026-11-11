@@ -54,6 +54,20 @@ Observed:
   Rooting is `0xb8e8c0`: sets the bit and posts `0xd01e4` after `Dur`.
 - Attack masks `0xb8ed70`: two attack slots; the slots in the mask go to `0xb1fcb0` (sets bit
   `0x80000 << slot` in the weapon controller word) and the others to `0xb1fc20` (clears it).
+- `0xb8ed70(flag)` (observed): the target is the unit's attack ability `[owner+0x3f4]` and a null
+  pointer returns at once (`0xb8ed8f`). The mask is `[this+0x84]` (`DataA`) for `flag=1`, and
+  `~[this+0x88]` (`~DataB`) for `flag=0`. A slot whose mask bit equals `flag` goes to `0xb1fcb0`,
+  every other slot to `0xb1fc20`, so rooting enables the `DataA` slots and disables the rest, and
+  unrooting enables the `DataB` slots and disables the rest. `0xb1fcb0`/`0xb1fc20` also refresh the
+  command card (`0x46e070`).
+- Creation (observed): `0xb8d9f0` (class vtable `+0x80`, called by the add-by-alias routine
+  `0x6d8e77`) runs `0xb8f470`, which calls `0xb8ed70(1)` and then sets unit bit `0x8000000`.
+  `0x6d4560` (add ability to unit) caches the ability whose code getter returns `Aatk` into
+  `[unit+0x3f4]` (`0x6d4696`). The unit initializer `0x66efc0` creates the default `Aatk` ability
+  through factory `0x683420` and adds it before the type's other abilities (inferred from the
+  initializer's order; the authored ability list consumer was not located). With the attack
+  ability present, a created Ancient starts with the `DataA` slots only, whatever `weapsOn`
+  enabled; the `weapsOn` mask reaches the weapon record at `0x67c7de`.
 - If unit bit `0x100000`, `0x200000` or `[unit+0x15c] > 0`, `0xb99b50` takes a deferred path
   (`0xb99b9f`, queues the order) that is not decoded.
 
@@ -111,8 +125,16 @@ form with the immediate bit clear (Burrow); the effect of unit bit `0x4000000`; 
   dead or constructing units, nonzero cost or cooldown, and registered issued-order listeners
   refuse the call before any change. Movement orders on an uprooted unit refuse
   (`prepare_record_steer`).
-- Creation does not apply the rooted `DataA` mask (`0xb8f470`): the recreation arms `etrp` from
-  `weapsOn=3`, native arms attack 2 only. Open.
+- Creation applies the rooted `DataA` mask over `weapsOn` (`apply_creation_root_mask`,
+  `unit_root_host.rs`): `Aro2` (`DataA=2`) on `etrp` leaves attack 2 only, `Aro1` leaves attack 1.
+  The combat model holds one weapon: `weapon_for_mask` (`combat_host.rs`) takes attack 1 when its
+  bit is set, else attack 2, else none. A mask with both bits keeps attack 1 (both attacks at once
+  are not modelled; this is the `weapsOn=3` behaviour of every other unit). `read_weapon` reads
+  the splash columns of attack 2 as well (`Farea2`, `Harea2`, `Qarea2`, `Hfact2`, `Qfact2`,
+  `splashTargs2`): the shipped `etrp` row authors attack 2 as `msplash` with `rangeN2=700`,
+  `cool2=2`, `dice2=1`, `sides2=10`, `dmgplus2=44` and its own splash, which the model dropped
+  because it read splash for attack 1 only. The only other shipped row with a single-attack-2
+  `weapsOn` is `echm` (`weapsOn=2`), which previously had no weapon.
 - `burrow` on a unit with no `Abur` returns false (`morph_inactive`). On `Abur` the morph path
   refuses at `Spec::read` ("morph flags 0x1 of class Abur ..."): the swap time for a form without
   the immediate bit is not decoded.

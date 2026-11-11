@@ -2629,6 +2629,10 @@ impl ObjectHost {
             self.apply_creation_upgrades(&mut record)?;
         }
         record.combat = self.prepare_unit_combat(&record.definition)?;
+        if let Some(combat) = &mut record.combat {
+            self.apply_creation_root_mask(&record.definition, record.abilities.as_ref(), combat)
+                .map_err(|e| self.inner.error(NATIVE, Failure::UnitActivity(e)))?;
+        }
         if birth == Birth::Corpse {
             record
                 .vitals

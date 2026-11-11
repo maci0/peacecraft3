@@ -256,6 +256,10 @@ fn tables(cast: &str, duration: &str) -> DefaultTables {
                 "X003", "Z987", "1", "0", "0", "0", "u001", "1", "0", "0", "u002", "0", "0",
                 "1.45", "0",
             ],
+            &[
+                "X004", "R987", "1", "0", "0", "0", "2", "1", "0", "0", "u002", "0", "0", "2.5",
+                "0",
+            ],
         ],
     );
     let metadata = sylk(
@@ -377,6 +381,16 @@ fn open(cast: &str, duration: &str) -> (Vm, HandleId) {
     open_with("X001", cast, duration)
 }
 fn open_with(abilities: &str, cast: &str, duration: &str) -> (Vm, HandleId) {
+    open_with_attack(abilities, cast, duration, true)
+}
+/// `first_attack` false gives the unit no attack 1 (`weapTp1` a placeholder, `weapsOn` 0), as on a
+/// rootable building.
+fn open_with_attack(
+    abilities: &str,
+    cast: &str,
+    duration: &str,
+    first_attack: bool,
+) -> (Vm, HandleId) {
     let (registry, activity, numeric) = registry_numeric();
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = registry.binding().image_sha256;
@@ -430,6 +444,41 @@ fn open_with(abilities: &str, cast: &str, duration: &str) -> (Vm, HandleId) {
         FieldKind::Token,
         abilities,
     ));
+    // Attacks 1 and 2 are both enabled by `weapsOn`; ranges tell them apart.
+    fields.retain(|(id, _)| id != b"W001" && (first_attack || id != b"W003"));
+    if !first_attack {
+        fields.push(column(
+            b"W003",
+            SlkId::UnitWeapons,
+            "weapTp1",
+            FieldKind::Token,
+            "_",
+        ));
+    }
+    for (id, key, kind, value) in [
+        (
+            b"W001",
+            "weapsOn",
+            FieldKind::Int,
+            if first_attack { "3" } else { "2" },
+        ),
+        (b"W021", "weapTp2", FieldKind::Token, "normal"),
+        (b"W022", "atkType2", FieldKind::Token, "pierce"),
+        (b"W023", "rangeN2", FieldKind::Int, "700"),
+        (b"W024", "cool2", FieldKind::Real, "2"),
+        (b"W025", "dmgpt2", FieldKind::Real, "0.4"),
+        (b"W026", "dmgplus2", FieldKind::Int, "9"),
+        (b"W027", "dice2", FieldKind::Int, "1"),
+        (b"W028", "sides2", FieldKind::Int, "1"),
+        (b"W029", "Farea2", FieldKind::Real, "25"),
+        (b"W030", "Harea2", FieldKind::Real, "75"),
+        (b"W031", "Qarea2", FieldKind::Real, "125"),
+        (b"W032", "Hfact2", FieldKind::Real, "0.5"),
+        (b"W033", "Qfact2", FieldKind::Real, "0.25"),
+        (b"W034", "splashTargs2", FieldKind::Token, "ground,enemy"),
+    ] {
+        fields.push(column(id, SlkId::UnitWeapons, key, kind, value));
+    }
     fields.push(column(
         b"mHgt",
         SlkId::UnitData,
@@ -1000,7 +1049,7 @@ fn native_class_differs_from_owned_alias_and_interrupts_existing_attack_order() 
     );
 }
 
-fn weapon_present(vm: &mut Vm, u: HandleId) -> bool {
+fn weapon_of(vm: &mut Vm, u: HandleId) -> Option<crate::playercolor_host::Weapon> {
     vm.host()
         .inner
         .executed_unit(u)
@@ -1009,21 +1058,42 @@ fn weapon_present(vm: &mut Vm, u: HandleId) -> bool {
         .as_ref()
         .expect("combat admitted")
         .weapon
-        .is_some()
+}
+
+#[test]
+fn creation_applies_the_rooted_attack_mask_over_weapons_on() {
+    // `weapsOn` enables both attacks; DataA of 2 leaves a rooted unit with attack 2 only
+    // (the native attach routine runs the mask at 0xb8f470), and `unroot` (DataB 1) swaps it.
+    let (mut vm, u) = open_with("X004", "0.125", "0.375");
+    let rooted = weapon_of(&mut vm, u).expect("attack 2 is enabled");
+    assert_eq!(rooted.range, 700.);
+    assert_eq!(rooted.splash.map(|s| s.full), Some(25.));
+    assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(weapon_of(&mut vm, u).map(|w| w.range), Some(64.));
+}
+
+#[test]
+fn creation_without_a_root_ability_keeps_the_weapons_on_set() {
+    let (mut vm, u) = open_with("X001", "0.125", "0.375");
+    assert_eq!(weapon_of(&mut vm, u).map(|w| w.range), Some(64.));
 }
 
 #[test]
 fn unroot_is_accepted_once_and_applies_the_uprooted_attack_mask() {
     let (mut vm, u) = open_with("X002", "0.125", "0.375");
-    assert!(weapon_present(&mut vm, u), "fixture unit starts armed");
+    // DataA is 1: rooted, attack 1 only.
+    assert_eq!(weapon_of(&mut vm, u).map(|w| w.range), Some(64.));
     assert!(!vm.host().inner.unit_uprooted(u));
     // The class rejects `root` as an immediate order, rooted or not.
     assert_eq!(vm.call("root_order", &[]).unwrap(), Value::Bool(false));
     assert!(!vm.host().inner.unit_uprooted(u));
     assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(true));
     assert!(vm.host().inner.unit_uprooted(u));
-    // DataB is 2: attack 2 only, so the modelled attack 1 is disabled.
-    assert!(!weapon_present(&mut vm, u));
+    // DataB is 2: attack 2 only, with its own range and splash columns.
+    let second = weapon_of(&mut vm, u).expect("attack 2 is enabled");
+    assert_eq!(second.range, 700.);
+    assert_eq!(second.cooldown, 2.);
+    assert_eq!(second.splash.map(|s| s.full), Some(25.));
     assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(false));
     assert_eq!(vm.call("unroot_by_id", &[]).unwrap(), Value::Bool(false));
     assert_eq!(vm.call("root_order", &[]).unwrap(), Value::Bool(false));
@@ -1076,4 +1146,25 @@ fn burrow_class_form_without_immediate_change_is_refused_with_its_flags() {
     let error = vm.call("burrow_order", &[]).unwrap_err().to_string();
     assert!(error.contains("morph flags 0x1 of class Z987"), "{error}");
     assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+}
+
+#[test]
+fn a_rooted_slot_without_an_attack_enables_nothing_and_is_not_refused() {
+    // A building without attack 1 under `DataA=1` has no weapon, and `unroot` (`DataB=2`) arms
+    // the attack 2 it has.
+    let (mut vm, u) = open_with_attack("X002", "0.125", "0.375", false);
+    assert_eq!(weapon_of(&mut vm, u), None);
+    assert_eq!(vm.call("unroot_order", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(weapon_of(&mut vm, u).map(|w| w.range), Some(700.));
+    // `DataA=2` roots it with attack 2.
+    let (mut vm, u) = open_with_attack("X004", "0.125", "0.375", false);
+    assert_eq!(weapon_of(&mut vm, u).map(|w| w.range), Some(700.));
+}
+
+#[test]
+fn weapons_on_of_attack_two_alone_arms_attack_two() {
+    let (mut vm, u) = open_with_attack("X001", "0.125", "0.375", false);
+    let weapon = weapon_of(&mut vm, u).expect("attack 2 is enabled");
+    assert_eq!(weapon.range, 700.);
+    assert_eq!(weapon.splash.map(|s| s.quarter), Some(125.));
 }

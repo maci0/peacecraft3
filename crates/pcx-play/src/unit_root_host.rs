@@ -3,9 +3,12 @@
 //! Decoded rule set: `docs/re-notes/unit-root-burrow.md`. A unit with the class ability starts
 //! rooted. `unroot` is accepted once and moves it to the uprooted state; `root` as an immediate
 //! order is always refused by the class. Uprooted movement is not modelled and stays refused.
+use super::UnitAbilities;
+use super::combat::Combat;
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_objects::editor::FieldKind;
 use pcx_script::{HandleId, Value};
+use pcx_sim::world::Definition;
 
 impl ObjectHost {
     fn root_error(&self, name: &str, why: impl Into<String>) -> Error {
@@ -26,6 +29,45 @@ impl ObjectHost {
     /// Whether `unit` has left the rooted state through an accepted `unroot`.
     pub(crate) fn unit_uprooted(&self, unit: HandleId) -> bool {
         self.uprooted.contains(&unit)
+    }
+    /// The root-class ability among `abilities` and its rank; at most one may be owned.
+    fn owned_root_ability(
+        &self,
+        abilities: &UnitAbilities,
+        rules: &crate::unit_root_rules::Rules,
+    ) -> Result<Option<([u8; 4], i32)>, String> {
+        let mut owned = Vec::new();
+        for (alias, rank) in abilities.levels().filter(|(_, rank)| *rank > 0) {
+            if self.ability_data_text(alias, "code")?.as_bytes() == rules.class.code {
+                owned.push((alias, rank));
+            }
+        }
+        match owned.as_slice() {
+            [] => Ok(None),
+            [one] => Ok(Some(*one)),
+            _ => Err("ambiguous owned root ability".into()),
+        }
+    }
+    /// A created unit owning the root class starts rooted: the attach routine applies the
+    /// rooted attack mask (`DataA`) through `0xb8f470`, replacing the `weapsOn` set.
+    pub(super) fn apply_creation_root_mask(
+        &self,
+        definition: &Definition,
+        abilities: Option<&UnitAbilities>,
+        combat: &mut Combat,
+    ) -> Result<(), String> {
+        let (Some(Ok(rules)), Some(abilities)) = (self.admitted_root_rules(), abilities) else {
+            return Ok(());
+        };
+        let Some((ability, rank)) = self.owned_root_ability(abilities, &rules)? else {
+            return Ok(());
+        };
+        let mask = self
+            .hero_ability_level_cell(ability, "DataA", rank, FieldKind::Int)?
+            .parse::<i32>()
+            .map_err(|_| "malformed root DataA".to_string())?;
+        combat.weapon = super::combat::weapon_for_ability_mask(definition, mask)?;
+        Ok(())
     }
     fn issue_root_order(
         &mut self,
@@ -59,19 +101,11 @@ impl ObjectHost {
         let Some(abilities) = &record.abilities else {
             return Err(self.root_error(name, "owned ability state missing"));
         };
-        let mut owned = Vec::new();
-        for (alias, rank) in abilities.levels().filter(|(_, rank)| *rank > 0) {
-            let code = self
-                .ability_data_text(alias, "code")
-                .map_err(|e| self.root_error(name, e))?;
-            if code.as_bytes() == rules.class.code {
-                owned.push((alias, rank));
-            }
-        }
-        let (ability, rank) = match owned.as_slice() {
-            [] => return Ok(Value::Bool(false)),
-            [one] => *one,
-            _ => return Err(self.root_error(name, "ambiguous owned root ability")),
+        let Some((ability, rank)) = self
+            .owned_root_ability(abilities, rules)
+            .map_err(|e| self.root_error(name, e))?
+        else {
+            return Ok(Value::Bool(false));
         };
         if !self.unit_ability_available(unit, ability)? || self.unit_uprooted(unit) {
             return Ok(Value::Bool(false));
@@ -98,7 +132,7 @@ impl ObjectHost {
             );
         }
         // `DataB` is the attack-enable mask applied while uprooted.
-        let weapon = super::combat::weapon_for_mask(&record.definition, cell("DataB")?)
+        let weapon = super::combat::weapon_for_ability_mask(&record.definition, cell("DataB")?)
             .map_err(|e| self.root_error(name, e))?;
         if !self
             .prepare_ability_events(
