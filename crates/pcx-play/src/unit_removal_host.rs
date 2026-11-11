@@ -108,6 +108,7 @@ impl ObjectHost {
         self.forget_curse_unit(unit);
         self.forget_orb_unit(unit);
         self.forget_purge_unit(unit)?;
+        self.forget_reincarnation_unit(unit);
         self.forget_unit_buffs(unit);
         self.forget_divine_shield(unit);
         let now = self.timer_game_time();

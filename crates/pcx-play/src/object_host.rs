@@ -29,6 +29,7 @@ pub struct ObjectHost {
     curses: Option<unit_curse::State>,
     orbs: orb::State,
     purges: purge::State,
+    reincarnation: reincarnation::State,
     summoning: Option<unit_summon::State>,
     mirror_image: Option<unit_mirror_image::State>,
     morph_active: Vec<HandleId>,
@@ -340,6 +341,7 @@ impl ObjectHost {
             curses: None,
             orbs: orb::State::default(),
             purges: purge::State::default(),
+            reincarnation: reincarnation::State::default(),
             summoning: None,
             mirror_image: None,
             morph_active: Vec::new(),
@@ -1754,6 +1756,9 @@ mod orb;
 
 #[path = "purge_host.rs"]
 mod purge;
+
+#[path = "reincarnation_host.rs"]
+mod reincarnation;
 
 #[path = "doodad_host.rs"]
 mod doodads;

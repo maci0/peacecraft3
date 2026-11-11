@@ -20,10 +20,32 @@
 //! global-speed and native revive-effect timing remain recreation choices, not
 //! original-runtime parity claims.
 use super::{Entry, Error, Failure, ObjectHost};
+use crate::inventory_powerup::Reincarnation;
 use pcx_script::{HandleId, Value};
 
 const REVIVE: &str = "ReviveHero";
 const REVIVE_LOC: &str = "ReviveHeroLoc";
+
+/// Who revives a unit. The native `ReviveHero` revives heroes only and needs the activity
+/// projected to the clock; the death handler of a reincarnation (`0xb8ad60`) tests neither: it
+/// runs inside the combat step, and the unit it revives has no activity left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Reviver {
+    Native,
+    Handler,
+}
+
+/// What a revive sets the unit's life and mana to.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Restore {
+    /// Full life and mana, as `ReviveHero` leaves them.
+    Full,
+    /// The amounts of a reincarnation row; `mana_at_death` stands in for a negative `DataC1`.
+    Reincarnation {
+        spec: Reincarnation,
+        mana_at_death: f32,
+    },
+}
 
 impl ObjectHost {
     pub(super) fn unit_revive_declarations(&self, source: &str) -> Result<(), Error> {
@@ -81,6 +103,21 @@ impl ObjectHost {
             Value::Handle(unit) => *unit,
             _ => return Err(fail(Failure::WrongFamily)),
         };
+        self.revive_unit(name, unit, point, Restore::Full, Reviver::Native)
+            .map(Value::Bool)
+    }
+
+    /// Brings a dead unit back on its own handle at `point`.
+    pub(super) fn revive_unit(
+        &mut self,
+        name: &str,
+        unit: HandleId,
+        point: [f32; 2],
+        restore: Restore,
+        reviver: Reviver,
+    ) -> Result<bool, Error> {
+        let native = reviver == Reviver::Native;
+        let fail = |reason| self.inner.error(name, reason);
         // Snapshot the validation view before any mutation.
         let (is_hero, dead, has_vitals, face, definition_for_geometry) =
             match self.inner.entry(unit).map_err(|e| fail(e.failure))? {
@@ -96,11 +133,11 @@ impl ObjectHost {
                         record.definition.clone(),
                     )
                 }
-                Entry::RemovedUnit { .. } => return Ok(Value::Bool(false)),
+                Entry::RemovedUnit { .. } => return Ok(false),
                 _ => return Err(fail(Failure::WrongFamily)),
             };
-        if !is_hero || !dead {
-            return Ok(Value::Bool(false));
+        if (native && !is_hero) || !dead {
+            return Ok(false);
         }
         if !has_vitals {
             return Err(fail(Failure::UnitState("revive requires vitals")));
@@ -108,7 +145,9 @@ impl ObjectHost {
         let now = self
             .timer_game_time()
             .ok_or_else(|| fail(Failure::UnitState("revive requires the game clock")))?;
-        self.check_activity_boundary(now, name)?;
+        if native {
+            self.check_activity_boundary(now, name)?;
+        }
         // Validate placement before mutating: a blocked footprint is a `false`
         // return, while an unreadable definition is an asset error.
         let prepared = if let Some(placement) = self.unit_placement.as_mut() {
@@ -130,7 +169,7 @@ impl ObjectHost {
                 }
                 // Blocked or missing hidden occupancy: the boolean reports
                 // failure without mutating the canonical unit or its footprint.
-                Err(_) => return Ok(Value::Bool(false)),
+                Err(_) => return Ok(false),
             }
         } else {
             None
@@ -149,8 +188,16 @@ impl ObjectHost {
             combat.ground_target = None;
         }
         if let Some(vitals) = record.vitals.as_mut() {
-            vitals.life = vitals.max_life;
-            vitals.mana = vitals.max_mana;
+            (vitals.life, vitals.mana) = match restore {
+                Restore::Full => (vitals.max_life, vitals.max_mana),
+                Restore::Reincarnation {
+                    spec,
+                    mana_at_death,
+                } => (
+                    spec.restored_life(vitals.max_life),
+                    spec.restored_mana(mana_at_death, vitals.max_mana),
+                ),
+            };
             vitals.regen.through = now;
         }
         if let Some(decay) = record.decay.as_mut() {
@@ -174,7 +221,7 @@ impl ObjectHost {
                 .expect("placement")
                 .commit(unit, prepared);
         }
-        Ok(Value::Bool(true))
+        Ok(true)
     }
 
     #[allow(dead_code)]

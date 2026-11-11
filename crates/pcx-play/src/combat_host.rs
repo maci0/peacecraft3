@@ -1550,6 +1550,7 @@ impl ObjectHost {
         };
         self.require_morph_interruption(unit, "unit death")?;
         self.require_black_arrow_unmarked(unit)?;
+        let reincarnation = self.plan_reincarnation(unit)?;
         let mut decay = record.decay.clone();
         if let Some(state) = &mut decay {
             state
@@ -1565,6 +1566,9 @@ impl ObjectHost {
         self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
+        if let Some(plan) = reincarnation {
+            self.commit_reincarnation(unit, plan)?;
+        }
         self.forget_inventory_unit(unit, false)?;
         self.forget_unit_guard(unit);
         self.steer_unit(unit, None, name)?;
@@ -1976,6 +1980,7 @@ impl ObjectHost {
         self.advance_curses(now)?;
         self.advance_orbs(now)?;
         self.advance_purges(now)?;
+        self.advance_reincarnations(now)?;
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.

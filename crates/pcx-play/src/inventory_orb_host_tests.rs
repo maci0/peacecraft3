@@ -335,6 +335,8 @@ fn a_second_orb_on_one_holder_is_refused_without_moving_the_item() {
 mod frost;
 #[path = "inventory_purge_host_tests.rs"]
 mod purge;
+#[path = "reincarnation_host_tests.rs"]
+mod reincarnation;
 #[path = "inventory_speed_host_tests.rs"]
 mod speed;
 

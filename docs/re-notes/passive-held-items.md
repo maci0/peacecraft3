@@ -27,8 +27,11 @@ derived on demand from the held slots, so no add/remove state exists.
   maximum-life and mana contributions. Death itself does not clear current mana, and removal
   while dead still reprices mana by the rounded ratio instead of forcing zero.
 - Orbs (`AIfb`, `AIgd`, `AIcb`, `AIob`, `AIpb`) add their flat damage and run their on-hit effect; see
-  "Orb families" below. The spell orbs (`AIsb`) roll a proc per swing and cast Black Arrow; see
-  "Spell orbs" below. A holder takes at most one orb.
+  "Orb families" below. The spell orbs (`AIsb`) roll a proc per swing and cast Black Arrow or
+  Purge, and the lightning orb (`AIlb`) casts Purge on every armed hit; see "Spell orbs" below. A
+  holder takes at most one orb.
+- A held Ankh of Reincarnation (`AIrc`) revives its holder at the place it died `DataA1` seconds
+  after the death and spends its charge; see "`AIrc`" below.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
 - Passive rows whose abilities are outside the admitted classes refuse the pickup atomically
@@ -1029,22 +1032,95 @@ only one stack are not decoded.
   armed hit casts the Purge before the attack damage, free of mana and cooldown (see "Purge
   recreation").
 
-### `AIrc` (Ankh of Reincarnation `ankh`)
+### `AIrc` (Ankh of Reincarnation `ankh`): implemented
 
-- Registration (observed): window `0xb8c1e0` (`push 0x11b5a5c`, `call 0x46f5b0` which returns
-  `abil`, `push "AIrc"`). Descriptor `0xf34978`, factory `0xb8a9b0`, vtable `0xf35200`, slot 7
-  `0xb8b7c0` (`AIrc`).
-- Reincarnation entry (slot 161, `+0x284`, `0xb8b870`, observed): resolves the item that carries the
-  ability from the handle at `+0x70`, requires its use count (`[item+0x18c]`) to be nonzero, the
-  owner's flag word `[owner+0x164]` bit `0x40000000` clear, no pending reincarnation marker (an
-  object lookup for `XOre`), a location test (`0x7f6a00`), then reads `DataB1` (`0x46ee20`, clamped
-  against the float at `0x112d810`) and `DataC1` (`0x46eed0`, negative selects a unit-derived
-  value via `0xb20d20`), creates a revive record (`0xb8bfc0`), calls its virtual `+0x78` with the
-  unit and the level values, sets owner flag `0x1000` and calls `0x682c80`. Shipped row `AIrc`:
-  `DataA1` 7, `DataB1` 500, `DataC1` -1, `EfctID1` `XOre`.
-- Why it stays refused: the delay, the restored life and mana, where the hero returns, the item
-  charge use and the death path that calls slot 161 are not decoded, and the recreation has no
-  reincarnation host.
+Decoded from the reviewed image (SHA-256 `3f2ed012…`, `objdump`/`rizin`) and the shipped rows; no
+runtime capture. Observed unless marked inferred.
+
+- Registration: window `0xb8c1e0` (`push 0x11b5a5c`, `call 0x46f5b0` which returns `abil`, `push
+  "AIrc"`). Descriptor `0xf34978`, factory `0xb8a9b0`, vtable `0xf35200`, slot 7 `0xb8b7c0`. The
+  attach (slot 34, `0xb8b7d0`) only stores the handle of the carrying item at `+0x70/+0x74`. Beside
+  it the image registers the hero class `AOre` (window `0xb8c200`, base from `0xb4b180`, which
+  returns `AAsp`; vtable `0xf34a10`), the creep class `ACrn` (window `0xb8c1c0`, base `AOre`,
+  vtable `0xf34e08`) and the revive record class `XOre` (window `0xb8c220`, vtable `0xf34988`,
+  constructor `0xb8bdf0`). Shipped rows: `AIrc` `DataA1` 7, `DataB1` 500, `DataC1` -1, `EfctID1`
+  `XOre`; `AOre` `DataA1` 5 (four levels, `Cool` 240); `ACrn` `DataA1` 7. Item `ankh`: class
+  `Charged`, `uses` 1, `perishable` 1, `usable` 0, `drop` 0, `cooldownID` `AIrc`.
+- Where it runs: the kill routine `0x6896d0` returns for a unit that is already dead, asks the
+  death-prevention handlers (`0x6d7580`: abilities whose slot `+0x274` equals the stage and whose
+  slot `+0x278` answers 1; neither is `AIrc` or `AOre`), then sets the dead flag (`[unit+0x164] &
+  0x100`) and calls the unit death routine `0x6884f0(1, 1)`. That routine runs the death handlers
+  of the unit's abilities with `0x6d8060`: for stage 1 to 4, each ability whose slot `+0x280` returns
+  the stage has its slot `+0x284` called. It posts the death events `0xd0154` and `0xd0155` after
+  the handlers (`0xd0154` and `0xd0156` on the branches that skip `0xd0155`), never before
+  and never conditionally on a handler. `AOre` returns stage 2 (`0xb8b2d0`), `AIrc` stage 3 (`0xb8b860`).
+- Handler (`0xb8b870`): resolves the item from `+0x70` and requires its charge count `[item+0x18c]`
+  to be nonzero; the owner flags `[owner+0x164] & 0x40000000` and `[owner+0x20] & 1` clear (their
+  meaning is not established); no pending revive record of the unit (the lookup `0xb8c0c0` runs
+  `0xb8c100` over the objects of class `XOre`, comparing the record's unit handle); and the
+  location test `0x7f6a00(position, position, 2, 0)` to answer 0. That test is the walkability query
+  of `0x7f6890` (`ai-construction.md`: `IsTerrainPathable` maps walkability to mask 2): it answers 1
+  when the cell of the unit's position is blocked for walking, by terrain or by a dynamic spatial
+  entry whose state and low pathing mask `0x8bdbe0` accepts. A blocked position stops the handler.
+- Effects, in order (`0xb8b870`): `0x69cf30` with no unit empties the handle pair
+  `[unit+0x45c]`, `[unit+0x460]` (the revive routine empties it too; what reads it is not
+  established, the recreation does not model it); `0x6c6f10` spends the item's charge; `DataB1` is
+  raised to at least the global `0x112d810` (zero); `DataC1`, when below zero, becomes the unit's
+  current mana (`0xb20d20` reads the stat object at `+0x1c0` through `0x800d80`); `0xb8bfc0`
+  creates the `XOre` record (vtable `0xf34988`); its start virtual `+0x78` (`0xb8aab0`) is called
+  with the unit, `DataA1`, the ability's effect id (`+0x34`), `DataB1` and `DataC1`; the unit flag
+  `[unit+0x164] |= 0x1000` is set and `0x682c80` runs (a presentation and event routine that
+  posts events `0xd0144` and `0xd0162`, not decoded).
+- Charge (`0x6c6f10`, observed): with item flag `[item+0x20] & 0x1000` clear and a positive count it
+  decrements `[item+0x18c]`; it notifies the holder (`0x68dcb0`); and when the flag is clear, the
+  item flag `0x40` (perishable) is set and the count is zero it destroys the item (`0x6c4f70`,
+  `0x5f6d40`). So the charge is spent at the death, no cooldown is set, and the shipped `ankh`
+  (`uses` 1, `perishable` 1) is gone at once.
+- Record (`0xb8aab0`, `0xb8aeb0`, `0xb8ad60`, observed): the start stores the unit handle at
+  `+0x3c/+0x40`, the effect id at `+0x48`, `DataB1` at `+0x50` and `DataC1` at `+0x58`, creates the
+  effect `0x5c17f0`/`0x6f78d0` (presentation) and starts the timer at `+0x24` with the delay `DataA1`,
+  the event `0xd01c4` and the record as handler (`0x7fbe90`). Virtual `+0x7c` (`0xb8ad10`) clears
+  `[unit+0x16c]` bits `0x0a10` (the mask `0xfffff5ef`) for a dead unit. The event handler (slot 3, `0xb8aeb0`) ends the
+  effect, runs the revive `+0x80` (`0xb8ad60`) and destroys the record. The revive requires the
+  unit's object to be live and the dead flag `0x100` set, then reads the unit's own position (unit
+  virtual `+0xb8`) and puts the unit back at it (virtual `+0x180`), so it returns where it died.
+  It calls `0x69bd90(owner, &life, &mana, 0x500, 1)`, the revive core `ReviveHero` also uses
+  (`0x69c4f2`, flags `0x502`), then `0x6a0d10(0)` and `0x5f5990(unit)` (presentation).
+- Revive core (`0x69bd90`, observed): life is the maximum (`+0x130`) when `|DataB1|` is under
+  `[0x10db054]` (0.001), else the value raised to `[0x10db0a8]` (0.5); it is set through unit virtual
+  `+0x124`, whose stat object clamps the reading to the maximum. Mana is set to `DataC1` (or the
+  mana at death). The dead flag is cleared, the supply bookkeeping flags `0x500` re-add the unit
+  type's food, and the unit's death events are not posted again.
+- Priority against `AOre` (observed): the hero handler (`0xb8b2e0`, stage 2) runs first. It needs
+  its own enable count `[+0x3c] <= 0`, the usable test `+0x268`, the owner flags above, no pending
+  record, the mana check `+0x378` and ability flag `0x200` clear, and the same location test. When
+  it fires it sets its cooldown (`+0x2ec`, `+0x3ac`) and starts a record (`0xb8b3e0`) with the
+  row `DataA1`, the maximum life (`+0x130`) and the maximum mana (the stat object's `+0x84`). The
+  `AIrc` handler then finds that record pending and does nothing, so the ankh keeps its charge.
+  The cooldown and mana state of `AOre` decide which of the two fires.
+- Not decoded: the flags `0x40000000` and `[+0x20] & 1`; `0x682c80`; the dynamic part of the
+  location test; the handle pair at `+0x45c`; whether a dying unit's items drop before or after
+  the handler and whether the client drops them for a unit that will return; the revive's hero
+  events; the effect at `EfctID1`; which of several ankhs fires first (the order of the unit's
+  ability list).
+
+Recreation: `crates/pcx-play/src/inventory_reincarnation.rs` reads the three registrations from the
+image and the `AIrc` row (`DataA1`, `DataB1` raised to zero, `DataC1`, `EfctID1` as a rawcode);
+the pickup is admitted and the row is held per item (`AttributeBonus::reincarnation`).
+`crates/pcx-play/src/reincarnation_host.rs` plans the handler at the top of `kill_unit`, before
+any change: it refuses a unit that also has a hero reincarnation ability (`AOre`, `ACrn`, from the
+unit's ability list), several held ankhs, a flier, a host without the item-charge or the terrain
+pathing admission, and an item without a charge to spend. A blocked walkability cell
+(`terrain_unwalkable`, the static raster only) or a pending record lets the unit die as usual and
+keeps the charge. Otherwise the death spends the charge through `spend_item_charge`, removes a
+perishable item that reaches none, and schedules the revive at `now + DataA1`. The rest of the
+death is the existing path, so the death events fire, the unit stays dead, and its items follow the
+unchanged drop rule. The combat step revives the unit (`revive_unit`, the core shared with
+`ReviveHero`) at its death position with `Reincarnation::restored_life` and `restored_mana`; a
+revive the placement refuses is an error, a unit that was removed meanwhile keeps no record.
+Tests: `inventory_reincarnation_tests.rs` (rows, amounts, registrations, the real image in an
+ignored test) and `reincarnation_host_tests.rs` (the whole cycle, the unwalkable stop, one charge,
+removal, and each refusal); `terrain_pathing_host_tests.rs` covers the raster query.
 
 ### `AIms` (Boots of Speed `bspd`)
 

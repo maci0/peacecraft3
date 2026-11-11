@@ -73,20 +73,13 @@ const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 /// Held-item classes whose class was decoded from the reviewed client but whose effect is not
 /// modeled, with the reason the pickup stays refused. See `passive-held-items.md`, "Open held
 /// classes".
-const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 2] = [
-    (
-        "AUau",
-        "the unholy aura applies buff BUau to units within Area1 of the holder; the buff adds \
+const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 1] = [(
+    "AUau",
+    "the unholy aura applies buff BUau to units within Area1 of the holder; the buff adds \
          DataA1 to the speed multiplier and DataB1 as a permanent life regeneration rate, but \
          when the client fires the range events, how the buff ends after a unit leaves the \
          area, and the stacking test against the hero aura are not decoded",
-    ),
-    (
-        "AIrc",
-        "reincarnation runs from the death handler (revive delay, life and mana restore, \
-         charge use) and is not modeled",
-    ),
-];
+)];
 const BASE_FN_LEN: usize = 6;
 pub(crate) const REGISTER_FN: u32 = 0x7f6360;
 const CLASS_WINDOW_LEN: usize = 24;
@@ -227,6 +220,9 @@ pub struct AttributeBonus {
     /// recompute (`0xb69430`) when the ability attaches or detaches, so a unit already walking
     /// keeps its old speed until its next order or recompute (`unit-move-speed-model.md`).
     pub move_speed_refresh_skipped: bool,
+    /// The reincarnation an `AIrc` ability on this item grants, `None` without one. It is read per
+    /// item and never aggregated: each held item is its own death handler.
+    pub reincarnation: Option<Reincarnation>,
 }
 
 #[derive(Clone, Debug)]
@@ -277,6 +273,8 @@ pub struct Rules {
     attack_speed: Option<FractionClass>,
     /// Movement-speed bonus registration, attached by `with_move_speed_bonus`.
     move_speed_bonus: Option<MoveSpeedBonusClass>,
+    /// `AIrc` and the hero reincarnation classes, attached by `with_reincarnation`.
+    reincarnation: Option<ReincarnationClasses>,
 }
 
 /// The registered `AIms` class and whether `Misc/MoveSpeedBonusesStack` is set, attached by
@@ -424,6 +422,7 @@ impl Rules {
         let attack_speed = window(ATTACK_SPEED_WINDOW)?;
         let move_speed_bonus = window(MOVE_SPEED_BONUS_WINDOW)?;
         let spell_orb = SpellOrbImage::read(&pe).map_err(|e| fail(&e))?;
+        let reincarnation = ReincarnationImage::read(&pe).map_err(|e| fail(&e))?;
         let purge = PurgeImage::read(&pe).map_err(|e| fail(&e))?;
         Self::decode(
             tables,
@@ -445,6 +444,7 @@ impl Rules {
         .and_then(|rules| rules.with_spell_resistance(&spell_resistance))
         .and_then(|rules| rules.with_attack_speed(&attack_speed))
         .and_then(|rules| rules.with_move_speed_bonus(&move_speed_bonus))
+        .and_then(|rules| rules.with_reincarnation(&reincarnation))
         .map_err(|e| fail(&e))
     }
 
@@ -504,6 +504,13 @@ impl Rules {
     /// Whether `class` is one of the registrations already attached.
     fn is_registered(&self, class: &str) -> bool {
         let amount = |c: &Option<AmountClass>| c.as_ref().is_some_and(|c| c.class == class);
+        if self.reincarnation.as_ref().is_some_and(|classes| {
+            [&classes.ankh, &classes.hero, &classes.creep]
+                .iter()
+                .any(|c| **c == class)
+        }) {
+            return true;
+        }
         [
             &self.powerup_class,
             &self.passive_class,
@@ -1011,6 +1018,7 @@ impl Rules {
             orbs: None,
             spell_resistance: None,
             move_speed_bonus: None,
+            reincarnation: None,
         })
     }
 
@@ -1252,6 +1260,18 @@ impl Rules {
                     .checked_add(damage)
                     .ok_or("passive damage overflows")?;
                 held.spell_damage_taken = Some(held.spell_damage_taken.unwrap_or(1.0) * taken);
+                continue;
+            }
+            if let Some(classes) = &self.reincarnation
+                && code == classes.ankh
+            {
+                if held.reincarnation.is_some() {
+                    return Err(format!(
+                        "two reincarnation abilities on {} are unsupported",
+                        item.rawcode()
+                    ));
+                }
+                held.reincarnation = Some(self.reincarnation_row(alias)?);
                 continue;
             }
             if let Some(class) = &self.move_speed_bonus
@@ -1923,6 +1943,11 @@ fn fraction_column(
     })
 }
 
+#[path = "inventory_reincarnation.rs"]
+pub(crate) mod reincarnation;
+pub use reincarnation::Reincarnation;
+use reincarnation::ReincarnationClasses;
+pub(crate) use reincarnation::ReincarnationImage;
 #[path = "inventory_purge.rs"]
 pub(crate) mod purge;
 use purge::PurgeClasses;

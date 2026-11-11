@@ -253,6 +253,47 @@ impl ObjectHost {
         })
     }
 
+    /// A charge a death handler spends (`0x6c6f10`): one is taken without a readiness test or a
+    /// cooldown, and a perishable item that reaches none is to be removed by the caller. The
+    /// charge must be positive and the item charged: a handler of an uncharged item is not decoded.
+    pub(crate) fn spend_item_charge(&mut self, item: HandleId) -> Result<UseCommit, Error> {
+        let fail = |reason: String| self.inner.error("item use", Failure::ItemUse(reason));
+        let state = self
+            .item_use
+            .as_ref()
+            .ok_or_else(|| fail("item use is not admitted".into()))?;
+        let record = self
+            .live_item(item)?
+            .ok_or_else(|| fail("absent item".into()))?;
+        let charged = matches!(
+            state.rules.charges(&record.definition).map_err(fail)?,
+            Charges::Charged(_)
+        );
+        if !charged {
+            return Err(fail(
+                "a death handler spends a charge of an uncharged item, which is not decoded".into(),
+            ));
+        }
+        let perishable = state.rules.perishable(&record.definition).map_err(fail)?;
+        let count = self.charge_count(item, record)?;
+        if count <= 0 {
+            return Err(fail("a death handler needs a charge to spend".into()));
+        }
+        if !state.charges.contains_key(&item) && state.charges.len() >= state.max_records {
+            return Err(self.inner.error(GET, Failure::Budget("item charges")));
+        }
+        let remaining = count - 1;
+        self.item_use
+            .as_mut()
+            .expect("checked above")
+            .charges
+            .insert(item, remaining);
+        Ok(UseCommit {
+            charges: Some(remaining),
+            remove: perishable && remaining == 0,
+        })
+    }
+
     fn use_clock(&self) -> Result<f64, Error> {
         let now = self.timer_game_time().ok_or_else(|| {
             self.inner.error(

@@ -122,29 +122,61 @@ impl ObjectHost {
                 Entry::Symbolic { kind, enumerand } if kind == "pathingtype" => *enumerand,
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             };
-            let context = self
-                .player_context()
-                .ok_or_else(|| fail("admitted map context required"))?;
-            let (ox, oy) = context.terrain.origin();
-            let cell = f64::from(input.cell_size());
-            let coordinate = |value, origin| {
-                use crate::script_random::real;
-                let delta = real::sub(real::from_f32(value)?, real::from_f32(origin)?)?;
-                Ok::<_, real::MathError>((f64::from(f32::from_bits(delta)) / cell).floor())
-            };
-            let x = coordinate(x, ox).map_err(|_| fail("unsupported coordinate arithmetic"))?;
-            let y = coordinate(y, oy).map_err(|_| fail("unsupported coordinate arithmetic"))?;
-            let raster = &context.world.pathing;
-            // shortcut: out-of-raster native behavior is unqualified; admit it
-            // only after explicit boundary observations rather than clamping.
-            if x < 0.0 || y < 0.0 || x >= f64::from(raster.width) || y >= f64::from(raster.height) {
-                return Err(fail("out-of-raster query is unsupported"));
-            }
-            let flags = raster
-                .cell(x as u32, y as u32)
-                .ok_or_else(|| fail("missing authored cell"))?;
-            Ok(Value::Bool(flags & input.mask(enumerand) != 0))
+            Ok(Value::Bool(
+                self.terrain_cell_flags(name, input, x, y)? & input.mask(enumerand) != 0,
+            ))
         })())
+    }
+
+    /// The raster flags of the cell that holds the point.
+    fn terrain_cell_flags(
+        &self,
+        name: &str,
+        input: &TerrainPathing,
+        x: f32,
+        y: f32,
+    ) -> Result<u8, Error> {
+        let fail = |reason| self.inner.error(name, Failure::TerrainPathing(reason));
+        let context = self
+            .player_context()
+            .ok_or_else(|| fail("admitted map context required"))?;
+        let (ox, oy) = context.terrain.origin();
+        let cell = f64::from(input.cell_size());
+        let coordinate = |value, origin| {
+            use crate::script_random::real;
+            let delta = real::sub(real::from_f32(value)?, real::from_f32(origin)?)?;
+            Ok::<_, real::MathError>((f64::from(f32::from_bits(delta)) / cell).floor())
+        };
+        let x = coordinate(x, ox).map_err(|_| fail("unsupported coordinate arithmetic"))?;
+        let y = coordinate(y, oy).map_err(|_| fail("unsupported coordinate arithmetic"))?;
+        let raster = &context.world.pathing;
+        // shortcut: out-of-raster native behavior is unqualified; admit it
+        // only after explicit boundary observations rather than clamping.
+        if x < 0.0 || y < 0.0 || x >= f64::from(raster.width) || y >= f64::from(raster.height) {
+            return Err(fail("out-of-raster query is unsupported"));
+        }
+        raster
+            .cell(x as u32, y as u32)
+            .ok_or_else(|| fail("missing authored cell"))
+    }
+
+    /// Whether the walkability mask covers the cell that holds `point`: the static terrain part
+    /// of the test `0x7f6a00` makes with mask 2 (`IsTerrainPathable` for walkability). The
+    /// dynamic spatial entries the client also walks are not read.
+    pub(crate) fn terrain_unwalkable(&self, point: [f32; 2]) -> Result<bool, Error> {
+        const NAME: &str = "terrain walkability";
+        let input = self.terrain_pathing.as_ref().ok_or_else(|| {
+            self.inner.error(
+                NAME,
+                Failure::TerrainPathing("terrain pathing is not admitted"),
+            )
+        })?;
+        let walkability =
+            self.source_constant_enumerand("PATHING_TYPE_WALKABILITY", "pathingtype")?;
+        Ok(
+            self.terrain_cell_flags(NAME, input, point[0], point[1])? & input.mask(walkability)
+                != 0,
+        )
     }
 
     /// Authored corner elevation layer at the nearest tile corner, combined

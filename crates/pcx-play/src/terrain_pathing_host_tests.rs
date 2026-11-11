@@ -3,7 +3,7 @@ use crate::terrain_pathing::{TerrainPathing, tests::input};
 
 fn common() -> String {
     format!(
-        "type pathingtype extends handle\nconstant native ConvertPathingType takes integer i returns pathingtype\nnative IsTerrainPathable takes real x, real y, pathingtype t returns boolean\n{COMMON}\nglobals\nconstant pathingtype WALK = ConvertPathingType(1)\nconstant pathingtype OTHER = ConvertPathingType(2)\nconstant pathingtype UNKNOWN = ConvertPathingType(-5)\nendglobals\n"
+        "type pathingtype extends handle\nconstant native ConvertPathingType takes integer i returns pathingtype\nnative IsTerrainPathable takes real x, real y, pathingtype t returns boolean\n{COMMON}\nglobals\nconstant pathingtype WALK = ConvertPathingType(1)\nconstant pathingtype PATHING_TYPE_WALKABILITY = ConvertPathingType(1)\nconstant pathingtype OTHER = ConvertPathingType(2)\nconstant pathingtype UNKNOWN = ConvertPathingType(-5)\nendglobals\n"
     )
 }
 
@@ -148,4 +148,29 @@ fn declaration_contract_source_and_admitted_map_are_required() {
         "native IsTerrainPathable takes real x, real y, pathingtype t returns boolean\n",
     );
     assert!(host.with_terrain_pathing(selected()).is_err());
+}
+
+#[test]
+fn the_walkability_helper_reads_the_cell_with_the_walkability_mask() {
+    let (ctx, host) = owned(&common(), "");
+    let host = host.with_terrain_pathing(selected()).unwrap();
+    let mut blocked = 0;
+    for y in 0..ctx.world.pathing.height {
+        for x in 0..ctx.world.pathing.width {
+            let flags = ctx.world.pathing.cell(x, y).unwrap();
+            let point = [x as f32 * 16.0 + 1.0, y as f32 * 16.0 + 1.0];
+            let walk = flags & 0x10 != 0;
+            blocked += usize::from(walk);
+            assert_eq!(host.terrain_unwalkable(point).unwrap(), walk, "({x}, {y})");
+        }
+    }
+    assert!(blocked > 0, "the fixture raster blocks some cell");
+    // Outside the raster the answer is unqualified and refuses, as the native does.
+    assert!(host.terrain_unwalkable([-1000.0, -1000.0]).is_err());
+}
+
+#[test]
+fn the_walkability_helper_refuses_without_the_admission() {
+    let (_, host) = owned(&common(), "");
+    assert!(host.terrain_unwalkable([0.0, 0.0]).is_err());
 }

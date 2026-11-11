@@ -431,6 +431,15 @@ impl ObjectHost {
         Ok(held.unwrap_or_default())
     }
 
+    /// Whether `class` is a hero reincarnation class (`AOre`, `ACrn`) of the admitted rules.
+    pub(crate) fn hero_reincarnation_class(&self, class: &str) -> bool {
+        self.items
+            .as_ref()
+            .and_then(|s| s.inventory.as_ref())
+            .and_then(|s| s.attributes.as_ref())
+            .is_some_and(|rules| rules.is_hero_reincarnation(class))
+    }
+
     /// Flat hero bonus of a unit: retained powerup strength plus passive bonuses of held items.
     pub(crate) fn unit_hero_bonus(&self, unit: HandleId) -> Result<AttributeBonus, Error> {
         let mut bonus = AttributeBonus {
@@ -448,6 +457,7 @@ impl ObjectHost {
             attack_speed: 0.0,
             move_speed_bonus: None,
             move_speed_refresh_skipped: false,
+            reincarnation: None,
         };
         for (item, _) in self
             .executed_items()

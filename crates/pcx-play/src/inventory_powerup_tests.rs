@@ -861,6 +861,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             spell_damage_taken: None,
             attack_speed: 0.0,
             move_speed_bonus: None,
+            reincarnation: None,
             move_speed_refresh_skipped: false,
         }
     );
@@ -1182,7 +1183,7 @@ fn max_mana_registration_requires_the_passive_base_and_a_distinct_class() {
 fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
     for (class, expected) in [
         ("AIlb", ""),
-        ("AIrc", "death handler"),
+        ("AIrc", ""),
         ("AUau", "buff BUau"),
         ("AIzz", ""),
     ] {
@@ -1440,6 +1441,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             spell_damage_taken: None,
             attack_speed: 0.0,
             move_speed_bonus: None,
+            reincarnation: None,
             move_speed_refresh_skipped: false,
         }
     );
@@ -1784,3 +1786,6 @@ mod spell_orb;
 
 #[path = "inventory_purge_tests.rs"]
 mod purge;
+
+#[path = "inventory_reincarnation_tests.rs"]
+mod reincarnation;

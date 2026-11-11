@@ -113,6 +113,10 @@ const NEVER: &str = "0";
 /// shipped row.
 const ARROW_DURATION: f32 = 4.0;
 const ARROW_RANGE: &str = "600";
+/// `DataA1` and `DataB1` of the fixture ankh row (`DataC1` is -1, as shipped): the revive delay and
+/// the life it restores, the fixture's own values.
+const ANKH_DELAY: &str = "3";
+const ANKH_LIFE: &str = "200";
 /// `Dur1` and `HeroDur1` of the fixture lightning purge row (`AIlp`); its `DataA1` of 2 splits
 /// each into two steps.
 const LIGHTNING_DURATION: &str = "3";
@@ -345,15 +349,24 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
         row.extend(["-", "-"]);
     }
     rows.extend(spell_orb_rows(orb_targs));
+    // The ankh row and a hero reincarnation row; the last column is the effect id.
+    rows.push(vec![
+        "AIrc", "AIrc", "1", ANKH_DELAY, ANKH_LIFE, "-1", "-", "-", "-", "-", "-", "-", "-", "-",
+        "-", "-", "-",
+    ]);
+    rows.push(vec![
+        "AOr0", "AOre", "1", "5", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-",
+    ]);
     for row in &mut rows {
         row.push("-");
+        row.push(if row[0] == "AIrc" { "XOre" } else { "-" });
     }
     let refs: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
     sylk(
         &[
             "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
             "Cool1", "targs1", "Area1", "Dur1", "HeroDur1", "BuffID1", "UnitID1", "Cost1",
-            "DataF1",
+            "DataF1", "EfctID1",
         ],
         &refs,
     )
@@ -415,11 +428,13 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["oli2", "AIll", "0", "0", "0", "-"],
             &["oli3", "AIlz", "0", "0", "0", "-"],
             &["olix", "AIlx", "0", "0", "0", "-"],
+            &["ankh", "AIrc", "0", "0", "1", "1"],
             &["olig", "AIlb,AIlp", "0", "0", "0", "-"],
         ],
     );
     let plain_ability_rows: &[&[&str]] = &[
         &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-", "_"],
+        &["Yher", "Yher", "1", "0", "0", "0", "0", "0", "-", "-", "_"],
         &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-", "_"],
         &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-", "_"],
         &[
@@ -819,6 +834,14 @@ impl ObjectCatalog for PowerupItems {
                 (*b"icid", "cooldownID", "AIhe"),
                 (*b"iabi", "abilList", "AIh1"),
             ]),
+            // The Ankh of Reincarnation: one perishable charge, no cooldown group.
+            b"ankh" => rows.extend([
+                (*b"iuse", "uses", "1"),
+                (*b"iper", "perishable", "1"),
+                (*b"iicd", "ignoreCD", "0"),
+                (*b"icid", "cooldownID", ""),
+                (*b"iabi", "abilList", "AIrc"),
+            ]),
             b"pman" => rows.push((*b"iabi", "abilList", "AIrm")),
             _ => {}
         }
@@ -1115,6 +1138,8 @@ fn open_fixture(
     ))
     .unwrap()
     .with_purge(&crate::inventory_powerup::purge::fixture::image())
+    .unwrap()
+    .with_reincarnation(&crate::inventory_powerup::reincarnation::fixture::image())
     .unwrap()
     .with_spell_resistance(&registration("AIsr", "AIat"))
     .unwrap()
