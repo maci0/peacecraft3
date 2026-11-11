@@ -289,3 +289,23 @@ there was not re-measured on the old binary. "After" is the run on this branch.
 | RoC NightElf03 | (not probed before) | first refusal unchanged: `IssueImmediateOrder` `innerfireon` (`war3map.j:675`, autocast ON); the `SetDestructableMaxLifeBJ` at `war3map.j:2394` is not reached |
 | RoC Orc08 | (not probed before) | probe passes (exit 0) |
 | TFT HumanX03 | (not probed before) | `SetPlayerTechResearched` refused at `war3map.j:12489`; its `SetDestructableMaxLifeBJ` calls are not separately observed |
+
+## Probe results (2026-11-11, native decode lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe` per chapter. "Before" is the
+run on `f9c282e`, "after" is the final commit of this lane.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Undead05Interlude | `SetSoundParamsFromLabel`: sound parameter label absent `felhoundYes` | pass; `WaygateActivate` unsupported by this host (`Scripts\common.j:108999`) |
+| TFT UndeadX07Interlude | `CreateUnit`: `regenMana` negative refused | unchanged: drain rule not decoded (see unit-regeneration.md) |
+| RoC Undead03 | `IssueImmediateOrder` `townbelloff` (`war3map.j:1020`) | unchanged: no-militia branch decoded, not implemented (see ability-autocast-off.md) |
+| TFT NightElfX06 | `IssueTargetOrder` `autoharvestlumber` "worker lacks the attack work sequence" | same message: the target form now returns false, but a harvest started by another route still enters the work animation (route not traced) |
+| TFT NightElfX04 | `IssueTargetOrder` `entangleinstant`: "only the attack target order is supported" | unchanged refusal, precise message: gold mine conversion not decoded |
+
+Open after this lane:
+
+- `SetDoodadAnimationRect` footprint branch: the cell-count origin (`+0xa0`/`+0xa4`) is undecoded.
+- Town Bell militia conversion: the callback and dispatcher are undecoded.
+- Entangle mine conversion: undecoded.
+- The `WaygateActivate` native (RoC Undead05): not started.
