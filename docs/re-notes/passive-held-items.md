@@ -107,9 +107,8 @@ diagnostic instead of applying a silent wrong stat.
   removal are measured in the controlled RoC mana probes.
 - The source of the revival current-mana value is not qualified.
 - Usable item activation (`UnitUseItem`) and its charges.
-- Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `AImm`, `Arel`, `AIrm` and the orbs: mana (`AIrn`
-  auras and other classes), attack speed (`AIas`), and the rest of the refused
-  rows.
+- Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `AImm`, `Arel`, `AIrm`, `AIas` and the
+  orbs: mana (`AIrn` auras and other classes), and the rest of the refused rows.
 - Non-hero passive equip: pure intelligence is accepted with no modeled effect, while strength
   and agility still refuse. Armor, flat damage and maximum life are accepted for any unit with
   vitals. Native behavior for non-hero strength/agility is not verified.
@@ -604,6 +603,48 @@ amount, so a holder takes `splash * (1 - 0.33)`. Not consumed: the other spell d
 fields they carry (attack type, flags) are not decoded. The holder flag `0x40000000` is not
 modelled (meaning not decoded). Tests: `inventory_orb_tests.rs` (rows, product of two, refusals,
 registration) and `spell_resistance_scales_the_spells_type_splash_the_holder_takes`.
+
+## Attack speed (`AIas`, Gloves of Haste `gcel`): implemented and tested
+
+Decoded from the reviewed image (SHA-256 `3f2ed012…`) and the shipped rows; no runtime capture.
+
+- Registration (observed): window `0xbc9cc0` (`push 0x11b64e4`, `push "APbo"`, `push "AIas"`), the
+  same layout and base as `AIab`. The descriptor global is set to `0xf4fbb0` at `0x41c18a`. Vtable
+  `0xf51020`, class getter slot 7 `0xbc32e0`. Against the `AIat` vtable `0xf50450` it overrides
+  slots 1, 3, 7, 14, 15, 22, 32, 41, 181, 182, 185, 186, 199 and 202 to 209.
+- Attach (slot 32, `0xbc3310`, observed): formats `"%s%d"` with the string at `0x10dce1c` (`DataA`)
+  and level 1, reads that cell of the ability row through `0x6b06a0`, stores the float at `+0x88`,
+  calls virtual `+0x2fc`, then `0xbc8560`. The `AIat` attach `0xbc2a20` is the same sequence
+  ending in the damage routine `0xbc84b0`.
+- Apply (`0xbc8560`, observed): once per ability (flag `0x80` at `+0x20`), takes the holder's
+  attack-side object (`unit+0x3f4`; absent means no effect). When the unit flag word
+  `[unit+0x164]` has `0x40000000` it first reads the `Misc` key `IllusionsGetAttackSpeedBonus`
+  (string `0xea7500`, section `0xe69798`, default 0) and does nothing when it is 0. Otherwise it
+  calls `0xb1e490(value, 0)` with the stored amount. Detach (`0xbc3410` to `0xbca250`) clears the
+  flag and makes the same call with the sign flipped, under the same gate.
+- Multiplier (`0xb1e490`, mode 0, observed): the new value is the stored multiplier at `+0x1b4`
+  plus the argument (`0x9a01c0`), snapped to exactly 1.0 when within 0.001 of it (`0x10db054`),
+  then written through the field object at `+0x1b0`; a change above about 2e-7 (`0x10db124`) posts event
+  `0xd01b0`. The Frost buff reaches the same routine with its negated `FrostAttackSpeedDecrease`
+  (see the Orb of Frost section), so held bonuses and frost and slow decreases are one sum, not
+  factors.
+- Rows (shipped): `AIsx` (code `AIas`, `Isx1` metadata row: `Data`, `AbilityData`, data 1, unreal,
+  `useSpecific` `AIas,AIsx,AIs2`) has `DataA1` 0.15; `AIs2` has 0.2. `gcel` lists `AIsx`. `MiscGame.txt`
+  has `IllusionsGetAttackSpeedBonus=1`.
+
+Recreation: `AttributeBonus::attack_speed` is the sum of the held `Isx1` amounts (typed W3A override
+at level 1 with a matching data pointer wins, as for `Imrp`; a non-finite sum refuses). The combat
+step's multiplier is `1 + AGI * AgiAttackSpeedBonus + held - slow - frost`, which
+`derive_hero_combat` and `attack_speed_penalty` already feed into the swing and cooldown, and into
+attack-ground. Non-heroes get `1 + held`. A multiplier at or below 0 still refuses at the swing.
+Tests: `inventory_powerup_tests.rs` (column, override, refusals, registration) and
+`inventory_frost_host_tests.rs` (held sum, removal, held plus frost).
+
+Not decoded or not modelled: that agility's attack speed also goes through `0xb1e490` (assumed
+additive, as before this change); the 0.001 snap to 1.0 (float noise only); the illusion gate, which
+the recreation does not need because the shipped key is 1 and an illusion keeps the holder's bonus;
+that `[unit+0x164]` bit `0x40000000` is the illusion flag is inferred from the key name; and any
+cap or floor the cooldown consumer applies to the multiplier.
 
 ## Open held classes (decoded in part, still refused at pickup)
 

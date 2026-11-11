@@ -44,6 +44,8 @@ const CORRUPTION_ORB_WINDOW: u32 = 0xca6ce0;
 const FROST_ORB_WINDOW: u32 = 0xca6d80;
 /// Registration call for the spell-resistance class (source `AIsr`, base `AIat`).
 const SPELL_RESISTANCE_WINDOW: u32 = 0xbc9ee0;
+/// Registration call for the held attack-speed class (source `AIas`, base `APbo`).
+const ATTACK_SPEED_WINDOW: u32 = 0xbc9cc0;
 /// `Misc` keys of `MiscGame.txt` that the Frost buff reads when it is applied (`0xc5b5e0`).
 const FROST_MOVE_KEY: &str = "FrostMoveSpeedDecrease";
 const FROST_ATTACK_KEY: &str = "FrostAttackSpeedDecrease";
@@ -180,6 +182,10 @@ pub struct AttributeBonus {
     /// none is held. The reviewed client applies it to spell damage the unit takes; see the
     /// re-note for which recreation damage paths consume it.
     pub spell_damage_taken: Option<f32>,
+    /// Sum of `DataA1` over the held attack-speed abilities (`AIas`). The client adds it to the
+    /// unit's attack speed multiplier (`0xb1e490`), the same multiplier the frost and slow
+    /// decreases subtract from.
+    pub attack_speed: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +201,8 @@ struct FractionColumn {
     field: [u8; 4],
     data: u32,
     aliases: Vec<String>,
+    /// What the amount is, for refusal messages.
+    label: &'static str,
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +232,8 @@ pub struct Rules {
     orbs: Option<OrbClasses>,
     /// Spell-resistance registration, attached by `with_spell_resistance`.
     spell_resistance: Option<String>,
+    /// Attack-speed registration, attached by `with_attack_speed`.
+    attack_speed: Option<FractionClass>,
 }
 
 /// The registered orb classes: the shared `AIDB` base, `AIfb` (Orb of Fire, and Orb of
@@ -324,6 +334,7 @@ impl Rules {
         let corruption_orb = window(CORRUPTION_ORB_WINDOW)?;
         let frost_orb = window(FROST_ORB_WINDOW)?;
         let spell_resistance = window(SPELL_RESISTANCE_WINDOW)?;
+        let attack_speed = window(ATTACK_SPEED_WINDOW)?;
         Self::decode(
             tables,
             overlay,
@@ -339,6 +350,7 @@ impl Rules {
         .and_then(|rules| rules.with_orbs(&orb_base, &orb_base_code, &fire_orb, &corruption_orb))
         .and_then(|rules| rules.with_frost_orb(&frost_orb))
         .and_then(|rules| rules.with_spell_resistance(&spell_resistance))
+        .and_then(|rules| rules.with_attack_speed(&attack_speed))
         .map_err(|e| fail(&e))
     }
 
@@ -412,6 +424,10 @@ impl Rules {
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
             || self.spell_resistance.as_deref() == Some(class)
+            || self
+                .attack_speed
+                .as_ref()
+                .is_some_and(|speed| speed.class == class)
             || self.orbs.as_ref().is_some_and(|orbs| {
                 [&orbs.base, &orbs.fire, &orbs.corruption]
                     .iter()
@@ -616,6 +632,18 @@ impl Rules {
         Ok(self)
     }
 
+    /// Attaches the held attack-speed class, whose amount is the real `Isx1` column. The client
+    /// registers it over the same passive base as the attribute class (`APbo`).
+    pub(crate) fn with_attack_speed(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, _) = class_from_window(window)?;
+        if self.attack_speed.is_some() || self.is_registered(&class) {
+            return Err("attack speed registration must name a distinct class".into());
+        }
+        let amount = fraction_column(&self.tables, b"Isx1", "attack speed")?;
+        self.attack_speed = Some(FractionClass { class, amount });
+        Ok(self)
+    }
+
     /// Attaches the real-valued mana-regeneration class.
     pub(crate) fn with_mana_regen(mut self, window: &[u8]) -> Result<Self, String> {
         let (class, _) = class_from_window(window)?;
@@ -643,7 +671,7 @@ impl Rules {
         {
             return Err("mana regeneration registration must name a distinct class".into());
         }
-        let amount = fraction_column(&self.tables, b"Imrp")?;
+        let amount = fraction_column(&self.tables, b"Imrp", "mana regeneration")?;
         self.mana_regen = Some(FractionClass { class, amount });
         Ok(self)
     }
@@ -785,6 +813,7 @@ impl Rules {
             heal: None,
             life_regen: None,
             mana_regen: None,
+            attack_speed: None,
             orbs: None,
             spell_resistance: None,
         })
@@ -970,6 +999,22 @@ impl Rules {
                     continue;
                 }
             }
+            if let Some(speed) = &self.attack_speed
+                && code == speed.class
+            {
+                if !speed.amount.aliases.iter().any(|a| a == alias) {
+                    return Err(format!(
+                        "attack speed metadata does not admit ability {alias}"
+                    ));
+                }
+                let bonus = self.fraction(alias, &speed.amount)?;
+                let sum = held.attack_speed + bonus;
+                if !sum.is_finite() {
+                    return Err("passive attack speed overflows".into());
+                }
+                held.attack_speed = sum;
+                continue;
+            }
             if self.spell_resistance.as_deref() == Some(code.as_str()) {
                 let (damage, taken) = self.spell_resistance(alias)?;
                 held.damage = held
@@ -1151,8 +1196,8 @@ impl Rules {
                 && pointer != column.data
             {
                 return Err(format!(
-                    "mana regeneration override data pointer {pointer} does not match metadata data column {}",
-                    column.data
+                    "{} override data pointer {pointer} does not match metadata data column {}",
+                    column.label, column.data
                 ));
             }
             return match entry.value {
@@ -1161,7 +1206,7 @@ impl Rules {
                 {
                     Ok(value)
                 }
-                _ => Err("nonreal mana regeneration override".into()),
+                _ => Err(format!("nonreal {} override", column.label)),
             };
         }
         let ability = self
@@ -1169,13 +1214,13 @@ impl Rules {
             .object(Family::Ability, alias)
             .map_err(|e| e.to_string())?;
         let letter =
-            char::from_u32(u32::from(b'A') + column.data - 1).ok_or("mana regeneration column")?;
+            char::from_u32(u32::from(b'A') + column.data - 1).ok_or("fraction data column")?;
         let cell = ability
             .cell(SlkId::AbilityData, &format!("Data{letter}{EFFECT_LEVEL}"))
             .map_err(|e| e.to_string())?;
         match cell.typed(FieldKind::Real).map_err(|e| e.to_string())? {
             Value::Real(value) if value.is_finite() => Ok(value as f32),
-            _ => Err("mana regeneration field is not real".into()),
+            _ => Err(format!("{} field is not real", column.label)),
         }
     }
 
@@ -1458,7 +1503,11 @@ fn column(tables: &DefaultTables, id: &[u8; 4]) -> Result<Column, String> {
 
 /// A real-valued metadata column: the same `Data` mapping as [`column`], with a real or unreal
 /// authored type instead of an integer type.
-fn fraction_column(tables: &DefaultTables, id: &[u8; 4]) -> Result<FractionColumn, String> {
+fn fraction_column(
+    tables: &DefaultTables,
+    id: &[u8; 4],
+    label: &'static str,
+) -> Result<FractionColumn, String> {
     let name = std::str::from_utf8(id).map_err(|_| "invalid fraction metadata id")?;
     let metadata = tables
         .metadata(*id)
@@ -1489,6 +1538,7 @@ fn fraction_column(tables: &DefaultTables, id: &[u8; 4]) -> Result<FractionColum
         field: *id,
         data,
         aliases,
+        label,
     })
 }
 

@@ -340,6 +340,10 @@ impl ObjectHost {
             if !combined.mana_regen_fraction.is_finite() {
                 return Err(fail("combined cached mana regeneration overflows".into()));
             }
+            combined.attack_speed += passive.attack_speed;
+            if !combined.attack_speed.is_finite() {
+                return Err(fail("combined cached attack speed overflows".into()));
+            }
             if passive.strength != 0 {
                 (vitals.life, vitals.max_life) = reprice_life_scaled(
                     vitals.life,

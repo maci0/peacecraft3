@@ -531,7 +531,7 @@ impl ObjectHost {
                 damage: 0.0,
                 held_damage: bonus.damage as f32,
                 armor: 0.0,
-                speed: 1.0,
+                speed: 1.0 + bonus.attack_speed,
             });
         }
         let attribute = |name: &str| Self::derive_hero_attribute(definition, progress, bonus, name);
@@ -544,7 +544,7 @@ impl ObjectHost {
         let agility = attribute("AGI")?;
         let damage = attribute(primary)? * rules.primary_damage_per_attribute;
         let armor = rules.hero_armor_base + agility * rules.armor_per_agility;
-        let speed = 1.0 + agility * rules.attack_speed_per_agility;
+        let speed = 1.0 + agility * rules.attack_speed_per_agility + bonus.attack_speed;
         if !damage.is_finite() || !armor.is_finite() || !speed.is_finite() || speed <= 0.0 {
             return Err("invalid derived hero combat bonuses or non-positive attack speed".into());
         }

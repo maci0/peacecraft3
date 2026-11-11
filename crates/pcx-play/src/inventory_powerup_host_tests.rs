@@ -210,6 +210,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["ocor", "AIcb", "0", "0", "0", "-"],
             &["ofro", "AIob", "0", "0", "0", "-"],
             &["brac", "AIsr", "0", "0", "0", "-"],
+            &["pasp", "AIsx", "0", "0", "0", "-"],
             &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
         ],
     );
@@ -310,6 +311,9 @@ fn powerup_tables() -> Arc<DefaultTables> {
             "_",
         ],
         &["AIl4", "AIml", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+        &[
+            "AIsx", "AIas", "1", "0.15", "0", "0", "0", "0", "-", "-", "_",
+        ],
     ];
     let abilities = ability_table(plain_ability_rows);
     let metadata = sylk(
@@ -415,6 +419,16 @@ fn powerup_tables() -> Arc<DefaultTables> {
                 "int",
                 "1",
                 "AIat,AItf,AIwz,AIt1",
+                "",
+            ],
+            &[
+                "Isx1",
+                "Data",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "1",
+                "AIas,AIsx",
                 "",
             ],
             &[
@@ -800,6 +814,8 @@ fn open_with_regens_overlays_extra(
     )
     .unwrap()
     .with_spell_resistance(&registration("AIsr", "AIat"))
+    .unwrap()
+    .with_attack_speed(&registration("AIas", "APbo"))
     .unwrap();
     let activity = activity
         .with_move_speed_profiles(

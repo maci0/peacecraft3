@@ -445,6 +445,7 @@ impl ObjectHost {
             mana_regen_fraction: 0.0,
             orb: None,
             spell_damage_taken: None,
+            attack_speed: 0.0,
         };
         for (item, _) in self
             .executed_items()
@@ -491,6 +492,10 @@ impl ObjectHost {
                 .ok_or_else(overflow)?;
             bonus.mana_regen_fraction += passive.mana_regen_fraction;
             if !bonus.mana_regen_fraction.is_finite() {
+                return Err(overflow());
+            }
+            bonus.attack_speed += passive.attack_speed;
+            if !bonus.attack_speed.is_finite() {
                 return Err(overflow());
             }
             if let Some(taken) = passive.spell_damage_taken {

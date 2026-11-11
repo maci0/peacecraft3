@@ -131,6 +131,52 @@ fn a_missile_with_frost_slows_on_impact_not_at_launch() {
     assert_eq!(h.attack_speed_penalty(target), FROST_ATTACK);
 }
 
+/// `DataA1` of the fixture `AIsx` row.
+const HELD_ATTACK_SPEED: f32 = 0.15;
+
+/// The attack speed multiplier the combat step uses: the held and agility part minus the
+/// slow and frost decreases, as one sum.
+fn attack_multiplier(h: &ObjectHost, unit: HandleId) -> f32 {
+    h.hero_combat_bonuses(unit).unwrap().speed - h.attack_speed_penalty(unit)
+}
+
+#[test]
+fn held_attack_speed_adds_to_the_multiplier_and_leaves_with_the_item() {
+    let mut f = open_orb(&[]);
+    let bare = attack_multiplier(&f.h, f.hero);
+    let gloves = item(&mut f.h, b"pasp", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, gloves), Ok(Value::Bool(true)));
+    assert!((attack_multiplier(&f.h, f.hero) - (bare + HELD_ATTACK_SPEED)).abs() < 1e-6);
+    let second = item(&mut f.h, b"pasp", 4.0);
+    assert_eq!(add(&mut f.h, f.hero, second), Ok(Value::Bool(true)));
+    assert!((attack_multiplier(&f.h, f.hero) - (bare + 2.0 * HELD_ATTACK_SPEED)).abs() < 1e-6);
+    f.h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(f.hero), Value::Handle(gloves)],
+    )
+    .unwrap();
+    f.h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(f.hero), Value::Handle(second)],
+    )
+    .unwrap();
+    assert!((attack_multiplier(&f.h, f.hero) - bare).abs() < 1e-6);
+}
+
+#[test]
+fn held_attack_speed_and_the_frost_decrease_sum_into_one_multiplier() {
+    let (Fixture { mut h, hero, .. }, _, _) = armed_hero(b"ofro");
+    let holder = unit_for(&mut h, b"H001", 5, 30.0);
+    let bare = attack_multiplier(&h, holder);
+    let gloves = item(&mut h, b"pasp", 30.0);
+    assert_eq!(add(&mut h, holder, gloves), Ok(Value::Bool(true)));
+    attack(&mut h, hero, holder);
+    run(&mut h, 0.3);
+    assert_eq!(h.attack_speed_penalty(holder), FROST_ATTACK);
+    let expected = bare + HELD_ATTACK_SPEED - FROST_ATTACK;
+    assert!((attack_multiplier(&h, holder) - expected).abs() < 1e-6);
+}
+
 #[test]
 fn a_dead_frosted_unit_keeps_no_state() {
     let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"ofro");

@@ -134,6 +134,15 @@ fn tables(tome: &Tome) -> Arc<DefaultTables> {
                 "1",
                 tome.use_specific,
             ],
+            &[
+                "Isx1",
+                "Data",
+                "AbilityData",
+                "-1",
+                "unreal",
+                "1",
+                tome.use_specific,
+            ],
         ],
     );
     Arc::new(
@@ -850,6 +859,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             mana_regen_fraction: 0.0,
             orb: None,
             spell_damage_taken: None,
+            attack_speed: 0.0,
         }
     );
 }
@@ -1302,6 +1312,110 @@ fn malformed_negative_and_overflowing_mana_fractions_refuse() {
     );
 }
 
+fn speed_tome(amount: &str) -> Tome<'_> {
+    Tome {
+        alias: "AIsx",
+        code: "AIas",
+        abilities: "AIsx",
+        powerup: "0",
+        usable: "0",
+        uses: "-",
+        use_specific: "AIas,AIsx,AIxm",
+        amounts: [amount, "0", "0"],
+    }
+}
+
+fn speed_rules(tome: &Tome, overlay: Overlay) -> Rules {
+    rules(tome, overlay, "AIsm")
+        .unwrap()
+        .with_attack_speed(&window("AIas", "APbo"))
+        .unwrap()
+}
+
+#[test]
+fn attack_speed_comes_from_the_admitted_isx1_column_and_sums_over_abilities() {
+    let held = speed_rules(&speed_tome("0.15"), Overlay::default())
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.attack_speed, 0.15);
+    let twice = Tome {
+        abilities: "AIsx,AIsx",
+        ..speed_tome("0.25")
+    };
+    let held = speed_rules(&twice, Overlay::default())
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.attack_speed, 0.5);
+}
+
+#[test]
+fn w3a_real_override_on_the_isx1_field_wins_and_a_wrong_pointer_refuses() {
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIsx".into(), vec![real_mod(b"Isx1", Some([1, 1]), 0.4)]);
+    let held = speed_rules(&speed_tome("0.15"), overlay)
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.attack_speed, 0.4);
+    let mut wrong = Overlay::default();
+    wrong
+        .mods
+        .insert("AIsx".into(), vec![real_mod(b"Isx1", Some([1, 2]), 0.4)]);
+    let err = speed_rules(&speed_tome("0.15"), wrong)
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(err.contains("attack speed override data pointer"), "{err}");
+}
+
+#[test]
+fn malformed_and_overflowing_attack_speed_refuse() {
+    for amount in ["broken", "nan", "inf"] {
+        assert!(
+            speed_rules(&speed_tome(amount), Overlay::default())
+                .held_attributes(&catalog_item("tstr"))
+                .is_err(),
+            "{amount}"
+        );
+    }
+    let overflow = Tome {
+        abilities: "AIsx,AIsx",
+        ..speed_tome("3.4028235e38")
+    };
+    let err = speed_rules(&overflow, Overlay::default())
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(err.contains("passive attack speed overflows"), "{err}");
+    let unadmitted = Tome {
+        use_specific: "AIas,AIxm",
+        ..speed_tome("0.15")
+    };
+    let err = speed_rules(&unadmitted, Overlay::default())
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(err.contains("does not admit ability AIsx"), "{err}");
+}
+
+#[test]
+fn attack_speed_registration_must_be_distinct_and_single() {
+    let base = rules(&speed_tome("0.15"), Overlay::default(), "AIsm").unwrap();
+    assert!(
+        base.clone()
+            .with_attack_speed(&window("AIab", "APbo"))
+            .is_err()
+    );
+    let attached = base.with_attack_speed(&window("AIas", "APbo")).unwrap();
+    assert!(attached.with_attack_speed(&window("AIas", "APbo")).is_err());
+    let unattached = rules(&speed_tome("0.15"), Overlay::default(), "AIsm").unwrap();
+    let err = unattached
+        .held_attributes(&catalog_item("tstr"))
+        .unwrap_err();
+    assert!(err.contains("unsupported passive ability"), "{err}");
+}
+
 #[test]
 fn flat_damage_comes_from_the_admitted_iatt_column() {
     let held = rules(&damage_tome("15"), Overlay::default(), "AIsm")
@@ -1323,6 +1437,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             mana_regen_fraction: 0.0,
             orb: None,
             spell_damage_taken: None,
+            attack_speed: 0.0,
         }
     );
 }
