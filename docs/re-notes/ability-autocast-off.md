@@ -9,11 +9,12 @@ code `Aweb`), Faerie Fire (`CAbilityFaerieFire`, code `Afae`), Renew
 (`CAbilityRenew`, code `Aren`), Bloodlust (`CAbilityBloodlust`, code `Ablo`), Frost
 Armor (`CAbilityFrostArmorAuto`, code `AUfu`), Restoration (`CAbilityRestoration`,
 code `Arst`), Mana Shield (`CAbilityManaShield`, code `ANms`) and Immolation
-(`CAbilityImmolation`, code `AEim`). The reader decodes all thirteen with the same
-OFF handler checks and refuses the image otherwise. Each OFF order name is the
-`Orderoff` (or, for Immolation, the `Unorder`) of an ability section in the
-`*AbilityFunc.txt` members, and each section's `code` (from
-`Units\AbilityData.slk`) selects the class: `weboff` in `[Aweb]` and `[ACwb]`,
+(`CAbilityImmolation`, code `AEim`) and Repair (`CAbilityRepair`, code `Arep`). The
+reader decodes all fourteen with the same OFF handler checks and refuses the image
+otherwise. Each OFF order name is the `Orderoff` (or, for Immolation, the `Unorder`)
+of an ability section in the `*AbilityFunc.txt` members, and each section's `code`
+(from `Units\AbilityData.slk`) selects the class: `repairoff` in `[Ahrp]`
+(`NeutralAbilityFunc.txt`, code `Arep`), `weboff` in `[Aweb]` and `[ACwb]`,
 `faeriefireoff` in `[Afae]`, `[Afa2]` and `[ACff]`, `renewoff` in `[Aren]`,
 `bloodlustoff` in `[Ablo]` and `[ACbb]`/`[ACbl]`, `frostarmoroff` in `[AUfu]`,
 `[ACfu]` and `[ACf2]`, `restorationoff` in `[Arst]`, `manashieldoff` in `[ANms]`,
@@ -66,7 +67,7 @@ retain errors. Whole-unit retirement drops the state.
 The existing cache format and Mirror Image snapshot do not encode altered
 autocast state, so their preflights explicitly refuse it rather than drop it.
 There is no new cache version. Per-ability removal is not implemented by this
-slice. ON orders explicitly refuse before mutation: automatic effects of the thirteen
+slice. ON orders explicitly refuse before mutation: automatic effects of the fourteen
 bound classes, their default-enabled automatic operation, and the later
 `ravenform` transformation remain required work.
 
@@ -99,6 +100,41 @@ not implemented for class <code>` for any live unit of the class, whether or not
 the unit has the ability. Their effects are not modelled: Mana Shield absorption
 (damage, mana cost and timing) and Immolation's burn aura and mana drain.
 Missing evidence for the ON effects: absorption/drain formulas and timing.
+
+## Repair (bound), Town Bell and Inner Fire/Web ON
+
+Repair is `[Ahrp]` in `NeutralAbilityFunc.txt` (`Order=repair`, `Orderon=repairon`,
+`Orderoff=repairoff`). `Units\AbilityData.slk` gives alias `Ahrp` the code `Arep`
+(`Repair (Human)`), which selects `CAbilityRepair`. The class binds with the shared
+checks (`selected_original_autocast_classes_bind`, passing). The Undead03 probe
+passes `repairoff` on unit `nhem`, which carries `Ahrp` at rank one. The Orc Repair
+alias `Arep` (`Repair (Orc)`) has no section in the five `*AbilityFunc.txt` members.
+An OFF on a unit with that alias refuses with a profile mismatch: the host reads
+`Order`/`Unorder` for it, finds no profile, and returns an error (read from
+`autocast_host.rs`; not run).
+
+`townbelloff` is the `Unorder` of `[Amic]` (`Militia Conversion`, code `Amic`,
+`Order=townbellon`, `Unorder=townbelloff`, `HumanAbilityFunc.txt`). No
+`UnitAbilities.slk` `auto` row lists `Amic`. Two candidate classes failed the reviewed
+checks when added temporarily and then removed: `CAbilityMilitiaConvert` (the reader
+fails with `neutral-player context: Rule(Range)`) and `CAbilityCallToArms` (`autocast
+instruction differs at 0`). Town Bell stays refused. Whether `Amic` is an autocast
+ability is unverified.
+
+`innerfireon` (`[Ainf]`, code `Ainf`, `CAbilityInnerFire`) and `webon` (`[ACwb]`
+and `[Aweb]`, code `Aweb`, `CAbilityWeb`) are recognized and refused. Inventory:
+
+- Present: both OFF classes bind; the ON orders are recognized and refused before any
+  mutation (`autocast_host.rs`); the `auto` defaults below are in the tables.
+- Default-enabled automatic casting in `UnitAbilities.slk` `auto` (column X4):
+  `Ainf` on `ntks`, `Aweb` on `ucry` and `nnwl`.
+- Missing: any cast host for the `innerfire` or `web` orders (no `crates` reference to
+  `innerfire`, `Ainf`, `Aweb` or `Bweb` outside the autocast reader); the effects in the
+  `[Binf]` and `[Bweb]` buff sections (no host reads them); mana cost, cooldown and
+  target filters for either cast; the native automatic target-selection rule for either
+  class, which no `docs/re-notes` file records.
+- Consequence: flipping the state bit alone would leave `ntks`, `ucry` and `nnwl`
+  without their automatic casts, silently. ON stays refused.
 
 ## Frost Armor base class and Burrow (not bound)
 

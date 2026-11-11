@@ -196,3 +196,15 @@ on the selected install. The toggle OFF evidence is in `ability-autocast-off.md`
 | RoC NightElf06 | `IssueImmediateOrder` `unimmolation` (`war3map.j:827`) | pass `unimmolation`; `UnitAddItemToSlotById` refused: unsupported passive ability `AIfb` on `ofir` (`war3map.j:960`), orb refusal (see passive-held-items.md) |
 | TFT NightElfX04 | `IssueImmediateOrder` `manashieldoff` (`war3map.j:1047`) | pass `manashieldoff`; `IssueTargetOrder` refused: `entangleinstant` is not the attack target order (`Scripts\Blizzard.j:7795`) |
 | TFT NightElfX06Interlude | `IssueImmediateOrder` `manashieldoff` (`war3map.j:360`) | exit 0 (probe passes) |
+
+## Probe results (2026-11-11, Repair OFF)
+
+Each row is the first refusal of `selected_install_locked_chapter_startup_probe`
+on the selected install. "Before" is `main` at `98ba0dc` without the Repair class.
+The Repair and Town Bell evidence is in `ability-autocast-off.md`.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Undead03 | `IssueImmediateOrder` `repairoff` (`war3map.j:1019`) unsupported | pass `repairoff`; `IssueImmediateOrder` `townbelloff` (`war3map.j:1020`) unsupported: Town Bell not bound |
+| RoC NightElf03 | `IssueImmediateOrder` `innerfireon` (`war3map.j:675`) refused: autocast ON | unchanged: ON refused |
+| TFT UndeadX07a | `IssueImmediateOrder` `webon` (`war3map.j:1469`, class `ACwb`) refused: autocast ON | unchanged: ON refused |
