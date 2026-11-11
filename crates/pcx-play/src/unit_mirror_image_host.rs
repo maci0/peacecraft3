@@ -149,9 +149,9 @@ impl ObjectHost {
         if abilities.hero.is_none() || abilities.level(ability) <= 0 {
             return Err(fail("image snapshot requires the learned hero ability"));
         }
-        if abilities.autocast_modified() {
+        if abilities.autocast_modified() || abilities.alarm_modified() {
             return Err(fail(
-                "image snapshot of altered autocast state is not qualified",
+                "image snapshot of altered autocast state or alarm state is not qualified",
             ));
         }
         if !abilities.cooldowns().is_empty() {

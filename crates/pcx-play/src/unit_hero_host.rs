@@ -54,6 +54,12 @@ const ATTRIBUTES: [(&str, &str); 3] = [
 /// Ability-list edits on the unit's ability state. Both are `(unit, integer) returns boolean`.
 const ADD_ABILITY: &str = "UnitAddAbility";
 const REMOVE_ABILITY: &str = "UnitRemoveAbility";
+/// `(unit, boolean) returns boolean` sets or clears the alarm-ignore bit of the unit's `Aalr`
+/// ability, `(unit) returns boolean` reads it (`docs/re-notes/unit-alarm-ignore.md`).
+const ALARM_NATIVES: [(&str, &[&str]); 2] = [
+    ("UnitIgnoreAlarm", &["unit", "boolean"]),
+    ("UnitIgnoreAlarmToggled", &["unit"]),
+];
 
 #[cfg(test)]
 mod cached_tests {
@@ -81,6 +87,7 @@ mod cached_tests {
             autocast_enabled: Vec::new(),
             autocast_revision: 0,
             autocast_order: None,
+            alarm_ignored: Vec::new(),
             learnable: vec![Skill {
                 alias: *b"A001",
                 maximum: 3,
@@ -162,6 +169,7 @@ mod cached_tests {
             autocast_enabled: Vec::new(),
             autocast_revision: 0,
             autocast_order: None,
+            alarm_ignored: Vec::new(),
             learnable: vec![],
         };
         assert_eq!(
@@ -251,6 +259,8 @@ pub struct UnitAbilities {
     pub(super) autocast_enabled: Vec<[u8; 4]>,
     pub(super) autocast_revision: u64,
     pub(super) autocast_order: Option<(u64, i32)>,
+    /// Abilities of class `Aalr` whose alarm-ignore bit (`0x80` of the ability flags) is set.
+    pub(super) alarm_ignored: Vec<[u8; 4]>,
     pub hero: Option<HeroProgress>,
     levels: Vec<([u8; 4], i32)>,
     learnable: Vec<Skill>,
@@ -260,6 +270,9 @@ pub struct UnitAbilities {
 impl UnitAbilities {
     pub(crate) fn autocast_modified(&self) -> bool {
         !self.autocast_disabled.is_empty() || !self.autocast_enabled.is_empty()
+    }
+    pub(crate) fn alarm_modified(&self) -> bool {
+        !self.alarm_ignored.is_empty()
     }
     pub(crate) fn autocast_current_order(&self) -> Option<i32> {
         self.autocast_order.map(|(_, order)| order)
@@ -278,6 +291,7 @@ impl UnitAbilities {
             autocast_enabled: Vec::new(),
             autocast_revision: 0,
             autocast_order: None,
+            alarm_ignored: Vec::new(),
         }
     }
 
@@ -328,6 +342,7 @@ impl UnitAbilities {
         self.cooldowns.iter().any(|(alias, _, _)| *alias == ability)
             || self.autocast_disabled.contains(&ability)
             || self.autocast_enabled.contains(&ability)
+            || self.alarm_ignored.contains(&ability)
     }
     fn capacity(&self) -> Result<i32, String> {
         self.learnable.iter().try_fold(0i32, |sum, skill| {
@@ -427,6 +442,8 @@ pub(super) struct Admission {
     experience_natives: [bool; experience::NATIVES.len()],
     /// Admitted `UnitAddAbility`, `UnitRemoveAbility` in that order.
     ability_edit: [bool; 2],
+    /// Admitted `UnitIgnoreAlarm`, `UnitIgnoreAlarmToggled` in `ALARM_NATIVES` order.
+    alarm_natives: [bool; 2],
 }
 
 impl ObjectHost {
@@ -617,6 +634,16 @@ impl ObjectHost {
                 ability_edit[index] = true;
             }
         }
+        let mut alarm_natives = [false; 2];
+        for (index, (name, params)) in ALARM_NATIVES.into_iter().enumerate() {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, params, "boolean", false, Some(KIND))?;
+                if native.source != units.declaration_source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                alarm_natives[index] = true;
+            }
+        }
         let mut experience_natives = [false; experience::NATIVES.len()];
         if rules.experience.is_some() {
             for (index, (name, params, result)) in experience::NATIVES.into_iter().enumerate() {
@@ -650,6 +677,7 @@ impl ObjectHost {
             cooldown_natives,
             experience_natives,
             ability_edit,
+            alarm_natives,
         });
         Ok(self)
     }
@@ -671,6 +699,7 @@ impl ObjectHost {
                 autocast_enabled: Vec::new(),
                 autocast_revision: 0,
                 autocast_order: None,
+                alarm_ignored: Vec::new(),
             };
             for alias in ability_list(definition, "abilList", input.budget.abilities_per_unit)? {
                 // The unit creator (0x66ffda) ignores the result of the ability factory
@@ -790,6 +819,9 @@ impl ObjectHost {
         {
             return input.ability_edit[index].then(|| self.unit_ability_edit(name, args));
         }
+        if let Some(index) = ALARM_NATIVES.iter().position(|(native, _)| *native == name) {
+            return input.alarm_natives[index].then(|| self.unit_alarm_call(name, args));
+        }
         if !match name {
             LEARN => input.learn,
             LEVEL => input.level,
@@ -853,6 +885,68 @@ impl ObjectHost {
             return Err(self.hero_error(name, format!("hero attribute {stat} exceeds integer")));
         }
         Ok(Value::Int(value as i32))
+    }
+
+    /// `UnitIgnoreAlarm` and `UnitIgnoreAlarmToggled` (`0x4af2d0`, `0x4af330`): the first ability
+    /// of the unit whose class code is the alarm class (`0x6d6570`), no ability returning false.
+    /// The set native stores the flag in state bit `0x80` of that ability and returns true; the
+    /// query returns the bit.
+    fn unit_alarm_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let (unit, set) = match args {
+            [unit] if name == ALARM_NATIVES[1].0 => (unit, None),
+            [unit, Value::Bool(flag)] if name == ALARM_NATIVES[0].0 => (unit, Some(*flag)),
+            _ => return Err(self.hero_error(name, "unit and flag required".into())),
+        };
+        let unit = match unit {
+            Value::Null => return Ok(Value::Bool(false)),
+            Value::Handle(unit) => *unit,
+            _ => return Err(self.hero_error(name, "unit identity required".into())),
+        };
+        if matches!(self.inner.entry(unit)?, Entry::RemovedUnit { .. }) {
+            return Ok(Value::Bool(false));
+        }
+        let code = self
+            .heroes_admission()
+            .map_err(|detail| self.hero_error(name, detail))?
+            .rules
+            .autocast
+            .as_ref()
+            .map_err(|detail| self.hero_error(name, detail.clone()))?
+            .alarm_code
+            .ok_or_else(|| self.hero_error(name, "alarm class code not read".into()))?;
+        let record = self.created_unit(unit, name)?;
+        let state = record
+            .abilities
+            .as_ref()
+            .ok_or_else(|| self.hero_error(name, "ability state not admitted".into()))?;
+        let mut found = None;
+        for (alias, _) in state.levels() {
+            let text = self
+                .ability_data_text(alias, "code")
+                .map_err(|detail| self.hero_error(name, detail))?;
+            if text.as_bytes() == code {
+                found = Some(alias);
+                break;
+            }
+        }
+        let Some(alias) = found else {
+            return Ok(Value::Bool(false));
+        };
+        let Some(flag) = set else {
+            return Ok(Value::Bool(state.alarm_ignored.contains(&alias)));
+        };
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("matched a unit above")
+        };
+        let ignored = &mut record.abilities.as_mut().expect("checked").alarm_ignored;
+        ignored.retain(|held| *held != alias);
+        if flag {
+            if ignored.try_reserve(1).is_err() {
+                return Err(self.hero_error(name, "alarm state allocation".into()));
+            }
+            ignored.push(alias);
+        }
+        Ok(Value::Bool(true))
     }
 
     /// Adds or removes one entry of the unit's ability list, which the command card, the

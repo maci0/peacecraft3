@@ -115,9 +115,9 @@ impl ObjectHost {
             .abilities
             .as_ref()
             .ok_or("unit-cache abilities not admitted")?;
-        if abilities.autocast_modified() {
+        if abilities.autocast_modified() || abilities.alarm_modified() {
             return Err(format!(
-                "unit cache does not encode altered autocast state: {:?} from {:?}",
+                "unit cache does not encode altered autocast state or alarm state: {:?} from {:?}",
                 record.definition.rawcode, record.source
             ));
         }

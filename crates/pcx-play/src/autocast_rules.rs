@@ -29,6 +29,9 @@ pub struct Rules {
     pub classes: Vec<Class>,
     /// Every class sharing the ON handler whose group is nonzero: `(code, group)`.
     pub groups: Vec<([u8; 4], u32)>,
+    /// Class code of the ability `UnitIgnoreAlarm` looks up. `None` when the source was not read
+    /// from the image, so the natives refuse.
+    pub alarm_code: Option<[u8; 4]>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
 const CLASS_NAMES: [&str; 17] = [
@@ -87,21 +90,58 @@ impl Rules {
             },
         )
         .map_err(|e| e.to_string())?;
-        Self::decode(
+        let mut read = |va, n, code| {
+            pe.read_from(va, code)
+                .map_err(|e| e.to_string())?
+                .get(..n)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "autocast mapped window truncated".into())
+        };
+        let alarm_code = Self::alarm_code(&mut read)?;
+        let mut rules = Self::decode(
             origin,
             sha256(image),
             pe.code_ranges().collect(),
             pe.initialized_ranges().collect(),
             // Each class scans the sections three times (name, getter, name slot); sections do not overlap.
             (CLASS_NAMES.len() * SCANS_PER_CLASS + FAMILY_SCANS) * image.len(),
-            |va, n, code| {
-                pe.read_from(va, code)
-                    .map_err(|e| e.to_string())?
-                    .get(..n)
-                    .map(<[u8]>::to_vec)
-                    .ok_or_else(|| "autocast mapped window truncated".into())
-            },
-        )
+            read,
+        )?;
+        rules.alarm_code = Some(alarm_code);
+        Ok(rules)
+    }
+    /// The class code `UnitIgnoreAlarm` (`0x4af2d0`) and `UnitIgnoreAlarmToggled` (`0x4af330`)
+    /// pass to the unit's ability lookup (`0x6d6570`), read from the getter both call
+    /// (`0xb167f0`), after checking that each sets, clears or reads state bit `0x80`.
+    fn alarm_code(
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<[u8; 4], String> {
+        let mut code = None;
+        for lookup in [ALARM_SET_LOOKUP, ALARM_QUERY_LOOKUP] {
+            let b = read(lookup, 13, true)?;
+            shape(&b, 0, &[0x6a, 1, 0x6a, 1, 0x6a, 0, 0x6a, 0, 0xe8])?;
+            let getter = lookup.wrapping_add(13).wrapping_add(word(&b, 9)?);
+            let g = read(getter, 6, true)?;
+            shape(&g, 0, &[0xb8])?;
+            shape(&g, 5, &[0xc3])?;
+            let found = word(&g, 1)?.to_be_bytes();
+            if !found.iter().all(u8::is_ascii_alphanumeric)
+                || code.replace(found).is_some_and(|old| old != found)
+            {
+                return Err("autocast alarm class code differs between its natives".into());
+            }
+        }
+        for (va, bytes) in [
+            (ALARM_SET_BIT, &[0x81, 0x48, 0x20, 0x80, 0, 0, 0][..]),
+            (ALARM_CLEAR_BIT, &[0x81, 0x60, 0x20, 0x7f, 0xff, 0xff, 0xff]),
+            (
+                ALARM_READ_BIT,
+                &[0x8b, 0x40, 0x20, 0xc1, 0xe8, 0x07, 0x83, 0xe0, 0x01],
+            ),
+        ] {
+            shape(&read(va, bytes.len(), true)?, 0, bytes)?;
+        }
+        code.ok_or_else(|| "autocast alarm class code missing".into())
     }
     fn decode(
         origin: AssetIdentity,
@@ -244,6 +284,7 @@ impl Rules {
             image_sha256,
             classes,
             groups,
+            alarm_code: None,
         })
     }
     /// Decodes the shared ON handler, its update hook and the timer the activation arms.
@@ -354,6 +395,13 @@ struct EnableDecode {
     on_slot: u32,
     group_slot: usize,
 }
+/// Where `UnitIgnoreAlarm` and `UnitIgnoreAlarmToggled` push the lookup arguments and call the
+/// class-code getter, and the instructions that set, clear and read the ignore bit.
+const ALARM_SET_LOOKUP: u32 = 0x4af2ea;
+const ALARM_QUERY_LOOKUP: u32 = 0x4af34a;
+const ALARM_SET_BIT: u32 = 0x4af309;
+const ALARM_CLEAR_BIT: u32 = 0x4af318;
+const ALARM_READ_BIT: u32 = 0x4af363;
 /// Class-code getter slot of the reviewed class ABI.
 const CODE_SLOT: u32 = 0x1c;
 /// Wrapper slot that forwards to the ON handler (the OFF wrapper is at 0x33c).

@@ -308,6 +308,7 @@ fn selected_original_autocast_classes_bind() {
             "unexpected ON decode {code:?}"
         );
     }
+    assert_eq!(rules.alarm_code, Some(*b"Aalr"));
     assert_eq!(class(b"Ainf").enable.unwrap().group, 1);
     assert_eq!(class(b"Ambt").enable.unwrap().group, 1);
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);
@@ -332,4 +333,57 @@ fn bounded_source_scan_refuses_before_unbounded_search() {
     let mut changed = memory;
     changed.last_mut().unwrap().1[52] = 0;
     assert!(decode(&changed).is_err());
+}
+
+fn alarm_memory(second_code: u32) -> Vec<(u32, Vec<u8>)> {
+    let lookup = |va: u32, getter: u32| {
+        let mut b = vec![0x6a, 1, 0x6a, 1, 0x6a, 0, 0x6a, 0, 0xe8];
+        b.extend(getter.wrapping_sub(va + 13).to_le_bytes());
+        (va, b)
+    };
+    vec![
+        lookup(ALARM_SET_LOOKUP, 0x9000),
+        lookup(ALARM_QUERY_LOOKUP, 0x9010),
+        (0x9000, constant(u32::from_be_bytes(*b"X0al"))),
+        (0x9010, constant(second_code)),
+        (ALARM_SET_BIT, vec![0x81, 0x48, 0x20, 0x80, 0, 0, 0]),
+        (
+            ALARM_CLEAR_BIT,
+            vec![0x81, 0x60, 0x20, 0x7f, 0xff, 0xff, 0xff],
+        ),
+        (
+            ALARM_READ_BIT,
+            vec![0x8b, 0x40, 0x20, 0xc1, 0xe8, 0x07, 0x83, 0xe0, 0x01],
+        ),
+    ]
+}
+fn read_alarm(memory: &[(u32, Vec<u8>)]) -> Result<[u8; 4], String> {
+    Rules::alarm_code(&mut |va, n, _| {
+        memory
+            .iter()
+            .find(|(base, b)| va >= *base && (va - base) as usize + n <= b.len())
+            .map(|(base, b)| b[(va - base) as usize..][..n].to_vec())
+            .ok_or_else(|| "fixture mapping".into())
+    })
+}
+#[test]
+fn alarm_code_is_read_from_the_getter_both_natives_call() {
+    assert_eq!(
+        read_alarm(&alarm_memory(u32::from_be_bytes(*b"X0al"))),
+        Ok(*b"X0al")
+    );
+}
+#[test]
+fn alarm_code_refuses_differing_getters_and_changed_bit_operations() {
+    assert!(read_alarm(&alarm_memory(u32::from_be_bytes(*b"X0bl"))).is_err());
+    assert!(read_alarm(&alarm_memory(0x0000_0001)).is_err());
+    for at in [ALARM_SET_BIT, ALARM_CLEAR_BIT, ALARM_READ_BIT] {
+        let mut memory = alarm_memory(u32::from_be_bytes(*b"X0al"));
+        let (_, bytes) = memory.iter_mut().find(|(va, _)| *va == at).unwrap();
+        bytes[3] ^= 0x10;
+        assert!(read_alarm(&memory).is_err());
+    }
+    let mut memory = alarm_memory(u32::from_be_bytes(*b"X0al"));
+    memory.truncate(3);
+    assert!(read_alarm(&memory).is_err());
 }

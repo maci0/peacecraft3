@@ -130,6 +130,7 @@ fn open_setup(
         .flatten()
         .collect(),
         groups: vec![(*b"X001", GROUP), (*b"X003", GROUP)],
+        alarm_code: Some(*b"X005"),
     };
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = autocast.image_sha256;
@@ -139,6 +140,7 @@ fn open_setup(
         &[
             &["X002", "X001", "1", "0", "0", "0"],
             &["X004", "X003", "1", "0", "0", "0"],
+            &["X006", "X005", "1", "0", "0", "0"],
         ],
     );
     let tables = DefaultTables::from_bytes(
@@ -156,7 +158,7 @@ fn open_setup(
     )
     .unwrap();
     let extra = format!(
-        "{}\n{}\ntype playerunitevent extends eventid\nconstant native ConvertPlayerUnitEvent takes integer i returns playerunitevent\nnative RemoveUnit takes unit u returns nothing\ntype gamecache extends agent\nnative InitGameCache takes string file returns gamecache\nnative StoreUnit takes gamecache c, string m, string k, unit u returns boolean\nconstant native GetIssuedOrderId takes nothing returns integer\nnative TriggerRegisterUnitEvent takes trigger t, unit u, unitevent e returns event\nnative TriggerRegisterPlayerUnitEvent takes trigger t, player p, playerunitevent e, boolexpr f returns event\nglobals\nconstant unitevent EVENT_UNIT_ISSUED_ORDER=ConvertUnitEvent(123)\nconstant playerunitevent EVENT_PLAYER_UNIT_ISSUED_ORDER=ConvertPlayerUnitEvent(-456)\nendglobals\n",
+        "{}\n{}\ntype playerunitevent extends eventid\nconstant native ConvertPlayerUnitEvent takes integer i returns playerunitevent\nnative RemoveUnit takes unit u returns nothing\nnative UnitIgnoreAlarm takes unit whichUnit, boolean flag returns boolean\nnative UnitIgnoreAlarmToggled takes unit whichUnit returns boolean\ntype gamecache extends agent\nnative InitGameCache takes string file returns gamecache\nnative StoreUnit takes gamecache c, string m, string k, unit u returns boolean\nconstant native GetIssuedOrderId takes nothing returns integer\nnative TriggerRegisterUnitEvent takes trigger t, unit u, unitevent e returns event\nnative TriggerRegisterPlayerUnitEvent takes trigger t, player p, playerunitevent e, boolexpr f returns event\nglobals\nconstant unitevent EVENT_UNIT_ISSUED_ORDER=ConvertUnitEvent(123)\nconstant playerunitevent EVENT_PLAYER_UNIT_ISSUED_ORDER=ConvertPlayerUnitEvent(-456)\nendglobals\n",
         enumeration::TRIGGERS,
         super::super::activity::ORDERS
     );
@@ -575,4 +577,80 @@ fn enabled_state_is_refused_by_the_cache_like_disabled_state() {
         error.contains("does not encode altered autocast state"),
         "{error}"
     );
+}
+
+fn alarm(vm: &mut Vm, name: &str, args: &[Value]) -> Value {
+    vm.host().inner.native(name, args).unwrap()
+}
+#[test]
+fn ignore_alarm_sets_and_reads_the_bit_of_the_alarm_class_ability() {
+    // X006 has the alarm class code (X005); X002 is an unrelated ability listed before it.
+    let (mut vm, u) = open_setup("_", "X002,X006", PROFILE, enable());
+    let unit = Value::Handle(u);
+    assert_eq!(
+        alarm(
+            &mut vm,
+            "UnitIgnoreAlarmToggled",
+            std::slice::from_ref(&unit)
+        ),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        alarm(
+            &mut vm,
+            "UnitIgnoreAlarm",
+            &[unit.clone(), Value::Bool(true)]
+        ),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        alarm(
+            &mut vm,
+            "UnitIgnoreAlarmToggled",
+            std::slice::from_ref(&unit)
+        ),
+        Value::Bool(true)
+    );
+    assert!(modified_alarm(&mut vm, u));
+    assert_eq!(
+        alarm(
+            &mut vm,
+            "UnitIgnoreAlarm",
+            &[unit.clone(), Value::Bool(false)]
+        ),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        alarm(&mut vm, "UnitIgnoreAlarmToggled", &[unit]),
+        Value::Bool(false)
+    );
+    assert!(!modified_alarm(&mut vm, u));
+    for (name, args) in [
+        ("UnitIgnoreAlarm", vec![Value::Null, Value::Bool(true)]),
+        ("UnitIgnoreAlarmToggled", vec![Value::Null]),
+    ] {
+        assert_eq!(alarm(&mut vm, name, &args), Value::Bool(false));
+    }
+}
+#[test]
+fn ignore_alarm_on_a_unit_without_the_alarm_ability_returns_false_and_changes_nothing() {
+    let (mut vm, u) = open("_", true);
+    let unit = Value::Handle(u);
+    assert_eq!(
+        alarm(
+            &mut vm,
+            "UnitIgnoreAlarm",
+            &[unit.clone(), Value::Bool(true)]
+        ),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        alarm(&mut vm, "UnitIgnoreAlarmToggled", &[unit]),
+        Value::Bool(false)
+    );
+    assert!(!modified_alarm(&mut vm, u));
+}
+fn modified_alarm(vm: &mut Vm, u: HandleId) -> bool {
+    let record = vm.host().inner.executed_unit(u).unwrap();
+    record.abilities.as_ref().unwrap().alarm_modified()
 }
