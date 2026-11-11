@@ -258,7 +258,8 @@ pub fn prepare_new_game(
             image,
             client.clone(),
         )?
-        .with_frost_slow(&game_profiles, 8 << 20)?,
+        .with_frost_slow(&game_profiles, 8 << 20)?
+        .with_move_speed_stacking(&game_profiles, 8 << 20)?,
     );
     inputs.budgets.inventory = Some(crate::inventory::InventoryBudget {
         max_slots_per_unit: 4096,

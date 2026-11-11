@@ -860,6 +860,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             orb: None,
             spell_damage_taken: None,
             attack_speed: 0.0,
+            move_speed_bonus: None,
         }
     );
 }
@@ -1182,7 +1183,7 @@ fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
         ("AIsb", "wrapped ability"),
         ("AIpb", "poison"),
         ("AIrc", "death handler"),
-        ("AIms", "multiplier"),
+        ("AUau", "buff BUau"),
         ("AIzz", ""),
     ] {
         let tome = Tome {
@@ -1438,6 +1439,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             orb: None,
             spell_damage_taken: None,
             attack_speed: 0.0,
+            move_speed_bonus: None,
         }
     );
 }

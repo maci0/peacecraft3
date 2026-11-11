@@ -333,6 +333,8 @@ fn a_second_orb_on_one_holder_is_refused_without_moving_the_item() {
 
 #[path = "inventory_frost_host_tests.rs"]
 mod frost;
+#[path = "inventory_speed_host_tests.rs"]
+mod speed;
 
 fn missile_fields() -> Vec<([u8; 4], ObjectField)> {
     let mut speed = column(

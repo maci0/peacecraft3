@@ -1130,6 +1130,98 @@ fn non_stock_move_speed_limits_clamp_finite_negative_inputs_without_a_copied_flo
     }
 }
 
+/// A numeric `UnitBalance` column field for a unit-type speed bound.
+fn bound_field(fourcc: &[u8; 4], column: &str, cell: &str) -> ([u8; 4], ObjectField) {
+    let mut field = geometry_field(Ok(FieldValue::Cell(cell.into())));
+    let meta = field.metadata.as_mut().unwrap();
+    meta.fourcc = *fourcc;
+    meta.field = column.into();
+    meta.kind = FieldKind::Real;
+    meta.declared = "real".into();
+    meta.source = FieldSource::Column {
+        slk: SlkId::UnitBalance,
+        column: column.into(),
+    };
+    (*fourcc, field)
+}
+
+#[test]
+fn unit_type_speed_bounds_replace_the_misc_bounds_unless_zero() {
+    let profile = "[Misc]\nMinUnitSpeed=150\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+    let speed_after_set = |h: &mut ObjectHost, unit: &Value, value: f32| {
+        h.native("SetUnitMoveSpeed", &[unit.clone(), Value::Real(value)])
+            .unwrap();
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(unit))
+            .unwrap()
+    };
+    // Own bounds 75 and 522: the unit may go below the Misc minimum and above the Misc maximum.
+    let mut fields = profile_fields(FieldValue::Cell("100".into()), Some("foot"), Some(false));
+    fields.push(bound_field(b"S002", "minSpd", "75"));
+    fields.push(bound_field(b"S003", "maxSpd", "522"));
+    let mut h = host_fields_with(65536, &fields, move_speed_rules_with(profile));
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(
+        h.native("GetUnitMoveSpeed", std::slice::from_ref(&a))
+            .unwrap(),
+        Value::Real(100.),
+        "above its own minimum 75, below the Misc minimum 150"
+    );
+    assert_eq!(speed_after_set(&mut h, &a, 5.), Value::Real(75.));
+    assert_eq!(speed_after_set(&mut h, &a, 1000.), Value::Real(522.));
+    // The client clamps the type's own bounds into 1..522 first.
+    let mut fields = profile_fields(FieldValue::Cell("100".into()), Some("foot"), Some(false));
+    fields.push(bound_field(b"S002", "minSpd", "0.5"));
+    fields.push(bound_field(b"S003", "maxSpd", "9000"));
+    let mut h = host_fields_with(65536, &fields, move_speed_rules_with(profile));
+    let a = position_create(&mut h, 16., 16.).unwrap();
+    assert_eq!(speed_after_set(&mut h, &a, 0.), Value::Real(1.));
+    assert_eq!(speed_after_set(&mut h, &a, 9999.), Value::Real(522.));
+    // Zero means the type has none: the Misc bounds apply. So does a `-` cell.
+    for (min, max) in [("0", "0"), ("-", "_")] {
+        let mut fields = profile_fields(FieldValue::Cell("100".into()), Some("foot"), Some(false));
+        fields.push(bound_field(b"S002", "minSpd", min));
+        fields.push(bound_field(b"S003", "maxSpd", max));
+        let mut h = host_fields_with(65536, &fields, move_speed_rules_with(profile));
+        let a = position_create(&mut h, 16., 16.).unwrap();
+        assert_eq!(speed_after_set(&mut h, &a, 5.), Value::Real(150.));
+        assert_eq!(speed_after_set(&mut h, &a, 1000.), Value::Real(400.));
+    }
+}
+
+#[test]
+fn the_agility_move_bonus_is_read_with_the_move_speed_limits() {
+    const LIMITS: &str = "MinUnitSpeed=10\nMaxUnitSpeed=400\nMinBldgSpeed=25\nMaxBldgSpeed=300\n";
+    let read = |extra: &str| {
+        let (_, rules) = rules();
+        rules.with_move_speed_profiles(
+            &[(
+                "synthetic game misc",
+                format!("[Misc]\n{LIMITS}{extra}").as_bytes(),
+            )],
+            4096,
+        )
+    };
+    assert_eq!(
+        read("").unwrap().agi_move_bonus(),
+        Some(0.0),
+        "missing reads 0"
+    );
+    assert_eq!(
+        read("AgiMoveBonus=0\n").unwrap().agi_move_bonus(),
+        Some(0.0)
+    );
+    assert_eq!(
+        read("AgiMoveBonus=1.5\n").unwrap().agi_move_bonus(),
+        Some(1.5)
+    );
+    assert!(read("AgiMoveBonus=inf\n").is_err());
+    assert_eq!(
+        rules().1.agi_move_bonus(),
+        None,
+        "unread without the profiles"
+    );
+}
+
 #[test]
 fn zero_minimum_speed_retains_the_route_with_finite_spans_and_resumes() {
     const ZERO_MIN: &str =

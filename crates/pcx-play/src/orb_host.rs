@@ -40,10 +40,9 @@ struct ActiveFrost {
     /// Attack speed fraction removed from the unit.
     attack: f32,
     expires_at: f64,
-    /// Move speed before the decrease, when the unit can move.
-    base_speed: Option<f32>,
-    /// Definition revision the base speed belongs to.
-    revision: u64,
+    /// Movement decrease added to the unit's speed multiplier, `None` when the unit has no
+    /// speed host.
+    movement: Option<f32>,
 }
 
 #[derive(Default)]
@@ -65,8 +64,8 @@ impl ObjectHost {
             .map_or(0.0, |penalty| penalty.points as f32)
     }
 
-    /// Attack speed fraction removed from the unit by slows and frost. They never stack with each
-    /// other: a frost hit on a slowed unit refuses.
+    /// Attack speed fraction removed from the unit by slows and frost. Each is its own additive
+    /// decrease, so a slowed unit that is also frosted loses both.
     pub(crate) fn attack_speed_penalty(&self, unit: HandleId) -> f32 {
         self.curse_attack_penalty(unit)
             + self
@@ -191,11 +190,11 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// A first frost hit attaches the buff and lowers the target's move speed to
-    /// `base * (1 - move)`; a hit on a frosted unit restarts the timer only, because the
-    /// decreases are the same `Misc` values every time (the client removes and re-adds them).
-    /// A unit under a slow or polymorph refuses: the client adds the decreases to one speed
-    /// multiplier, and the recreation's slow keeps its own base speed.
+    /// A first frost hit attaches the buff and subtracts the movement decrease from the target's
+    /// speed multiplier; a hit on a frosted unit restarts the timer only, because the decreases
+    /// are the same `Misc` values every time (the client removes and re-adds them). A slow adds
+    /// its own decrease to the same multiplier. A polymorphed unit refuses: the speed writes of
+    /// the polymorph type change are not decoded.
     fn orb_frost(
         &mut self,
         target: HandleId,
@@ -207,8 +206,10 @@ impl ObjectHost {
             frost.expires_at = expires_at;
             return Ok(());
         }
-        if self.unit_speed_modified(target) || self.unit_polymorphed(target) {
-            return Err(self.orb_error("frost on a slowed or polymorphed unit is not modelled"));
+        if self.unit_polymorphed(target) {
+            return Err(self.orb_error(
+                "frost on a polymorphed unit is not modelled: the speed writes of the polymorph type change are not decoded",
+            ));
         }
         self.attach_unit_buff(
             target,
@@ -220,41 +221,32 @@ impl ObjectHost {
                 },
             ),
         )?;
-        let record = self.executed_unit(target)?;
-        let (revision, base_speed) = (
-            record.definition_revision,
-            record.activity.as_ref().and_then(|a| a.form_profile().1),
-        );
-        if let Some(base) = base_speed
-            && let Err(error) = self.apply_unit_move_speed(target, base * (1.0 - movement), NAME)
-        {
-            self.detach_unit_buff(target, buff);
-            return Err(error);
-        }
+        let applied = match self.shift_unit_speed(target, -movement, NAME) {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.detach_unit_buff(target, buff);
+                return Err(error);
+            }
+        };
         self.orbs.frosts.insert(
             target,
             ActiveFrost {
                 buff,
                 attack,
                 expires_at,
-                base_speed,
-                revision,
+                movement: applied.then_some(movement),
             },
         );
         Ok(())
     }
 
-    /// Restores the unit's move speed and removes the buff.
+    /// Takes the movement decrease back out of the speed multiplier and removes the buff.
     fn end_frost(&mut self, unit: HandleId) -> Result<(), Error> {
         let Some(frost) = self.orbs.frosts.remove(&unit) else {
             return Ok(());
         };
-        let restorable = self.executed_unit(unit).is_ok_and(|record| {
-            record.definition_revision == frost.revision
-                && record.combat.as_ref().is_some_and(|c| !c.dead)
-        });
-        if let (Some(base), true) = (frost.base_speed, restorable) {
-            self.apply_unit_move_speed(unit, base, NAME)?;
+        if let Some(movement) = frost.movement {
+            self.shift_unit_speed(unit, movement, NAME)?;
         }
         self.detach_unit_buff(unit, frost.buff);
         Ok(())

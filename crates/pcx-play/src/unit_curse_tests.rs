@@ -784,18 +784,42 @@ fn removing_negative_buffs_ends_the_slow() {
     assert_eq!(vm.host().inner.curse_attack_penalty(enemy), 0.0);
 }
 
-#[test]
-fn the_script_speed_natives_refuse_while_a_slow_owns_the_speed() {
-    let (mut vm, [caster, _, enemy, _]) = open();
-    vm.call("prime", &[]).unwrap();
-    assert!(order(&mut vm, caster, SLOW_ORDER, enemy));
-    step(&mut vm, 0.4);
-    let error = vm
+/// `GetUnitMoveSpeed` as a script reads it.
+fn script_speed(vm: &mut Vm, unit: HandleId) -> f32 {
+    match vm
         .host()
         .inner
-        .native("GetUnitMoveSpeed", &[Value::Handle(enemy)])
-        .unwrap_err();
-    assert!(error.contains("speed modifiers"), "{error}");
+        .native("GetUnitMoveSpeed", &[Value::Handle(unit)])
+        .unwrap()
+    {
+        Value::Real(speed) => speed,
+        other => panic!("GetUnitMoveSpeed returned {other:?}"),
+    }
+}
+
+#[test]
+fn the_script_speed_natives_see_the_slow_and_set_the_base_under_it() {
+    let (mut vm, [caster, _, enemy, _]) = open();
+    vm.call("prime", &[]).unwrap();
+    let base = speed(&mut vm, enemy);
+    assert!(order(&mut vm, caster, SLOW_ORDER, enemy));
+    step(&mut vm, 0.4);
+    assert_eq!(script_speed(&mut vm, enemy), clamped(base, MOVEMENT_FACTOR));
+    // SetUnitMoveSpeed writes the base; the slow multiplier keeps acting on it.
+    vm.host()
+        .inner
+        .native(
+            "SetUnitMoveSpeed",
+            &[Value::Handle(enemy), Value::Real(300.0)],
+        )
+        .unwrap();
+    assert_eq!(
+        script_speed(&mut vm, enemy),
+        clamped(300.0, MOVEMENT_FACTOR)
+    );
+    // At expiry the slow is taken out of the multiplier, not the old base put back.
+    step(&mut vm, CAST_POINT + SLOW_SECONDS + 0.1);
+    assert_eq!(script_speed(&mut vm, enemy), 300.0);
 }
 
 #[test]

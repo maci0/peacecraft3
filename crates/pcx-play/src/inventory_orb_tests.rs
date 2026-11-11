@@ -73,6 +73,15 @@ const FROST_ROW: Row = [
     "ground,air,ward",
 ];
 const SPELL_ROW: Row = ["AIsr", "AIsr", "0", "0.33", "-", "-", "0", "0", "", ""];
+/// Boots of Speed shaped rows: `DataA1` is the flat movement speed bonus.
+const MOVE_ROWS: [Row; 3] = [
+    ["AIms", "AIms", "60", "0", "-", "-", "0", "0", "", ""],
+    ["AIm2", "AIms", "20", "0", "-", "-", "0", "0", "", ""],
+    ["AIm3", "AIms", "-30", "0", "-", "-", "0", "0", "", ""],
+];
+/// The `Misc` section the speed-bonus class reads.
+const MOVE_PROFILES: &[(&str, &[u8])] =
+    &[("synthetic MiscGame", b"[Misc]\nMoveSpeedBonusesStack=0\n")];
 /// The `Misc` section the Frost buff reads.
 const FROST_MISC: &[u8] = b"[Misc]\nFrostMoveSpeedDecrease=0.5\nFrostAttackSpeedDecrease=0.25\n";
 const FROST_PROFILES: &[(&str, &[u8])] = &[("synthetic MiscGame", FROST_MISC)];
@@ -82,7 +91,12 @@ fn orb_rules_with(rows: &[Row], overlay: Overlay) -> Rules {
 }
 
 fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rules {
-    let rows: Vec<Row> = rows.iter().copied().chain([frost, spell]).collect();
+    let rows: Vec<Row> = rows
+        .iter()
+        .copied()
+        .chain([frost, spell])
+        .chain(MOVE_ROWS)
+        .collect();
     let rows = rows.as_slice();
     let items = sylk(
         &[
@@ -102,6 +116,9 @@ fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rul
             &["brac", "AIsr", "0", "0", "0", "-"],
             &["bra2", "AIsr,AIsr", "0", "0", "0", "-"],
             &["obob", "AIob,AIfb", "0", "0", "0", "-"],
+            &["bspd", "AIms", "0", "0", "0", "-"],
+            &["bsp2", "AIms,AIm2", "0", "0", "0", "-"],
+            &["bsp3", "AIm3", "0", "0", "0", "-"],
         ],
     );
     let ability_rows: Vec<Vec<&str>> = rows
@@ -162,6 +179,10 @@ fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rul
         .with_frost_slow(FROST_PROFILES, 4096)
         .unwrap()
         .with_spell_resistance(&window("AIsr", "AIat"))
+        .unwrap()
+        .with_move_speed_bonus(&window("AIms", "APbo"))
+        .unwrap()
+        .with_move_speed_stacking(MOVE_PROFILES, 4096)
         .unwrap()
 }
 
@@ -618,6 +639,80 @@ fn spell_resistance_registration_must_name_the_attack_damage_base() {
     assert!(err.contains("attack-damage base"), "{err}");
     let err = rules()
         .with_spell_resistance(&window("AIob", "AIat"))
+        .err()
+        .unwrap();
+    assert!(err.contains("distinct"), "{err}");
+}
+
+#[test]
+fn speed_bonus_reads_data_a1_and_keeps_the_largest_of_several() {
+    let held = orb_rules()
+        .held_attributes(&catalog_item("bspd"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.move_speed_bonus, Some(60.0));
+    assert_eq!(
+        (held.damage, held.orb, held.spell_damage_taken),
+        (0, None, None)
+    );
+    // Two abilities on one item: only the larger counts, as the client takes the maximum.
+    let held = orb_rules()
+        .held_attributes(&catalog_item("bsp2"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.move_speed_bonus, Some(60.0));
+    // A negative bonus is admitted; it never beats the zero the client starts from.
+    let held = orb_rules()
+        .held_attributes(&catalog_item("bsp3"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.move_speed_bonus, Some(-30.0));
+}
+
+#[test]
+fn speed_bonus_refuses_stacking_unread_misc_and_modified_rows() {
+    let stacking = orb_rules()
+        .with_move_speed_stacking(
+            &[("map", b"[Misc]\nMoveSpeedBonusesStack=1\n".as_slice())],
+            4096,
+        )
+        .unwrap();
+    let err = stacking.held_attributes(&catalog_item("bspd")).unwrap_err();
+    assert!(err.contains("not decoded"), "{err}");
+    let unread = plain_rules(Arc::clone(&orb_rules().tables), Overlay::default())
+        .with_move_speed_bonus(&window("AIms", "APbo"))
+        .unwrap();
+    let err = unread.held_attributes(&catalog_item("bspd")).unwrap_err();
+    assert!(err.contains("MoveSpeedBonusesStack"), "{err}");
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIms".into(), vec![int_mod(b"Idam", Some([1, 1]), 9)]);
+    let modified = orb_rules_with(&ORB_ROWS, overlay);
+    let err = modified.held_attributes(&catalog_item("bspd")).unwrap_err();
+    assert!(err.contains("map-modified"), "{err}");
+}
+
+#[test]
+fn speed_bonus_registration_must_name_the_passive_base() {
+    let plain = || plain_rules(Arc::clone(&orb_rules().tables), Overlay::default());
+    assert!(
+        plain()
+            .with_move_speed_bonus(&window("AIms", "APbo"))
+            .is_ok()
+    );
+    let err = plain()
+        .with_move_speed_bonus(&window("AIms", "AIat"))
+        .err()
+        .unwrap();
+    assert!(err.contains("APbo"), "{err}");
+    let err = plain()
+        .with_move_speed_stacking(MOVE_PROFILES, 4096)
+        .err()
+        .unwrap();
+    assert!(err.contains("registration"), "{err}");
+    let err = plain()
+        .with_move_speed_bonus(&window("AIab", "APbo"))
         .err()
         .unwrap();
     assert!(err.contains("distinct"), "{err}");

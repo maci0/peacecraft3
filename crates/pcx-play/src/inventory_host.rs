@@ -446,6 +446,7 @@ impl ObjectHost {
             orb: None,
             spell_damage_taken: None,
             attack_speed: 0.0,
+            move_speed_bonus: None,
         };
         for (item, _) in self
             .executed_items()
@@ -500,6 +501,10 @@ impl ObjectHost {
             }
             if let Some(taken) = passive.spell_damage_taken {
                 bonus.spell_damage_taken = Some(bonus.spell_damage_taken.unwrap_or(1.0) * taken);
+            }
+            if let Some(value) = passive.move_speed_bonus {
+                bonus.move_speed_bonus =
+                    Some(bonus.move_speed_bonus.map_or(value, |v| v.max(value)));
             }
             if let Some(orb) = passive.orb {
                 if bonus.orb.is_some() {
@@ -818,6 +823,9 @@ impl ObjectHost {
         if let Entry::Item { record } = self.inner.entry_mut(item)? {
             record.held_by = Some((unit, slot));
         }
+        if let Some(bonus) = passive.move_speed_bonus {
+            self.set_unit_speed_bonus(unit, item, Some(bonus))?;
+        }
         self.item_event(unit, item, true)?;
         Ok(true)
     }
@@ -938,6 +946,9 @@ impl ObjectHost {
             record.shown = shown;
             record.x = position[0];
             record.y = position[1];
+        }
+        if passive.move_speed_bonus.is_some() {
+            self.set_unit_speed_bonus(unit, item, None)?;
         }
         self.item_event(unit, item, false)
     }
@@ -1099,6 +1110,9 @@ impl ObjectHost {
                 "inventory",
                 Failure::UnitActivity("held passive bonus overflows".into()),
             ));
+        }
+        if passive.move_speed_bonus.is_some() {
+            self.require_speed_bonus_host(unit)?;
         }
         if held.orb.is_some() && passive.orb.is_some() {
             return Err(self.inner.error(

@@ -117,7 +117,7 @@ impl ObjectHost {
                         if motion.is_some() { "walk" } else { "stand" },
                         now,
                         if motion.is_some() {
-                            record.activity.as_ref().and_then(|a| a.speed)
+                            record.activity.as_ref().and_then(|a| a.speed())
                         } else {
                             None
                         },
@@ -281,7 +281,7 @@ impl ObjectHost {
                     if motion.is_some() { "walk" } else { "stand" },
                     at,
                     if motion.is_some() {
-                        activity.speed
+                        activity.speed()
                     } else {
                         None
                     },

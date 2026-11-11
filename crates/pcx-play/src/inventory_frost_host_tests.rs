@@ -104,18 +104,66 @@ fn removing_the_frost_buff_restores_the_speed() {
     assert!(buff_codes(&h, target).is_empty());
 }
 
+fn script_speed(h: &mut ObjectHost, unit: HandleId) -> f32 {
+    match h
+        .native("GetUnitMoveSpeed", &[Value::Handle(unit)])
+        .unwrap()
+    {
+        Value::Real(speed) => speed,
+        other => panic!("GetUnitMoveSpeed returned {other:?}"),
+    }
+}
+
 #[test]
-fn a_frosted_unit_refuses_a_speed_query_that_would_hide_the_modifier() {
+fn the_script_speed_natives_see_the_frost_and_set_the_base_under_it() {
     let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"ofro");
+    let base = walk_speed(&h, target);
     attack(&mut h, hero, target);
     run(&mut h, 0.3);
-    let err = h
-        .native("GetUnitMoveSpeed", &[Value::Handle(target)])
-        .unwrap_err();
+    assert_eq!(script_speed(&mut h, target), frosted(base));
+    // SetUnitMoveSpeed writes the base; the frost multiplier keeps acting on it.
+    h.native(
+        "SetUnitMoveSpeed",
+        &[Value::Handle(target), Value::Real(base + 20.0)],
+    )
+    .unwrap();
+    assert_eq!(script_speed(&mut h, target), frosted(base + 20.0));
+    h.native("PauseUnit", &[Value::Handle(hero), Value::Bool(true)])
+        .unwrap();
+    h.native(
+        "UnitRemoveBuffs",
+        &[Value::Handle(target), Value::Bool(false), Value::Bool(true)],
+    )
+    .unwrap();
+    assert_eq!(script_speed(&mut h, target), base + 20.0);
+}
+
+#[test]
+fn a_second_decrease_on_a_frosted_unit_adds_to_the_same_multiplier() {
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"ofro");
+    let base = walk_speed(&h, target);
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert_eq!(walk_speed(&h, target), frosted(base));
+    // What a slow adds when it lands on the same unit (`apply_slow`).
+    let slow = 0.25;
+    assert!(h.shift_unit_speed(target, -slow, "slow").unwrap());
+    let both = (base * (1.0 - FROST_MOVE - slow)).max(MIN_SPEED);
     assert!(
-        err.contains("active ability speed modifiers are not admitted"),
-        "{err}"
+        both < frosted(base),
+        "the fixture speed leaves room for both"
     );
+    assert_eq!(walk_speed(&h, target), both);
+    h.native("PauseUnit", &[Value::Handle(hero), Value::Bool(true)])
+        .unwrap();
+    assert!(h.shift_unit_speed(target, slow, "slow").unwrap());
+    assert_eq!(walk_speed(&h, target), frosted(base), "the frost stays");
+    h.native(
+        "UnitRemoveBuffs",
+        &[Value::Handle(target), Value::Bool(false), Value::Bool(true)],
+    )
+    .unwrap();
+    assert_eq!(walk_speed(&h, target), base);
 }
 
 #[test]

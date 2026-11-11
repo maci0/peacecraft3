@@ -94,6 +94,8 @@ const SPELL_REDUCTION: &str = "0.25";
 const KILJAEDEN_DAMAGE: f32 = 6.0;
 /// Damage-bonus entry of the spells attack type against the fixture units' medium defense.
 const SPELLS_VS_MEDIUM: f32 = 0.5;
+/// `DataA1` of the fixture boots, `AIms` row `AIms`.
+const SPEED_BONUS: &str = "60";
 
 /// The ability table: the plain rows get empty orb columns, then the three source-shaped orb rows.
 fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
@@ -107,6 +109,27 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
         .collect();
     let orb_targs = "ground,air,ward";
     rows.extend([
+        // Boots of Speed: `DataA1` is the flat bonus, the other data columns are unused.
+        vec![
+            "AIms",
+            "AIms",
+            "1",
+            SPEED_BONUS,
+            "0",
+            "0",
+            "0",
+            "-",
+            "-",
+            "-",
+            "",
+            "-",
+            "0",
+            "0",
+            "",
+        ],
+        vec![
+            "AIm2", "AIms", "1", "20", "0", "0", "0", "-", "-", "-", "", "-", "0", "0", "",
+        ],
         vec![
             "AIfb", "AIfb", "1", "5", "0", "0", "0", "2", "-", "-", orb_targs, ORB_AREA, "0", "0",
             "",
@@ -211,6 +234,8 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["ofro", "AIob", "0", "0", "0", "-"],
             &["brac", "AIsr", "0", "0", "0", "-"],
             &["pasp", "AIsx", "0", "0", "0", "-"],
+            &["bspd", "AIms", "0", "0", "0", "-"],
+            &["bsp2", "AIm2", "0", "0", "0", "-"],
             &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
         ],
     );
@@ -816,6 +841,13 @@ fn open_with_regens_overlays_extra(
     .with_spell_resistance(&registration("AIsr", "AIat"))
     .unwrap()
     .with_attack_speed(&registration("AIas", "APbo"))
+    .unwrap()
+    .with_move_speed_bonus(&registration("AIms", "APbo"))
+    .unwrap()
+    .with_move_speed_stacking(
+        &[("synthetic MiscGame", b"[Misc]\nMoveSpeedBonusesStack=0\n".as_slice())],
+        4096,
+    )
     .unwrap();
     let activity = activity
         .with_move_speed_profiles(

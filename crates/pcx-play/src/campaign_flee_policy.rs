@@ -1305,6 +1305,7 @@ pub(crate) mod tests {
             patrol: movement - 1,
             follow: None,
             move_speed: None,
+            agi_move_bonus: None,
         };
 
         assert!(

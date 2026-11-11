@@ -261,8 +261,18 @@ impl DayCycle {
     }
 }
 
+/// Hard lower bound of a unit type's move-speed limit. The reviewed client's static initializer
+/// (`0x408490`, `0x408500`) converts the integer 1 into the float that the unit-type limits
+/// (`0xb681b0`) and the `Misc` read (`0x695dd0`) compare against.
+pub const ENGINE_MIN_SPEED: f32 = 1.0;
+/// Hard upper bound of a unit type's move-speed limit (integer 522 from the initializers at
+/// `0x4084a0` and `0x4084e0`).
+pub const ENGINE_MAX_SPEED: f32 = 522.0;
+
 /// Unit and building move-speed limits (`Misc/MinUnitSpeed`, `Misc/MaxUnitSpeed`,
-/// `Misc/MinBldgSpeed`, `Misc/MaxBldgSpeed`).
+/// `Misc/MinBldgSpeed`, `Misc/MaxBldgSpeed`) as the profiles state them. The client also clamps
+/// them into [`ENGINE_MIN_SPEED`]..[`ENGINE_MAX_SPEED`] when it loads them; that clamp is not
+/// applied here (see `docs/re-notes/unit-move-speed-model.md`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MoveSpeedLimits {
     pub min_unit: f32,

@@ -52,6 +52,12 @@ use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
+/// Refusals for speed buffs and a polymorph on one unit. The movement object keeps the buff
+/// decreases in its multiplier, but which writes the type change of a polymorph makes to it is
+/// not decoded (`docs/re-notes/unit-move-speed-model.md`).
+pub(super) const POLYMORPH_SPEED_REFUSAL: &str = "slow on a polymorphed unit is not modelled: the speed writes of the polymorph type change are not decoded";
+const POLYMORPH_SPEED_REFUSAL_SLOWED: &str = "polymorph on a slowed unit is not modelled: the speed writes of the polymorph type change are not decoded";
+const POLYMORPH_SPEED_REFUSAL_FROSTED: &str = "polymorph on a frosted unit is not modelled: the speed writes of the polymorph type change are not decoded";
 /// Parent-row `code` of the Slow class.
 pub(super) const SLOW_CLASS: [u8; 4] = *b"Aslo";
 /// Parent-row `code` of the Polymorph class.
@@ -144,12 +150,11 @@ struct Cast {
 
 struct ActiveSlow {
     buff: [u8; 4],
-    /// Move speed before the slow, when the unit can move.
-    base_speed: Option<f32>,
+    /// Movement decrease added to the unit's speed multiplier, `None` when the unit has no
+    /// speed host.
+    movement: Option<f32>,
     attack: f32,
     expires_at: f64,
-    /// Definition revision the base speed belongs to.
-    revision: u64,
     art: Option<HandleId>,
 }
 
@@ -166,7 +171,7 @@ struct ActivePolymorph {
     expires_at: f64,
     original: pcx_sim::world::Definition,
     abilities: Option<super::UnitAbilities>,
-    profile: (bool, Option<f32>),
+    profile: (bool, super::unit_activity::MoveSpeed),
 }
 
 pub(super) struct State {
@@ -825,15 +830,6 @@ impl ObjectHost {
             .map_or(0.0, |slow| slow.attack)
     }
 
-    /// Whether an active slow or orb of frost owns the unit's move speed.
-    pub(super) fn unit_speed_modified(&self, unit: HandleId) -> bool {
-        self.unit_frosted(unit)
-            || self
-                .curses
-                .as_ref()
-                .is_some_and(|state| state.slows.contains_key(&unit))
-    }
-
     /// Whether an active polymorph owns the unit's form.
     pub(super) fn unit_polymorphed(&self, unit: HandleId) -> bool {
         self.curses
@@ -1293,35 +1289,27 @@ impl ObjectHost {
             .as_ref()
             .is_some_and(|state| state.polymorphs.contains_key(&target))
         {
-            return Err(self.curse_error("slow on a polymorphed unit is not modelled"));
-        }
-        if self.unit_frosted(target) {
-            return Err(self.curse_error("slow on a frosted unit is not modelled"));
+            return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL));
         }
         self.end_slow(target)?;
         self.detach_unit_buff(target, buff);
         self.attach_unit_buff(target, Self::curse_buff(buff))?;
-        let record = self.executed_unit(target)?;
-        let (revision, base_speed) = (
-            record.definition_revision,
-            record.activity.as_ref().and_then(|a| a.form_profile().1),
-        );
-        if let Some(base) = base_speed
-            && let Err(error) = self.apply_unit_move_speed(target, base * (1.0 - movement), NATIVE)
-        {
-            self.detach_unit_buff(target, buff);
-            return Err(error);
-        }
+        let applied = match self.shift_unit_speed(target, -movement, NATIVE) {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.detach_unit_buff(target, buff);
+                return Err(error);
+            }
+        };
         let art = self.show_buff_art(target, buff, expires_at)?;
         if let Some(state) = &mut self.curses {
             state.slows.insert(
                 target,
                 ActiveSlow {
                     buff,
-                    base_speed,
+                    movement: applied.then_some(movement),
                     attack,
                     expires_at,
-                    revision,
                     art,
                 },
             );
@@ -1329,7 +1317,8 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Restores the unit's move speed and removes the buff, art and attack penalty.
+    /// Takes the movement decrease back out of the unit's speed multiplier and removes the buff,
+    /// art and attack penalty.
     fn end_slow(&mut self, unit: HandleId) -> Result<(), Error> {
         let Some(slow) = self
             .curses
@@ -1338,13 +1327,9 @@ impl ObjectHost {
         else {
             return Ok(());
         };
-        let (buff, base, revision, art) = (slow.buff, slow.base_speed, slow.revision, slow.art);
-        let restorable = self.executed_unit(unit).is_ok_and(|record| {
-            record.definition_revision == revision
-                && record.combat.as_ref().is_some_and(|c| !c.dead)
-        });
-        if let (Some(base), true) = (base, restorable) {
-            self.apply_unit_move_speed(unit, base, NATIVE)?;
+        let (buff, movement, art) = (slow.buff, slow.movement, slow.art);
+        if let Some(movement) = movement {
+            self.shift_unit_speed(unit, movement, NATIVE)?;
         }
         if let Some(state) = &mut self.curses {
             state.slows.remove(&unit);
@@ -1362,7 +1347,7 @@ impl ObjectHost {
         ground_form: [u8; 4],
     ) -> Result<(), Error> {
         if self.unit_frosted(target) {
-            return Err(self.curse_error("polymorph on a frosted unit is not modelled"));
+            return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL_FROSTED));
         }
         let state = self.curses.as_mut().expect("admitted");
         if let Some(active) = state.polymorphs.get_mut(&target) {
@@ -1370,7 +1355,7 @@ impl ObjectHost {
             return Ok(());
         }
         if state.slows.contains_key(&target) {
-            return Err(self.curse_error("polymorph on a slowed unit is not modelled"));
+            return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL_SLOWED));
         }
         let record = self.executed_unit(target)?.clone();
         let refusal = if record.morph.is_some() || self.mirror_busy(target) {
@@ -1447,7 +1432,7 @@ impl ObjectHost {
             active.buff,
             active.original.clone(),
             active.abilities.clone(),
-            active.profile,
+            active.profile.clone(),
         );
         let alive = self
             .executed_unit(unit)

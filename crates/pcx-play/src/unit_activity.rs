@@ -26,6 +26,8 @@ pub struct Rules {
     pub(crate) patrol: i32,
     pub(crate) follow: Option<FollowRules>,
     pub(crate) move_speed: Option<pcx_objects::editor::misc::MoveSpeedLimits>,
+    /// `Misc/AgiMoveBonus` (a missing key reads 0), read with the move speed limits.
+    pub(crate) agi_move_bonus: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +97,7 @@ impl Rules {
             patrol,
             follow: None,
             move_speed: None,
+            agi_move_bonus: None,
         })
     }
 
@@ -135,7 +138,18 @@ impl Rules {
         self.move_speed = Some(pcx_objects::editor::misc::MoveSpeedLimits::read(
             profiles, max_bytes,
         )?);
+        let ([bonus], _) =
+            pcx_objects::editor::misc::misc_scalars(profiles, ["AgiMoveBonus"], max_bytes)?;
+        let bonus = bonus.unwrap_or(0.0);
+        if !bonus.is_finite() {
+            return Err("Misc/AgiMoveBonus is not finite".into());
+        }
+        self.agi_move_bonus = Some(bonus);
         Ok(self)
+    }
+    /// `Misc/AgiMoveBonus`, once the move speed profiles were read.
+    pub fn agi_move_bonus(&self) -> Option<f32> {
+        self.agi_move_bonus
     }
     pub fn move_speed_limits(&self) -> Option<pcx_objects::editor::misc::MoveSpeedLimits> {
         self.move_speed

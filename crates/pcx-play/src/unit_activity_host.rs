@@ -6,6 +6,10 @@ use pcx_sim::world::{Definition, FieldValue};
 
 #[path = "unit_follow_host.rs"]
 mod follow;
+#[path = "unit_speed.rs"]
+mod speed_state;
+pub(crate) use speed_state::MoveSpeed;
+use speed_state::SpeedBounds;
 
 /// Refusal for orders that would move a unit left uprooted by `unroot`.
 const UPROOTED_MOVEMENT: &str = "movement of an uprooted unit is not modelled: unroot clears the rooted state, but the movement it enables is not decoded";
@@ -38,7 +42,7 @@ type PendingRefresh = (
 pub struct UnitActivity {
     held: bool,
     movable: bool,
-    speed: Option<f32>,
+    move_speed: MoveSpeed,
     motion: Option<Box<Motion>>,
     patrol: Option<Patrol>,
     follow: Option<Follow>,
@@ -195,19 +199,21 @@ fn emit(
 }
 
 impl UnitActivity {
+    /// A form change takes the new unit type's movement class, base speed and speed bounds.
+    /// Buff multipliers and item bonuses stay (see [`MoveSpeed::replace_form`]).
     pub(super) fn replace_form_profile(&mut self, source: &Self) {
         self.movable = source.movable;
-        self.speed = source.speed;
+        self.move_speed.replace_form(&source.move_speed);
     }
 
-    /// The movement class and effective speed a form transition replaces.
-    pub(super) fn form_profile(&self) -> (bool, Option<f32>) {
-        (self.movable, self.speed)
+    /// The movement class and speed state a polymorph replaces and later restores.
+    pub(super) fn form_profile(&self) -> (bool, MoveSpeed) {
+        (self.movable, self.move_speed.clone())
     }
 
-    pub(super) fn restore_form_profile(&mut self, (movable, speed): (bool, Option<f32>)) {
+    pub(super) fn restore_form_profile(&mut self, (movable, move_speed): (bool, MoveSpeed)) {
         self.movable = movable;
-        self.speed = speed;
+        self.move_speed = move_speed;
     }
 
     pub(super) fn resume_after_pause(&mut self, since: f64, now: f64) {
@@ -246,11 +252,11 @@ impl UnitActivity {
     }
     /// Whether the selected speed admits starting a new route.
     pub(super) fn can_start_motion(&self) -> bool {
-        self.movable && self.speed.is_some_and(|speed| speed > 0.0)
+        self.movable && self.speed().is_some_and(|speed| speed > 0.0)
     }
     /// The effective move speed, after any form or ability change.
     pub fn speed(&self) -> Option<f32> {
-        self.speed
+        self.move_speed.effective()
     }
     /// The accepted route's waypoints, in travel order, and the index of the next one. Empty
     /// when no route is pending.
@@ -285,8 +291,14 @@ fn authored_speed(definition: &Definition) -> Result<f32, String> {
     speed(definition)?.ok_or_else(|| "unit UnitBalance spd is absent".into())
 }
 
-fn clamp_move_speed(speed: f32, (minimum, maximum): (f32, f32)) -> f32 {
-    speed.max(minimum).min(maximum)
+/// The unit type's own speed bound (`UnitBalance` `minSpd` or `maxSpd`). Zero means the type
+/// has none and the `Misc` bound applies. A `-`, `_` or empty cell, or a table without the
+/// column, reads as zero: the client reads an absent type field as 0.0 (`0x6975b0`, `0x697410`).
+fn type_speed_bound(definition: &Definition, wanted: &str) -> Result<f32, String> {
+    if !has_column(definition, SlkId::UnitBalance, wanted) {
+        return Ok(0.0);
+    }
+    Ok(column_optional_real(definition, SlkId::UnitBalance, wanted)?.unwrap_or(0.0))
 }
 
 /// One `UnitBalance` numeric column of a resolved unit definition, with map edits.
@@ -307,6 +319,24 @@ pub(crate) fn column_real(
 ) -> Result<f32, String> {
     column_optional_real(definition, table, wanted)?
         .ok_or_else(|| format!("unit {table:?} {wanted} is empty"))
+}
+
+/// The numeric `UnitBalance`-style fields of a definition that read the SLK column `wanted`.
+fn matching_columns<'a>(
+    definition: &'a Definition,
+    table: SlkId,
+    wanted: &'a str,
+) -> impl Iterator<Item = (&'a pcx_objects::Fourcc, &'a pcx_sim::world::ObjectField)> {
+    definition.fields.iter().filter(move |(id, f)| {
+        f.metadata.as_ref().is_some_and(|m|
+        m.fourcc==**id && m.from==SlkId::UnitMetaData && matches!(m.index,-1|0)
+        && matches!(m.kind,FieldKind::Int|FieldKind::Real|FieldKind::Unreal)
+        && matches!(&m.source,FieldSource::Column{slk,column}if *slk==table && column==wanted))
+    })
+}
+
+fn has_column(definition: &Definition, table: SlkId, wanted: &str) -> bool {
+    matching_columns(definition, table, wanted).next().is_some()
 }
 
 /// Like [`column_real`], but a `-`, `_` or empty SLK cell is `None` rather than an error.
@@ -330,12 +360,7 @@ pub(crate) fn column_optional_signed_real(
     table: SlkId,
     wanted: &str,
 ) -> Result<Option<f32>, String> {
-    let mut matches = definition.fields.iter().filter(|(id, f)| {
-        f.metadata.as_ref().is_some_and(|m|
-        m.fourcc==**id && m.from==SlkId::UnitMetaData && matches!(m.index,-1|0)
-        && matches!(m.kind,FieldKind::Int|FieldKind::Real|FieldKind::Unreal)
-        && matches!(&m.source,FieldSource::Column{slk,column}if *slk==table && column==wanted))
-    });
+    let mut matches = matching_columns(definition, table, wanted);
     let (_, field) = matches
         .next()
         .ok_or_else(|| format!("missing unit {table:?} {wanted}"))?;
@@ -609,24 +634,30 @@ impl ObjectHost {
             "" | "_" | "none" => false,
             _ => return Err(fail(format!("movement class `{movement}` is not admitted"))),
         };
-        let mut speed = if movable {
+        let base = if movable {
             speed(definition).map_err(fail)?
         } else {
             None
         };
-        if let (Some(value), Some(limits)) = (
-            speed.as_mut(),
-            self.unit_activity
-                .as_ref()
-                .and_then(|state| state.rules.move_speed_limits()),
-        ) {
-            let building = super::unit_types::structure(definition).map_err(fail)?;
-            *value = clamp_move_speed(*value, limits.for_building(building));
-        }
+        let bounds = match self
+            .unit_activity
+            .as_ref()
+            .and_then(|state| state.rules.move_speed_limits())
+        {
+            Some(limits) => {
+                let building = super::unit_types::structure(definition).map_err(fail)?;
+                Some(SpeedBounds::resolve(
+                    type_speed_bound(definition, "minSpd").map_err(fail)?,
+                    type_speed_bound(definition, "maxSpd").map_err(fail)?,
+                    limits.for_building(building),
+                ))
+            }
+            None => None,
+        };
         Ok(Some(UnitActivity {
             held: false,
             movable,
-            speed,
+            move_speed: MoveSpeed::new(base, bounds),
             motion: None,
             patrol: None,
             follow: None,
@@ -926,7 +957,7 @@ impl ObjectHost {
                     .select_engine(
                         if moving { "walk" } else { "stand" },
                         now,
-                        if moving { activity.speed } else { None },
+                        if moving { activity.speed() } else { None },
                     )
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;
             }
@@ -1223,7 +1254,7 @@ impl ObjectHost {
                             continue;
                         };
                         (
-                            activity.speed.expect("moving unit's admitted speed"),
+                            activity.speed().expect("moving unit's admitted speed"),
                             motion,
                         )
                     }
@@ -1380,7 +1411,7 @@ impl ObjectHost {
         let record = self.executed_unit(unit).ok()?;
         let activity = record.activity.as_ref()?;
         let motion = activity.motion.as_ref().filter(|_| !activity.held)?;
-        let (position, speed) = (record.position?, activity.speed?);
+        let (position, speed) = (record.position?, activity.speed()?);
         let target = *motion.path.get(motion.next)?;
         let delta = [target[0] - position[0], target[1] - position[1]];
         let length = delta[0].hypot(delta[1]);
@@ -1706,7 +1737,7 @@ impl ObjectHost {
                     if motion.is_some() { "walk" } else { "stand" },
                     now,
                     if motion.is_some() {
-                        activity.speed
+                        activity.speed()
                     } else {
                         None
                     },
@@ -1892,7 +1923,7 @@ impl ObjectHost {
             started: at,
         });
         let pathing_off = activity.pathing_off;
-        let speed = activity.speed;
+        let speed = activity.speed();
         let mut animation = record.animation.clone();
         let progress = if pathing_off {
             motion.path.push(motion.goal);
@@ -1915,39 +1946,42 @@ impl ObjectHost {
         Ok(progress.then_some(motion))
     }
 
-    /// Sets a live unit's move speed after the structure clamp, re-anchoring any route
-    /// and the walk animation. Returns the clamped speed. Callers own the policy about
-    /// who may change speed.
-    pub(super) fn apply_unit_move_speed(
+    /// Changes the speed state of a live unit through `change`, re-anchoring any route and the
+    /// walk animation to the resulting speed. Returns that speed. A unit that has no speed
+    /// before or after the change only stores it. Callers own the policy about who may change
+    /// speed.
+    pub(super) fn update_unit_speed(
         &mut self,
         unit: HandleId,
-        requested: f32,
         name: &str,
-    ) -> Result<f32, Error> {
+        change: impl FnOnce(&mut MoveSpeed),
+    ) -> Result<Option<f32>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
-        let limits = self
-            .unit_activity
-            .as_ref()
-            .and_then(|state| state.rules.move_speed_limits())
-            .ok_or_else(|| fail("move speed limits not admitted"))?;
         let record = self.executed_unit(unit)?;
-        let building =
-            super::unit_types::structure(&record.definition).map_err(|detail| fail(&detail))?;
-        let speed = clamp_move_speed(requested, limits.for_building(building));
-        let position = record
-            .position
-            .ok_or_else(|| fail("accepted position required"))?;
         let activity = record
             .activity
             .as_ref()
             .ok_or_else(|| fail("activity not initialized"))?;
+        let mut state = activity.move_speed.clone();
+        if !state.bounded() {
+            return Err(fail("move speed limits not admitted"));
+        }
+        let before = state.effective();
+        change(&mut state);
+        let speed = state.effective();
+        if before.is_none() && speed.is_none() {
+            return self.store_unit_speed(unit, state).map(|()| speed);
+        }
+        let position = record
+            .position
+            .ok_or_else(|| fail("accepted position required"))?;
         let moving = activity.moving();
         let now = self
             .timer_game_time()
             .ok_or_else(|| fail("clock not admitted"))?;
         let mut animation = record.animation.clone();
         if moving
-            && speed > 0.
+            && let Some(speed) = speed.filter(|speed| *speed > 0.)
             && let Some(animation) = &mut animation
         {
             animation
@@ -1959,9 +1993,104 @@ impl ObjectHost {
         };
         let activity = record.activity.as_mut().expect("checked activity");
         activity.relocated(position, now);
-        activity.speed = Some(speed);
+        activity.move_speed = state;
         record.animation = animation;
         Ok(speed)
+    }
+
+    /// Replaces the stored speed state without touching a route or an animation. For units
+    /// that no longer move: dead ones whose buffs end.
+    fn store_unit_speed(&mut self, unit: HandleId, state: MoveSpeed) -> Result<(), Error> {
+        let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
+            unreachable!("checked unit");
+        };
+        record
+            .activity
+            .as_mut()
+            .expect("checked activity")
+            .move_speed = state;
+        Ok(())
+    }
+
+    /// Adds `delta` to the unit's speed multiplier: a buff passes the negated decrease when it
+    /// applies and the decrease when it ends. A unit without a speed host is skipped and
+    /// reported as `false`. A dead unit only has its state updated.
+    pub(crate) fn shift_unit_speed(
+        &mut self,
+        unit: HandleId,
+        delta: f32,
+        name: &str,
+    ) -> Result<bool, Error> {
+        self.change_unit_speed(unit, name, |state| state.shift_multiplier(delta))
+    }
+
+    /// Runs `change` on the unit's speed state. A unit that is removed or has no speed host is
+    /// skipped (`false`); a dead unit only has its state updated.
+    fn change_unit_speed(
+        &mut self,
+        unit: HandleId,
+        name: &str,
+        change: impl FnOnce(&mut MoveSpeed),
+    ) -> Result<bool, Error> {
+        let Ok(record) = self.executed_unit(unit) else {
+            return Ok(false);
+        };
+        let Some(activity) = record.activity.as_ref() else {
+            return Ok(false);
+        };
+        if record.combat.as_ref().is_some_and(|combat| combat.dead) {
+            let mut state = activity.move_speed.clone();
+            change(&mut state);
+            self.store_unit_speed(unit, state)?;
+            return Ok(true);
+        }
+        self.update_unit_speed(unit, name, change)?;
+        Ok(true)
+    }
+
+    /// Sets (`Some`) or removes (`None`) the flat speed bonus that `source` grants `unit`.
+    pub(super) fn set_unit_speed_bonus(
+        &mut self,
+        unit: HandleId,
+        source: HandleId,
+        bonus: Option<f32>,
+    ) -> Result<(), Error> {
+        self.change_unit_speed(unit, "inventory", |state| match bonus {
+            Some(value) => state.set_bonus(source, value),
+            None => state.remove_bonus(source),
+        })
+        .map(|_| ())
+    }
+
+    /// Refuses before any state is written when `unit` cannot take a speed bonus: it needs a speed
+    /// host with admitted limits, a position and a clock to re-anchor its route, and must not be
+    /// a polymorph, whose type change writes to the speed state in ways that are not decoded.
+    pub(super) fn require_speed_bonus_host(&self, unit: HandleId) -> Result<(), Error> {
+        let fail = |detail: &str| {
+            self.inner
+                .error("inventory", Failure::UnitActivity(detail.into()))
+        };
+        let record = self.executed_unit(unit)?;
+        let bounded = record
+            .activity
+            .as_ref()
+            .is_some_and(|activity| activity.move_speed.bounded());
+        if !bounded {
+            return Err(fail(
+                "a speed bonus needs the unit speed host with its move speed limits",
+            ));
+        }
+        if record.position.is_none() || self.timer_game_time().is_none() {
+            return Err(fail(
+                "a speed bonus needs the unit position and the game clock",
+            ));
+        }
+        if self.unit_polymorphed(unit) {
+            return Err(fail(
+                "a speed bonus on a polymorphed unit is not modelled: the speed writes of the polymorph type change are not decoded",
+            ));
+        }
+        Ok(())
     }
 
     fn move_speed_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
@@ -2007,42 +2136,43 @@ impl ObjectHost {
             Entry::RemovedUnit { .. } => return Ok(no_op()),
             _ => return Err(self.inner.error(name, Failure::WrongFamily)),
         }
-        let limits = self
-            .unit_activity
-            .as_ref()
-            .and_then(|state| state.rules.move_speed_limits());
         let record = self.executed_unit(unit)?;
         if let Some(speed) = requested {
-            if record.admitted_order.is_some_and(|(_, active)| active)
-                || self.unit_speed_modified(unit)
-            {
+            if record.admitted_order.is_some_and(|(_, active)| active) {
                 return Err(fail("active ability speed modifiers are not admitted"));
             }
-            self.apply_unit_move_speed(unit, speed, name)?;
+            // The client stores the value as the base speed (`0xb69520`); buffs and bonuses
+            // keep acting on it and the limits apply when the speed is read.
+            self.update_unit_speed(unit, name, |state| state.set_base(speed))?;
             return Ok(Value::Null);
         }
         if name == "GetUnitDefaultMoveSpeed" {
+            // The client adds a hero term built from `Misc/AgiMoveBonus` (`0xb3ea50`), which
+            // is not decoded; stock `MiscGame.txt` has 0.
+            let hero = record.definition.rawcode[0].is_ascii_uppercase();
+            if hero
+                && self
+                    .unit_activity
+                    .as_ref()
+                    .is_none_or(|state| state.rules.agi_move_bonus() != Some(0.0))
+            {
+                return Err(fail(
+                    "the hero term of the default move speed (Misc/AgiMoveBonus) is not decoded",
+                ));
+            }
             return authored_speed(&record.definition)
                 .map(Value::Real)
                 .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)));
         }
-        if record.admitted_order.is_some_and(|(_, active)| active) || self.unit_speed_modified(unit)
-        {
+        if record.admitted_order.is_some_and(|(_, active)| active) {
             return Err(fail("active ability speed modifiers are not admitted"));
         }
         let activity = record
             .activity
             .as_ref()
             .ok_or_else(|| fail("activity not initialized"))?;
-        let speed = match activity.speed {
-            Some(speed) => match limits {
-                Some(limits) => {
-                    let building = super::unit_types::structure(&record.definition)
-                        .map_err(|detail| fail(&detail))?;
-                    clamp_move_speed(speed, limits.for_building(building))
-                }
-                None => speed,
-            },
+        let speed = match activity.speed() {
+            Some(speed) => speed,
             None => authored_speed(&record.definition)
                 .map_err(|detail| self.inner.error(name, Failure::UnitActivity(detail)))?,
         };
@@ -2342,7 +2472,10 @@ impl ObjectHost {
                     .select_engine(
                         "walk",
                         now,
-                        record.activity.as_ref().and_then(|activity| activity.speed),
+                        record
+                            .activity
+                            .as_ref()
+                            .and_then(|activity| activity.speed()),
                     )
                     .map_err(|error| {
                         self.inner

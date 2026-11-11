@@ -46,6 +46,10 @@ const FROST_ORB_WINDOW: u32 = 0xca6d80;
 const SPELL_RESISTANCE_WINDOW: u32 = 0xbc9ee0;
 /// Registration call for the held attack-speed class (source `AIas`, base `APbo`).
 const ATTACK_SPEED_WINDOW: u32 = 0xbc9cc0;
+/// Registration call for the movement-speed bonus class (source `AIms`, base `APbo`).
+const MOVE_SPEED_BONUS_WINDOW: u32 = 0xbc9fc0;
+/// `Misc` key of `MiscGame.txt` that the speed-bonus class reads (`0xbbeee0`, `0xbbefc0`).
+const MOVE_SPEED_STACK_KEY: &str = "MoveSpeedBonusesStack";
 /// `Misc` keys of `MiscGame.txt` that the Frost buff reads when it is applied (`0xc5b5e0`).
 const FROST_MOVE_KEY: &str = "FrostMoveSpeedDecrease";
 const FROST_ATTACK_KEY: &str = "FrostAttackSpeedDecrease";
@@ -55,6 +59,12 @@ const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 /// modeled, with the reason the pickup stays refused. See `passive-held-items.md`, "Open held
 /// classes".
 const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
+    (
+        "AUau",
+        "the unholy aura applies buff BUau to friendly units within Area1 of the holder; the \
+         buff adds DataA1 to the unit's speed multiplier, but the aura's scan period, buff \
+         duration and the life regeneration addition (DataB1, DataC1) are not decoded",
+    ),
     (
         "AIsb",
         "the orb creates the ability named by its UnitID1 and casts it on each armed hit; \
@@ -69,11 +79,6 @@ const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
         "AIrc",
         "reincarnation runs from the death handler (revive delay, life and mana restore, \
          charge use) and is not modeled",
-    ),
-    (
-        "AIms",
-        "speed is (maximum bonus + base speed) * multiplier, but the recreation keeps one \
-         clamped speed per unit, so the base and the multiplier are not separable",
     ),
 ];
 const BASE_FN_LEN: usize = 6;
@@ -186,6 +191,10 @@ pub struct AttributeBonus {
     /// unit's attack speed multiplier (`0xb1e490`), the same multiplier the frost and slow
     /// decreases subtract from.
     pub attack_speed: f32,
+    /// The flat movement speed an item's `AIms` grants (`DataA1`), `None` without one. A unit's
+    /// speed uses the largest value among its held items, kept per item by the speed state, so
+    /// aggregating bonuses does not sum this.
+    pub move_speed_bonus: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -234,6 +243,17 @@ pub struct Rules {
     spell_resistance: Option<String>,
     /// Attack-speed registration, attached by `with_attack_speed`.
     attack_speed: Option<FractionClass>,
+    /// Movement-speed bonus registration, attached by `with_move_speed_bonus`.
+    move_speed_bonus: Option<MoveSpeedBonusClass>,
+}
+
+/// The registered `AIms` class and whether `Misc/MoveSpeedBonusesStack` is set, attached by
+/// `with_move_speed_stacking`. The stacking path of the client is not decoded, so a set flag
+/// refuses the item.
+#[derive(Clone, Debug)]
+struct MoveSpeedBonusClass {
+    class: String,
+    stacks: Option<bool>,
 }
 
 /// The registered orb classes: the shared `AIDB` base, `AIfb` (Orb of Fire, and Orb of
@@ -335,6 +355,7 @@ impl Rules {
         let frost_orb = window(FROST_ORB_WINDOW)?;
         let spell_resistance = window(SPELL_RESISTANCE_WINDOW)?;
         let attack_speed = window(ATTACK_SPEED_WINDOW)?;
+        let move_speed_bonus = window(MOVE_SPEED_BONUS_WINDOW)?;
         Self::decode(
             tables,
             overlay,
@@ -351,6 +372,7 @@ impl Rules {
         .and_then(|rules| rules.with_frost_orb(&frost_orb))
         .and_then(|rules| rules.with_spell_resistance(&spell_resistance))
         .and_then(|rules| rules.with_attack_speed(&attack_speed))
+        .and_then(|rules| rules.with_move_speed_bonus(&move_speed_bonus))
         .map_err(|e| fail(&e))
     }
 
@@ -428,6 +450,10 @@ impl Rules {
                 .attack_speed
                 .as_ref()
                 .is_some_and(|speed| speed.class == class)
+            || self
+                .move_speed_bonus
+                .as_ref()
+                .is_some_and(|bonus| bonus.class == class)
             || self.orbs.as_ref().is_some_and(|orbs| {
                 [&orbs.base, &orbs.fire, &orbs.corruption]
                     .iter()
@@ -507,6 +533,40 @@ impl Rules {
             return Err("spell-resistance registration must name a distinct class".into());
         }
         self.spell_resistance = Some(class);
+        Ok(self)
+    }
+
+    /// Attaches the movement-speed bonus class. Its registration must name the passive base
+    /// `APbo`, as the reviewed image registers it (`0xbc9fc0`).
+    pub(crate) fn with_move_speed_bonus(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        if base != "APbo" {
+            return Err("speed-bonus registration must name base APbo".into());
+        }
+        if self.move_speed_bonus.is_some() || self.is_registered(&class) {
+            return Err("speed-bonus registration must name a distinct class".into());
+        }
+        self.move_speed_bonus = Some(MoveSpeedBonusClass {
+            class,
+            stacks: None,
+        });
+        Ok(self)
+    }
+
+    /// Reads `Misc/MoveSpeedBonusesStack` (`MiscGame.txt` first, then the map's profile). A
+    /// missing key reads as 0, the default the client passes.
+    pub(crate) fn with_move_speed_stacking(
+        mut self,
+        profiles: &[(&str, &[u8])],
+        max_bytes: usize,
+    ) -> Result<Self, String> {
+        let ([stacks], _) =
+            pcx_objects::editor::misc::misc_scalars(profiles, [MOVE_SPEED_STACK_KEY], max_bytes)?;
+        let class = self
+            .move_speed_bonus
+            .as_mut()
+            .ok_or("the stacking flag needs the speed-bonus registration")?;
+        class.stacks = Some(stacks.unwrap_or(0.0) != 0.0);
         Ok(self)
     }
 
@@ -816,6 +876,7 @@ impl Rules {
             attack_speed: None,
             orbs: None,
             spell_resistance: None,
+            move_speed_bonus: None,
         })
     }
 
@@ -1024,6 +1085,31 @@ impl Rules {
                 held.spell_damage_taken = Some(held.spell_damage_taken.unwrap_or(1.0) * taken);
                 continue;
             }
+            if let Some(class) = &self.move_speed_bonus
+                && code == class.class
+            {
+                match class.stacks {
+                    Some(false) => {}
+                    Some(true) => {
+                        return Err(format!(
+                            "speed bonus {alias} on {}: Misc/{MOVE_SPEED_STACK_KEY} is set (as in \
+                             the custom and campaign rule sets) and the client then adds DataA1 \
+                             to a unit bonus record that is summed over the unit's abilities; \
+                             where that sum reaches the speed is not decoded",
+                            item.rawcode()
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "speed bonus {alias} reads Misc/{MOVE_SPEED_STACK_KEY}, which this \
+                             rule set was not given"
+                        ));
+                    }
+                }
+                let value = self.move_speed_bonus_value(alias)?;
+                held.move_speed_bonus = Some(held.move_speed_bonus.map_or(value, |v| v.max(value)));
+                continue;
+            }
             if code != self.passive_class {
                 let reason = UNMODELED_PASSIVE_CLASSES
                     .iter()
@@ -1178,6 +1264,19 @@ impl Rules {
             _ => return Err(format!("DataB1 of {alias} is not a fraction in [0, 1]")),
         };
         Ok((damage, 1.0 - reduction))
+    }
+
+    /// The flat bonus of an `AIms` row: `DataA1`. Any finite real is admitted; a negative one never
+    /// wins the maximum the client takes from zero.
+    fn move_speed_bonus_value(&self, alias: &str) -> Result<f32, String> {
+        let ability = self.effect_row(alias, "speed-bonus")?;
+        let cell = ability
+            .cell(SlkId::AbilityData, "DataA1")
+            .map_err(|e| e.to_string())?;
+        match cell.typed(FieldKind::Real) {
+            Ok(Value::Real(value)) if value.is_finite() => Ok(value as f32),
+            _ => Err(format!("DataA1 of {alias} is not a finite real")),
+        }
     }
 
     /// Authored real fraction at the effect level, after the map's W3A override for that field.

@@ -109,3 +109,10 @@ behavior.
 The controlled probe reported `VERSION_REIGN_OF_CHAOS` checks under Wine, not
 native Windows or rendered parity. Nonfinite behavior, other movement classes,
 bonus compositions and exact endpoint/turn timing remain separate gates.
+
+## Speed model update
+
+The stored speed is now the result of `limit((max(bonuses) + base) * multiplier)`: `SetUnitMoveSpeed`
+writes the base, buffs shift the multiplier and the limit applies when the speed is read, so the
+clamp above acts on the formula result and not on the setter input. Unit-type `minSpd` and `maxSpd`
+replace the `Misc` bounds when nonzero. Decode and addresses: [unit-move-speed-model.md](unit-move-speed-model.md).
