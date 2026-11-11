@@ -899,3 +899,93 @@ trajectory. Units with a form behave as before.
 | TFT OrcX02 | `SetUnitFlyHeight`: height setter without an admitted form is not qualified (unit `nzep`, air) | passes, `executed_units=238` |
 | RoC Human02Interlude | not re-run on the old tree | passes, `executed_units=40` |
 | TFT OrcX02_02 to OrcX02_10 | not in the campaign index (`requested map must come from the selected install's campaign index`) | unchanged, sub-map routes belong to another lane |
+
+## Routes to the 18 maps outside the campaign index (2026-11-11)
+
+Same exe (`Warcraft III.exe` 1.29.2.9231, SHA-256 `3f2ed012...0eed`). Map scripts were read with
+`mpqxtract get` (each `.w3m`/`.w3x` is an MPQ after a 512-byte `HM3W` header) into `.scratch/` only.
+Priority order for the Local archives was `War3xLocal.mpq`, `War3x.mpq`, `War3Local.mpq`, `War3.mpq`.
+
+### Route table (observed in the shipped scripts and `UI\MiscUI.txt`)
+
+| Map | Route | Evidence |
+|---|---|---|
+| `Maps\Campaign\WarCraftIIICredits.w3m` | Credits button, edition 0 | `MiscUI.txt` `CreditsFile_V0` |
+| `Maps\FrozenThrone\Campaign\War3XRegularCreditsIce.w3x` | Credits button, edition 1 | `MiscUI.txt` `CreditsFile_V1` |
+| `Maps\Campaign\BonusCredits.w3m` | `SetNextLevelBJ` then `CustomVictoryOkBJ` in `NightElf07` (`war3map.j:6725`) | `ChangeLevel` in `Blizzard.j:5207` |
+| `Maps\FrozenThrone\Campaign\War3XBonusCredits.w3x` | the same in `UndeadX08` (`war3map.j:7786`) | same |
+| `OrcX01_02`..`OrcX01_05` | `SaveAndChangeLevelBJ(save, map, false)` (`Blizzard.j:7567`: `SaveGame` then `ChangeLevel`) from the `OrcX01` hub; the hub's zone triggers set `udg_TransitionTarget` 2, 3, 3, 5, 4 | `OrcX01 war3map.j:8251..8615`, `Perform Map Transition` |
+| `OrcX02_02`..`OrcX02_10` | the same from the `OrcX02` hub (targets 2, 5, 4, 6, 7, 8, 9, 10); `OrcX02_03` is also reached from `OrcX02_02` (target 3, `war3map.j:5978`) | `OrcX02 war3map.j:5514..6284` |
+| `OrcX03b` | `SetNextLevelBJ` in `OrcX03a` (`war3map.j:2390`) after its `StoreUnitBJ` calls under mission key `OrcX03b` | `OrcX03a war3map.j:2338..2390` |
+
+Every zone map of a hub fills `udg_ZoneMaps` with the same ten (or five) names, sets the target back to
+zone 1 and re-enters the hub the same way. A zone that was visited before is re-entered with
+`SaveAndLoadGameBJ` (`LoadGame` of a `.w3z` saved game), not `ChangeLevel`. `LoadGame`, `SaveGame`,
+`SaveGameExists`, `CopySaveGame` and `RemoveSaveDirectory` are not implemented, so only the first visit of
+each zone has a route here; the rest stays refused. No shipped script names a map in
+`ChangeLevel` or `SetNextLevel` besides those above, and none names a credits map besides
+`NightElf07` and `UndeadX08`.
+
+### Decoded
+
+- `ChangeLevel` (native registered at `0x49e83d` -> `0x48a700`) carries no game state. It checks that the
+  game object `[0x113b6f4]` exists, resolves the string handle, and calls `0x47ca90(path, doScoreScreen, 0)`.
+  That stores the path and the flag in the game object (`+0x594`, `+0x59c`), tests whether the path ends in
+  `.w3z` (string `0xe6e93c`), looks the path up (`0x799eb0(2, path)`, inferred to be the archive search; an
+  empty path fails with error 0x57), then calls `0x4e7670` on the object at game `+0x1c` (not read further). With
+  `doScoreScreen` false it first calls `0x5ac290`. Heroes and cache values reach the next map only through
+  script: `StoreUnitBJ`/`StoreIntegerBJ` into `Campaigns.w3v` and `SaveGameCache` (`0x4a5d60`) in the parent,
+  `InitGameCacheBJ` and `RestoreUnit*BJ` in the child. The recreation's `ChangeLevel` request, transition and
+  cache profile already behave that way, so the route needs no state-carry code.
+- `DoNotSaveReplay` (native at `0x49eb0b` -> `0x48fc50`) is `jmp 0x5ac290`. That routine fetches object 13 and,
+  if it holds an open file, closes it and deletes it (`0x5a6040`: path via `0x591ff0`, delete via `0x7981d0`;
+  that this file is the replay recording is inferred from the native's name). The same call runs when a map named in the four credits strings (`0xe6e8a4`..`0xe6e918`,
+  compared at `0x47afb7..0x47b008`) starts, and when `ChangeLevel` is called without a score screen. The
+  recreation records no replay (Save Replay is refused), so the native returns with no effect.
+  `ObjectHost::with_game_exit` admits it with the other exit natives.
+- `I2S` (registration `0x49b4d4`, `(I)S`) is `0x498ab0`: it formats its argument with `%d` (`0xe6ddd8`) into a
+  256-byte buffer through `0x433bb0`, then makes a script string. The result is the signed decimal text.
+  `R2S` uses `%.3f` (`0xe6dddc`); it is not wired.
+- Credits button: the `CreditsButton` handler (`0x56a140`, reached from the menu command switch at `0x56f4ed`)
+  formats `CreditsFile_V%d` with `[0x10db3e0]`, reads it from `Misc` through `0x430570` and starts the map
+  through `0x576f50`. This is what `menu_credits::credits_map_for_edition` does. The neighbouring case at
+  `0x56f4f8` compares the same global with 1, which matches edition 1 being Frozen Throne.
+- `GetGameTypeSelected` (`0x492810`) returns `(game->info)->flags & ~8`, where the flags word is info `+0x34`.
+  The info constructor `0x472340` sets it to 1 (`GAME_TYPE_MELEE`); the only other writers found are the saved
+  game restore (`0x479694`, `0x4798d0`). No store on the launch path (`0x576f50`, `0x479ce0`) was found, but the
+  map-load path after it was not read, so the value for a fresh campaign launch is not established.
+
+### Code
+
+- `NativeImpl::IntToString` in `pcx-script` runs `I2S` when the declaration is `integer -> string`.
+- `DoNotSaveReplay` in `pcx-play` `game_exit_host.rs`.
+- `native_campaign::tests`: `selected_install_change_level_startup_probe` (indexed parent
+  `PCX_NATIVE_CHAPTER_PARENT` runs, the `ChangeLevel` native is called on its host, and the exit, transition and
+  startup systems admit `PCX_NATIVE_CHAPTER_MAP`) and `selected_install_credits_button_startup_probe` (the
+  `CreditsButton` activation reaches `launch_credits`). The locked-chapter probe is unchanged; it and the
+  change-level probe now share `enqueued_chapter_app`. The change-level probe calls the native directly, which is the
+  call both `SaveAndChangeLevelBJ` and `CustomVictoryOkBJ` make; it skips the parent's `Export_All` triggers and
+  `SaveGame`, so the child starts with an empty cache.
+
+### Probe results
+
+First refusal, one run each, headless through `.scratch/run-asset-gate.sh`. "Parent" is the indexed map that
+calls `ChangeLevel`. The OrcX02 hub and OrcX03a do not start (`UnitAddItem`: `AIad` code `AHad` on `blba`, a
+held aura class that another lane owns), so the OrcX02 children and OrcX03b were also run from the `OrcX01`
+parent, which starts. That run shows only each child's own refusals. It is not their authored route.
+
+| Map | Probe, parent | Result |
+|---|---|---|
+| WarCraftIIICredits | credits button | `GetGameTypeSelected` unsupported (`Blizzard.j:9726`); only this map calls it |
+| BonusCredits | `ChangeLevel` from NightElf07 | passes, `executed_units=271` |
+| War3XRegularCreditsIce | credits button | passes, `executed_units=6` (was `DoNotSaveReplay`) |
+| War3XBonusCredits | `ChangeLevel` from UndeadX08 | passes, `executed_units=34` (was `DoNotSaveReplay`) |
+| OrcX01_02 / _03 / _04 / _05 | `ChangeLevel` from OrcX01 | pass, 84 / 101 / 265 / 68 (was `I2S`) |
+| OrcX02_02, _04, _05, _06, _07, _08, _09, _10 | `ChangeLevel` from OrcX02 | parent refuses `AIad`; from OrcX01: 325 / 355 / 206 / 300 / 68 / 53 / 127 / 16 |
+| OrcX02_03 | `ChangeLevel` from OrcX02 | parent refuses `AIad`; from OrcX01: `UnitAddItemToSlotById`, unsupported passive ability `ANss` on `spsh` (`ANss` is an item row with Cool 40 and no passive class, a castable shield; not decoded) |
+| OrcX03b | `ChangeLevel` from OrcX03a | parent and child both refuse `AIad` on `blba` |
+
+Stays refused: `GetGameTypeSelected` (campaign launch value open), `AIad`/`AHad` and `ANss` held abilities,
+`SaveGame`/`SaveGameExists`/`LoadGame` and the revisit of a zone, `R2S` and the other string natives.
+The credits map's `0x47afb7` start-up check and the effect of `0x5ac290` on UI object 13 are decoded only as far as
+stated above.

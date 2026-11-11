@@ -1697,6 +1697,10 @@ pub(crate) mod tests {
         map_script_session::MapScriptSession,
     };
 
+    /// Diagnostic bound and pacing for the probe's wait on worker admission, not a game timing.
+    const CHANGE_LEVEL_UPDATE_LIMIT: u32 = 4000;
+    const CHANGE_LEVEL_UPDATE_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+
     const FIXTURE: &str = "[Index]\nCampaignList=\"Tutorial\",\"Human\"\n[Tutorial]\nHeader=\"Prologue\"\nName=\"Exodus\"\nDefaultOpen=1\nBackground=\"TutorialBackdrop\"\nMission0=\"Chapter One\",\"Chasing\",\"Maps\\Prologue01.w3m\"\nMission1=\"Chapter Two\",\"Departures\",\"Maps\\Prologue02.w3m\"\n[Human]\nHeader=\"Human Campaign\"\nName=\"The Scourge\"\nMission0=\"Chapter One\",\"Defense\",\"Maps\\Human01.w3m\"\n";
 
     #[test]
@@ -1709,29 +1713,137 @@ pub(crate) mod tests {
     #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP and PCX_NATIVE_CHAPTER_ADDON; enqueues the chapter directly because a fresh profile cannot open its campaign from the menu (default_open is false)"]
     fn selected_install_locked_chapter_startup_probe() {
         let (install_dir, map, expansion) = selected_chapter_env();
+        drop(enqueued_chapter_app(install_dir, &map, expansion));
+    }
+
+    /// Starts `PCX_NATIVE_CHAPTER_MAP` the way a script's `ChangeLevel` does: the indexed
+    /// parent named by `PCX_NATIVE_CHAPTER_PARENT` runs, its script calls the `ChangeLevel`
+    /// native, and the exit, transition and startup systems admit the target member.
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP, PCX_NATIVE_CHAPTER_ADDON and PCX_NATIVE_CHAPTER_PARENT (an indexed map whose script reaches MAP by ChangeLevel)"]
+    fn selected_install_change_level_startup_probe() {
+        use pcx_script::{Host, Value};
+        let (install_dir, map, expansion) = selected_chapter_env();
+        let parent = std::env::var("PCX_NATIVE_CHAPTER_PARENT").expect(
+            "set PCX_NATIVE_CHAPTER_PARENT to the indexed map whose script calls ChangeLevel",
+        );
+        let (mut app, indexed_recipe) = enqueued_chapter_app(install_dir, &parent, expansion);
+        let mut runtime = peacecraft3::campaign_runtime::CampaignRuntime::new(
+            std::time::Duration::from_secs_f64(1.0 / 64.0),
+            8,
+            65536,
+        );
+        runtime.paused = true;
+        peacecraft3::campaign_runtime::install(&mut app, runtime);
+        peacecraft3::campaign_score::install(&mut app);
+        let parent_context = {
+            let mut session = app
+                .world_mut()
+                .resource_mut::<MapScriptSession<MapStartupHost>>();
+            let context = Arc::clone(session.context().expect("parent published a session"));
+            // The native call SaveAndChangeLevelBJ and CustomVictoryOkBJ make, without scores.
+            session
+                .host()
+                .expect("parent host")
+                .native(
+                    "ChangeLevel",
+                    &[Value::Str(map.clone()), Value::Bool(false)],
+                )
+                .expect("ChangeLevel records its request");
+            context
+        };
+        // Admission runs on workers: update until the child's session replaces the parent's
+        // or its startup reports an error.
+        for _ in 0..CHANGE_LEVEL_UPDATE_LIMIT {
+            app.update();
+            let startup_failed = app
+                .world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_some();
+            let replaced = app
+                .world()
+                .resource::<MapScriptSession<MapStartupHost>>()
+                .context()
+                .is_some_and(|context| !Arc::ptr_eq(context, &parent_context));
+            if startup_failed || replaced {
+                break;
+            }
+            std::thread::sleep(CHANGE_LEVEL_UPDATE_PAUSE);
+        }
+        let transition = app
+            .world()
+            .resource::<peacecraft3::campaign_runtime::CampaignTransition>();
+        assert!(
+            transition.last_error.is_none(),
+            "ChangeLevel transition: {:?}",
+            transition.last_error
+        );
+        let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
+        assert!(
+            session
+                .context()
+                .is_none_or(|context| !Arc::ptr_eq(context, &parent_context)),
+            "the parent session must end"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<MapRequests>()
+                .bindings
+                .as_ref()
+                .expect("child bindings")
+                .receipts
+                .map
+                .path,
+            pcx_assets::AssetPath::new(&map).unwrap(),
+            "the child member must be the admitted map"
+        );
+        println!("change-level parent={parent}");
+        assert_published_chapter(&mut app, &map, indexed_recipe, true);
+    }
+
+    /// Drives the authored Credits button for the edition `PCX_NATIVE_CHAPTER_ADDON` and checks
+    /// that it reaches `PCX_NATIVE_CHAPTER_MAP`.
+    #[test]
+    #[ignore = "requires PCX_NATIVE_CHAPTER_INSTALL, PCX_NATIVE_CHAPTER_MAP (the credits map MiscUI selects) and PCX_NATIVE_CHAPTER_ADDON"]
+    fn selected_install_credits_button_startup_probe() {
+        let (install_dir, map, expansion) = selected_chapter_env();
         let mut app = chapter_app(install_dir, expansion);
-        let (campaign, mission, indexed_recipe) = locate_chapter(&app, &map);
-        app.world_mut()
-            .run_system_once(
-                move |launcher: Res<crate::launch_gui::Launcher>,
-                      inbox: Res<ConfigurationInbox>,
-                      mut chapters: ResMut<Chapters>| {
-                    let entry = &chapters.campaigns[campaign];
-                    let source = &entry.missions[mission];
-                    let chapter = Chapter {
-                        campaign: entry.title.clone(),
-                        header: source.header.clone(),
-                        name: source.name.clone(),
-                        map: source.map.clone(),
-                    };
-                    enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+        let indexed_recipe = app
+            .world()
+            .resource::<Chapters>()
+            .recipe
+            .clone()
+            .expect("index retains its recipe");
+        let button = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::glue_menu::GlueButton {
+                    frame: "CreditsButton".to_string(),
+                    shortcut: None,
+                    pushed_text_offset: None,
                 },
-            )
-            .expect("probe system runs");
+                Node::default(),
+            ))
+            .id();
+        app.world_mut().trigger(Activate { entity: button });
         for _ in 0..6 {
             app.update();
         }
-        assert_published_chapter(&mut app, &map, indexed_recipe);
+        assert_eq!(
+            app.world()
+                .resource::<MapRequests>()
+                .bindings
+                .as_ref()
+                .expect("credits bindings")
+                .receipts
+                .map
+                .path,
+            pcx_assets::AssetPath::new(&map).unwrap(),
+            "the Credits button must admit the MiscUI-selected map"
+        );
+        assert_published_chapter(&mut app, &map, indexed_recipe, false);
     }
 
     #[test]
@@ -2138,6 +2250,39 @@ pub(crate) mod tests {
         (campaign, mission, indexed_recipe)
     }
 
+    /// An app that launched the indexed chapter `map` by enqueuing it directly, as a fresh
+    /// profile cannot open a locked campaign from the menu, and the recipe its index pinned.
+    fn enqueued_chapter_app(
+        install_dir: String,
+        map: &str,
+        expansion: bool,
+    ) -> (App, Arc<CampaignRecipe>) {
+        let mut app = chapter_app(install_dir, expansion);
+        let (campaign, mission, indexed_recipe) = locate_chapter(&app, map);
+        app.world_mut()
+            .run_system_once(
+                move |launcher: Res<crate::launch_gui::Launcher>,
+                      inbox: Res<ConfigurationInbox>,
+                      mut chapters: ResMut<Chapters>| {
+                    let entry = &chapters.campaigns[campaign];
+                    let source = &entry.missions[mission];
+                    let chapter = Chapter {
+                        campaign: entry.title.clone(),
+                        header: source.header.clone(),
+                        name: source.name.clone(),
+                        map: source.map.clone(),
+                    };
+                    enqueue_chapter(&launcher, &inbox, &mut chapters, &chapter);
+                },
+            )
+            .expect("probe system runs");
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_published_chapter(&mut app, map, Arc::clone(&indexed_recipe), true);
+        (app, indexed_recipe)
+    }
+
     pub(crate) fn started_app() -> App {
         let (install_dir, map, expansion) = selected_chapter_env();
         let mut app = chapter_app(install_dir, expansion);
@@ -2153,13 +2298,18 @@ pub(crate) mod tests {
         for _ in 0..6 {
             app.update();
         }
-        assert_published_chapter(&mut app, &map, indexed_recipe);
+        assert_published_chapter(&mut app, &map, indexed_recipe, true);
         app
     }
 
-    /// Asserts that the configured chapter published its admitted session and that its
-    /// unchanged main created units, then prints the probe line.
-    fn assert_published_chapter(app: &mut App, map: &str, indexed_recipe: Arc<CampaignRecipe>) {
+    /// Asserts that the configured chapter published its admitted session, then prints the
+    /// probe line. `requires_units` also asserts that its unchanged main created units.
+    fn assert_published_chapter(
+        app: &mut App,
+        map: &str,
+        indexed_recipe: Arc<CampaignRecipe>,
+        requires_units: bool,
+    ) {
         let chapters = app.world().resource::<Chapters>();
         assert!(
             chapters.error.is_none(),
@@ -2252,7 +2402,10 @@ pub(crate) mod tests {
             assert_eq!(mode.image_sha256, recipe.image_sha256());
             objects.executed_units().count()
         };
-        assert!(units > 0, "unchanged chapter main must create units");
+        assert!(
+            !requires_units || units > 0,
+            "unchanged chapter main must create units"
+        );
         println!("chapter={map} seed=1 executed_units={units} published=true");
     }
 
