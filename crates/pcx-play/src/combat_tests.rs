@@ -5868,24 +5868,18 @@ fn unsupported_immediate_order_retains_error_and_reports_bounded_actual_context_
 }
 
 #[test]
-fn entangle_target_order_names_the_undecoded_gold_mine_conversion() {
+fn entangle_orders_without_an_entangle_ability_issue_nothing_and_the_timed_form_names_its_stage() {
     let (mut vm, a, b) = open(&armed("64", "normal"));
     let h = &mut vm.host().inner;
-    let error = h
-        .native(
+    let issue = |h: &mut ObjectHost, text: &str| {
+        h.native(
             "IssueTargetOrder",
-            &[
-                Value::Handle(a),
-                Value::Str("entangleinstant".into()),
-                Value::Handle(b),
-            ],
+            &[Value::Handle(a), Value::Str(text.into()), Value::Handle(b)],
         )
-        .unwrap_err();
-    assert!(
-        error.contains("entangle conversion of a gold mine is not decoded"),
-        "{error}"
-    );
-    assert!(!error.contains("only the attack target order"), "{error}");
+    };
+    assert_eq!(issue(h, "entangleinstant").unwrap(), Value::Bool(false));
+    let error = issue(h, "entangle").unwrap_err();
+    assert!(error.contains("timed entangle stage"), "{error}");
 }
 
 #[test]

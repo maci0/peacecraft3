@@ -1699,6 +1699,8 @@ mod holy_light;
 #[path = "chain_lightning_host.rs"]
 mod chain_lightning;
 
+#[path = "entangle_host.rs"]
+mod entangle;
 #[path = "unit_curse_host.rs"]
 mod unit_curse;
 

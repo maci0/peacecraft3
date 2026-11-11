@@ -38,6 +38,8 @@ const ORDER_BY_ID: &str = "IssueTargetOrderById";
 /// Registry name of the ground-attack point order.
 const GROUND_ORDER: &str = "attackground";
 const KILL: &str = "KillUnit";
+/// Cargo load order text.
+const CARGO_LOAD: &str = "load";
 
 pub(super) const ABSENT_MISSILE_SPEED: &str =
     "missile launch needs Missilespeed, absent from the unit profile";
@@ -1314,6 +1316,44 @@ impl ObjectHost {
         }
     }
 
+    /// Whether `order` is the registered cargo `load` order (`0xd004e`).
+    fn cargo_load_order(&self, order: i32) -> bool {
+        self.order_registry
+            .as_ref()
+            .and_then(|registry| registry.id(CARGO_LOAD))
+            == Some(order)
+    }
+
+    /// `IssueTargetOrder(unit, "load", target)`. Only a cargo-load class ability (`Aloa`
+    /// family, getter `0xb4b840`) answers order `0xd004e`; `0x6a19a0` returns `0xdd` for a unit
+    /// with no ability that answers it, and `0x49b060` then issues nothing and returns false.
+    /// A unit that has such an ability refuses: the load itself is not decoded.
+    fn order_cargo_load(&self, caster: HandleId, target: &Value) -> Result<Value, Error> {
+        let mut claimed = false;
+        let Some(abilities) = self.executed_unit(caster)?.abilities.as_ref() else {
+            return Ok(Value::Bool(false));
+        };
+        for (alias, level) in abilities.levels() {
+            if level <= 0 {
+                continue;
+            }
+            let orders = self.hero_ability_profiles(alias, "Order").map_err(|why| {
+                self.inner
+                    .error(ORDER, Failure::UnitActivity(format!("cargo load: {why}")))
+            })?;
+            claimed |= orders.iter().any(|name| name == CARGO_LOAD);
+        }
+        if !claimed {
+            return Ok(Value::Bool(false));
+        }
+        Err(self.inner.error(
+            ORDER,
+            Failure::UnitActivity(format!(
+                "cargo load by a cargo-load ability is not decoded: unit={caster:?} target={target:?}"
+            )),
+        ))
+    }
+
     pub(super) fn combat_native(
         &mut self,
         name: &str,
@@ -1382,9 +1422,20 @@ impl ObjectHost {
                 if aimless {
                     return Ok(Value::Bool(false));
                 }
+                if let (Some(id), Value::Handle(caster)) = (order, unit)
+                    && self.cargo_load_order(id)
+                {
+                    return self.order_cargo_load(*caster, target);
+                }
+                if let (Value::Str(text), Value::Handle(caster), Value::Handle(mine)) =
+                    (&args[1], unit, target)
+                    && text == super::entangle::INSTANT_ORDER
+                {
+                    return Ok(Value::Bool(self.order_entangle_instant(*caster, *mine)?));
+                }
                 let detail = match &args[1] {
-                    Value::Str(text) if text == "entangle" || text == "entangleinstant" => {
-                        "entangle conversion of a gold mine is not decoded (approach and flag are, input-smart-order.md)"
+                    Value::Str(text) if text == super::entangle::TIMED_ORDER => {
+                        "the timed entangle stage (Cast1) is not decoded (entangle-mine-conversion.md)"
                     }
                     _ => "only the attack target order is supported",
                 };

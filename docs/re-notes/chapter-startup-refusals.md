@@ -368,3 +368,17 @@ their decode is under "Open held classes" in the same file.
 | RoC Human09 | `AIrc` on `ankh` | unchanged, now with the reincarnation reason |
 | RoC Undead02 | `AIms` on `bspd` | unchanged, now with the speed-multiplier reason |
 | TFT UndeadX02 | `AIpb` on `oven` | unchanged, now with the poison reason |
+
+## Probe results (2026-11-11, night elf target orders)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is `c8032ac5`, "after"
+is this lane. Decode and rules: [entangle-mine-conversion.md](entangle-mine-conversion.md),
+[worker-harvest-orders.md](worker-harvest-orders.md), [ability-autocast-off.md](ability-autocast-off.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf06 | `IssueTargetOrder` `entangleinstant`: conversion not decoded | probe passes (exit 0, `executed_units=211`) |
+| TFT NightElfX04 | `IssueTargetOrder` `entangleinstant`: conversion not decoded | passes `entangleinstant`; `IssueImmediateOrder` `rechargeon` on `emow` unsupported (autocast ON class, not started) |
+| RoC NightElf02 | `IssueTargetOrder` `load`: only the attack target order is supported | passes `load` (returns false: the Orc Burrow has no cargo-load ability); native `UnitId` unsupported (`Blizzard.j:2998`) |
+| TFT NightElfX06 | `autoharvestlumber`: worker lacks the attack work sequence | passes the work animation; wisp harvest refused: unit has no `Ahar` harvest capability (`Awha` is a different harvest class, not started) |
+| RoC Undead03 | `IssueImmediateOrder` `townbelloff` unsupported | passes `townbelloff` (no militia, returns false); `SetUnitState` refused: arguments do not match the unit native declaration |

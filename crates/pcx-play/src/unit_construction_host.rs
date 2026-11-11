@@ -1104,7 +1104,7 @@ impl ObjectHost {
         Ok(true)
     }
 
-    fn hide_linked_mine(&mut self, mine: HandleId) -> Result<i32, Error> {
+    pub(super) fn hide_linked_mine(&mut self, mine: HandleId) -> Result<i32, Error> {
         let source = self.executed_unit(mine)?;
         if !source.shown || source.combat.as_ref().is_some_and(|state| state.dead) {
             return Err(self.construction_error("linked mine is not a shown living source"));
@@ -1117,7 +1117,7 @@ impl ObjectHost {
         Ok(gold)
     }
 
-    fn show_linked_mine(&mut self, mine: HandleId) -> Result<(), Error> {
+    pub(super) fn show_linked_mine(&mut self, mine: HandleId) -> Result<(), Error> {
         let prepared = self.prepare_unit_visibility(mine, true, "construction")?;
         self.commit_unit_visibility(mine, prepared, "construction")?;
         Ok(())
