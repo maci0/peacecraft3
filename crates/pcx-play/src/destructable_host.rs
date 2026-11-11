@@ -8,6 +8,7 @@ use super::super::{Entry, Error, Failure, below};
 use super::ObjectHost;
 use crate::{
     camera_margins::SourceWindow,
+    inventory_powerup_host::round_life,
     neutral_player::{RuleInputBudget, Sha256Digest, sha256},
     neutral_rule_input::Pe,
     scripts::AssetIdentity,
@@ -700,7 +701,11 @@ pub struct PlacedDestructable {
     pub source: PlacedSource,
 }
 
-const RUNTIME: [(&str, &[&str], &str); 13] = [
+/// Life a living destructable keeps after a maximum-life change. Dead
+/// destructables keep zero (`0x6be8c0`, the mode-1 pool floor).
+const LIVING_LIFE_FLOOR: f32 = 1.0;
+
+const RUNTIME: [(&str, &[&str], &str); 14] = [
     (
         "SetDestructableInvulnerable",
         &["destructable", "boolean"],
@@ -715,6 +720,11 @@ const RUNTIME: [(&str, &[&str], &str); 13] = [
     ("GetDestructableLife", &["destructable"], "real"),
     ("GetDestructableMaxLife", &["destructable"], "real"),
     ("SetDestructableLife", &["destructable", "real"], "nothing"),
+    (
+        "SetDestructableMaxLife",
+        &["destructable", "real"],
+        "nothing",
+    ),
     (
         "DestructableRestoreLife",
         &["destructable", "real", "boolean"],
@@ -1136,6 +1146,53 @@ impl ObjectHost {
         }))
     }
 
+    /// `SetDestructableMaxLife` (`0x4a7bc0`, then the mode-1 pool path `0x6be8c0`).
+    /// The zero check uses the unrounded change; the change then rounds half
+    /// upward. Current life keeps its ratio to the new maximum, rounded half
+    /// upward, and a living destructable keeps at least [`LIVING_LIFE_FLOOR`].
+    /// A dead destructable stays dead at zero life, and no death event is queued.
+    /// Nonpositive results are not decoded and refuse before any write.
+    fn set_destructable_max_life(
+        &mut self,
+        id: HandleId,
+        name: &str,
+        value: f32,
+    ) -> Result<(), Error> {
+        let (old_max, life) = match self.inner.entry(id) {
+            Ok(Entry::Destructable { state, .. }) => match (state.max_life, state.life) {
+                (Some(max_life), Some(life)) => (max_life, life),
+                _ => {
+                    return Err(self
+                        .inner
+                        .error(name, Failure::DestructableState("catalog HP not resolved")));
+                }
+            },
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        let change = value - old_max;
+        if change == 0.0 {
+            return Ok(());
+        }
+        let new_max = old_max + round_life(change);
+        if !new_max.is_finite() || new_max <= 0.0 {
+            return Err(self.inner.error(
+                name,
+                Failure::DestructableState("nonpositive maximum life is not decoded"),
+            ));
+        }
+        let ratio = if old_max == 0.0 { 0.0 } else { life / old_max };
+        let floor = if life <= 0.0 { 0.0 } else { LIVING_LIFE_FLOOR };
+        let new_life = round_life(new_max * ratio).max(floor);
+        match self.inner.entry_mut(id) {
+            Ok(Entry::Destructable { state, .. }) => {
+                state.max_life = Some(new_max);
+                state.life = Some(new_life);
+            }
+            _ => unreachable!("checked destructable entry"),
+        }
+        Ok(())
+    }
+
     fn commit_life(&mut self, plan: LifePlan) {
         match self.inner.entry_mut(plan.id) {
             Ok(Entry::Destructable { state, .. }) => {
@@ -1300,6 +1357,13 @@ impl ObjectHost {
                 return Err(self.inner.error(name, Failure::Signature));
             };
             self.record_destructable_animation(id, name, clip)?;
+            return Ok(Value::Null);
+        }
+        if name == "SetDestructableMaxLife" {
+            let [Value::Real(value)] = rest else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            self.set_destructable_max_life(id, name, *value)?;
             return Ok(Value::Null);
         }
         if DEATH_NATIVES.contains(&name) {
@@ -1519,7 +1583,9 @@ fn runtime_signature(name: &str, rest: &[Value]) -> bool {
         | "GetDestructableTypeId"
         | "GetDestructableLife"
         | "GetDestructableMaxLife" => rest.is_empty(),
-        "SetDestructableLife" => matches!(rest, [Value::Real(value)] if value.is_finite()),
+        "SetDestructableLife" | "SetDestructableMaxLife" => {
+            matches!(rest, [Value::Real(value)] if value.is_finite())
+        }
         "SetDestructableAnimation" | "QueueDestructableAnimation" => {
             matches!(rest, [Value::Str(_)])
         }

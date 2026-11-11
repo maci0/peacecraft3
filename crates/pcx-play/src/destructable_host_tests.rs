@@ -290,7 +290,7 @@ fn create(host: &mut ObjectHost, objectid: i32, variation: i32) -> Result<Value,
 fn life_declarations() -> String {
     let mut text = DECLARATIONS.to_string();
     text.push_str(
-        "native GetDestructableLife takes destructable whichDestructable returns real\nnative GetDestructableMaxLife takes destructable whichDestructable returns real\nnative SetDestructableLife takes destructable whichDestructable, real life returns nothing\nnative KillDestructable takes destructable whichDestructable returns nothing\nnative SetDestructableInvulnerable takes destructable whichDestructable, boolean flag returns nothing\nnative IsDestructableInvulnerable takes destructable whichDestructable returns boolean\nnative CreateDeadDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\n",
+        "native GetDestructableLife takes destructable whichDestructable returns real\nnative GetDestructableMaxLife takes destructable whichDestructable returns real\nnative SetDestructableLife takes destructable whichDestructable, real life returns nothing\nnative SetDestructableMaxLife takes destructable whichDestructable, real life returns nothing\nnative KillDestructable takes destructable whichDestructable returns nothing\nnative SetDestructableInvulnerable takes destructable whichDestructable, boolean flag returns nothing\nnative IsDestructableInvulnerable takes destructable whichDestructable returns boolean\nnative CreateDeadDestructable takes integer objectid, real x, real y, real face, real scale, integer variation returns destructable\n",
     );
     text
 }
@@ -934,6 +934,144 @@ fn runtime_validates_the_complete_signature_before_a_null_target() {
     assert_eq!(host.destructable_state(id).unwrap(), state);
     let wrong_family = host
         .native("GetDestructableLife", &[Value::Int(0)])
+        .unwrap_err();
+    assert!(wrong_family.contains("another family"), "{wrong_family}");
+}
+
+fn life_tree(host: &mut ObjectHost) -> HandleId {
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    match host
+        .native("CreateDestructable", &payload(objectid, 0))
+        .unwrap()
+    {
+        Value::Handle(id) => id,
+        other => panic!("destructable handle, got {other:?}"),
+    }
+}
+
+fn set_max_life(host: &mut ObjectHost, id: HandleId, max_life: f32) -> Result<Value, String> {
+    host.native(
+        "SetDestructableMaxLife",
+        &[Value::Handle(id), Value::Real(max_life)],
+    )
+}
+
+#[test]
+fn set_destructable_max_life_keeps_the_life_ratio() {
+    let mut host = life_host(4);
+    let id = life_tree(&mut host);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(25.0)],
+    )
+    .unwrap();
+    set_max_life(&mut host, id, 100.0).unwrap();
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!(state.max_life, Some(100.0));
+    assert_eq!(state.life, Some(50.0));
+    assert!(!state.dead);
+}
+
+#[test]
+fn set_destructable_max_life_rounds_the_change_then_the_ratio_half_upward() {
+    let mut host = life_host(4);
+    let id = life_tree(&mut host);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(25.3)],
+    )
+    .unwrap();
+    // The change 0.2 is nonzero, so the write happens, but it rounds to zero:
+    // the maximum stays 50 and 25.3 becomes round(25.3) = 25.
+    set_max_life(&mut host, id, 50.2).unwrap();
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!((state.max_life, state.life), (Some(50.0), Some(25.0)));
+    // The change 0.6 rounds to 1: maximum 51, ratio 0.5, round(25.5) = 26.
+    set_max_life(&mut host, id, 50.6).unwrap();
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!((state.max_life, state.life), (Some(51.0), Some(26.0)));
+}
+
+#[test]
+fn set_destructable_max_life_with_no_change_leaves_life_untouched() {
+    let mut host = life_host(4);
+    let id = life_tree(&mut host);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(25.3)],
+    )
+    .unwrap();
+    // Zero change stops before any write, so the fractional life survives.
+    set_max_life(&mut host, id, 50.0).unwrap();
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!((state.max_life, state.life), (Some(50.0), Some(25.3)));
+}
+
+#[test]
+fn set_destructable_max_life_floors_a_living_destructable_at_one_hit_point() {
+    let mut host = life_host(4);
+    let id = life_tree(&mut host);
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(0.4)],
+    )
+    .unwrap();
+    // round(10 * 0.4 / 50) = 0, so the living floor of one applies.
+    set_max_life(&mut host, id, 10.0).unwrap();
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!((state.max_life, state.life), (Some(10.0), Some(1.0)));
+    assert!(!state.dead);
+}
+
+#[test]
+fn set_destructable_max_life_keeps_a_dead_destructable_dead() {
+    let mut host = life_host(4);
+    let id = life_tree(&mut host);
+    host.native("KillDestructable", &[Value::Handle(id)])
+        .unwrap();
+    set_max_life(&mut host, id, 80.0).unwrap();
+    let state = host.destructable_state(id).unwrap();
+    assert_eq!(
+        state,
+        DestructableState {
+            dead: true,
+            life: Some(0.0),
+            max_life: Some(80.0),
+            ..DestructableState::default()
+        }
+    );
+    // Only a later positive life write revives it.
+    host.native(
+        "SetDestructableLife",
+        &[Value::Handle(id), Value::Real(10.0)],
+    )
+    .unwrap();
+    assert!(!host.destructable_state(id).unwrap().dead);
+}
+
+#[test]
+fn set_destructable_max_life_refuses_a_nonpositive_maximum_without_writes() {
+    let mut host = life_host(4);
+    let id = life_tree(&mut host);
+    let before = host.destructable_state(id).unwrap();
+    let error = set_max_life(&mut host, id, 0.0).unwrap_err();
+    assert!(error.contains("nonpositive maximum life"), "{error}");
+    assert_eq!(host.destructable_state(id).unwrap(), before);
+}
+
+#[test]
+fn set_destructable_max_life_null_is_ignored_and_other_families_refuse() {
+    let mut host = life_host(4);
+    assert_eq!(
+        host.native("SetDestructableMaxLife", &[Value::Null, Value::Real(10.0)])
+            .unwrap(),
+        Value::Null
+    );
+    let wrong_family = host
+        .native(
+            "SetDestructableMaxLife",
+            &[Value::Int(0), Value::Real(10.0)],
+        )
         .unwrap_err();
     assert!(wrong_family.contains("another family"), "{wrong_family}");
 }

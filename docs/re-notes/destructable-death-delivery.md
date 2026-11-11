@@ -84,6 +84,60 @@ contexts. False conditions skip the action without queuing a second event.
 Callback errors abort the synchronous delivery, thread contexts and native
 callback frames. Runaway nesting stops at the VM's existing spawn-depth budget.
 
+## Maximum life (`SetDestructableMaxLife`)
+
+Image: Legacy `Warcraft III.exe` 1.29.2.9231, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`. Native
+code evidence only (static disassembly); no original-client run of this native.
+The name is at VA `0xe7188c`, the signature `(Hdestructable;R)V` at `0xe71850`,
+and the registration row (push signature, name, handler, `call 0x8ccc80`) is at
+`0x49d13c`. The handler is `0x4a7bc0`.
+
+Steps, all observed in the disassembly:
+
+1. The handle resolves to the destructable object through `0x481470`. A null
+   handle writes nothing.
+2. The old maximum is read through the object's virtual slot `+0x130`
+   (`0x6cf000`, which returns object `+0x174`). The change is `new - old`
+   (`0x9a00b0`, float subtraction).
+3. The change goes to the shared pool routine `0x6be8c0` with mode 1, the same
+   routine the unit maximum-life changes use (see `upgrade-effects.md`).
+   - A zero change, tested before rounding, returns with no write (`0x6be8f0`).
+   - The change rounds to `floor(x + 0.5)`: `0x9a1d70` adds the float at VA
+     `0x10db0a8` (0.5) through `0x9a01c0`, then floors through `0x9a1520`.
+   - The ratio is `life / maximum`, read through slot `+0x12c`, or 0 when the
+     maximum is 0 (`0x635990`).
+   - The new maximum is `old + rounded change` (`0x9a01c0`), written through
+     slot `+0x144` (`0x6cf070`, which writes object `+0x174`).
+   - The new life is `round(ratio * new maximum)` (`0x99ffe0`, `0x9a1d70`).
+   - The life floor comes from slot `+0x13c` (`0x664bb0`, true when life is at
+     most 0): a dead object floors at 0.0, a living object at the value in
+     memory at VA `0x112d810`. That address is zero in the file image, so its
+     runtime value is not read here. The living floor of 1 is the observed
+     behavior of unit pools (see `passive-max-life.md`).
+   - The life is `max(new life, floor)`, written through slot `+0x124`
+     (`0x6cee60`).
+   - Slot `+0x10` (`0x83edd0`) runs after the write. Its meaning is not decoded.
+
+Rule in plain words: the maximum moves by the rounded change. A living
+destructable keeps its life/maximum ratio, rounded half upward, and never drops
+below one hit point. A dead destructable stays at zero life. A change that rounds
+to zero still rewrites life, since only the unrounded zero check skips the write.
+
+Inferred, not observed: the change queues no death event and leaves the collision
+state alone, because a dead tree stays at zero and a living tree stays above zero.
+The full body of `0x6cee60` (the life writer) is not decoded.
+
+Refused, not decoded: a new maximum at or below zero. The native writes it with
+no check, and the life clamp and death path for that case are unread. The
+recreation returns a precise error before any write.
+
+Implemented in `destructable_host.rs` (`set_destructable_max_life`) with
+synthetic tests in `destructable_host_tests.rs`
+(`set_destructable_max_life_*`). Chapters that call it (scan of every campaign
+map's `war3map.j`): RoC `Orc03`, `NightElf03`, `Orc08`; TFT `HumanX03`,
+`NightElfX08`, `OrcX02_02`.
+
 ## Evidence
 
 Synthetic owned-VM tests in `death_event_tests.rs` cover synchronous setters,
