@@ -536,3 +536,35 @@ fn cinematic_subtitles_retain_the_executed_flag_without_a_default() {
         assert!(h.admit_presentation(64).is_err());
     }
 }
+
+#[test]
+fn multiboard_suppression_retains_the_executed_flag_without_a_default() {
+    let native = "native MultiboardSuppressDisplay takes boolean flag returns nothing\n";
+    let common = format!("{COMMON}{native}");
+    let mut h = host(&common, "// map");
+    h.admit_presentation(64).unwrap();
+    assert_eq!(h.presentation().unwrap().multiboard_suppressed, None);
+    for suppressed in [true, false, true] {
+        assert_eq!(
+            h.native("MultiboardSuppressDisplay", &[Value::Bool(suppressed)])
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            h.presentation().unwrap().multiboard_suppressed,
+            Some(suppressed)
+        );
+    }
+    for args in [
+        vec![],
+        vec![Value::Null],
+        vec![Value::Int(0)],
+        vec![Value::Bool(true), Value::Bool(true)],
+    ] {
+        assert!(h.native("MultiboardSuppressDisplay", &args).is_err());
+        assert_eq!(h.presentation().unwrap().multiboard_suppressed, Some(true));
+    }
+    assert_eq!(h.presentation().unwrap().cinematic_subtitles, None);
+    let wrong = common.replace("takes boolean flag", "takes integer flag");
+    assert!(host(&wrong, "// map").admit_presentation(64).is_err());
+}

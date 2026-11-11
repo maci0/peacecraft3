@@ -60,6 +60,10 @@ pub struct PresentationState {
     pub world_fog_boundary: Option<bool>,
     /// Executed `ForceCinematicSubtitles` flag. Absent until a script sets it.
     pub cinematic_subtitles: Option<bool>,
+    /// Executed `MultiboardSuppressDisplay` flag (UI object `+0x3f0`, `docs/re-notes/multiboard-suppress-display.md`).
+    /// Absent until a script sets it. The recreation draws no multiboard, so the flag is
+    /// retained and not yet consumed.
+    pub multiboard_suppressed: Option<bool>,
     /// Executed `SetWaterBaseColor` channels (red, green, blue, alpha), each 0 to 255.
     /// The water renderer does not read this yet: the `Water.slk` colour cells stay
     /// raw, and no evidence establishes how a base colour combines with the frame
@@ -83,6 +87,7 @@ const CONTRACTS: &[(&str, &[&str])] = &[
     ("EnableUserControl", &["boolean"]),
     ("ShowInterface", &["boolean", "real"]),
     ("ForceCinematicSubtitles", &["boolean"]),
+    ("MultiboardSuppressDisplay", &["boolean"]),
     ("SetCineFilterTexture", &["string"]),
     ("SetCineFilterBlendMode", &["blendmode"]),
     ("SetCineFilterTexMapFlags", &["texmapflags"]),
@@ -285,6 +290,16 @@ impl ObjectHost {
                 .as_mut()
                 .expect("admitted")
                 .cinematic_subtitles = Some(*shown);
+            return Ok(Value::Null);
+        }
+        if name == "MultiboardSuppressDisplay" {
+            let [Value::Bool(suppressed)] = args else {
+                return Err(fail("expected multiboard suppression boolean"));
+            };
+            self.presentation
+                .as_mut()
+                .expect("admitted")
+                .multiboard_suppressed = Some(*suppressed);
             return Ok(Value::Null);
         }
         if name == "DisplayCineFilter" {
