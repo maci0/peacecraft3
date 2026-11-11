@@ -707,7 +707,7 @@ fn missing_catalog_refuses_life_operations_without_inventing_hp() {
 /// Host with the two animation natives declared and no game clock.
 fn clockless_animation_host() -> ObjectHost {
     let declarations = format!(
-        "{}native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\nnative TimerGetElapsed takes timer t returns real\nnative TimerGetRemaining takes timer t returns real\nnative TimerGetTimeout takes timer t returns real\nnative GetExpiredTimer takes nothing returns timer\nnative SetDestructableAnimation takes destructable whichDestructable, string whichAnimation returns nothing\nnative QueueDestructableAnimation takes destructable whichDestructable, string whichAnimation returns nothing\n",
+        "{}native TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\nnative TimerGetElapsed takes timer t returns real\nnative TimerGetRemaining takes timer t returns real\nnative TimerGetTimeout takes timer t returns real\nnative GetExpiredTimer takes nothing returns timer\nnative SetDestructableAnimation takes destructable whichDestructable, string whichAnimation returns nothing\nnative QueueDestructableAnimation takes destructable whichDestructable, string whichAnimation returns nothing\nnative SetDestructableAnimationSpeed takes destructable whichDestructable, real speedFactor returns nothing\n",
         life_declarations()
     );
     let mut host = host_from(&declarations, "", 8)
@@ -2345,4 +2345,92 @@ fn a_fatlos_destructable_writes_its_pathing_texture_footprint_into_the_sight_gri
         .map(|(i, h)| (i % 8, i / 8, *h))
         .collect();
     assert_eq!(written, [(3, 3, 16), (4, 3, 16), (3, 4, 16), (4, 4, 16)]);
+}
+
+fn scale(animation: &Animation) -> f64 {
+    animation.clip_timing().expect("a selected clip").time_scale
+}
+
+fn speed_call(host: &mut ObjectHost, id: Value, factor: f32) -> Result<Value, String> {
+    host.native("SetDestructableAnimationSpeed", &[id, Value::Real(factor)])
+}
+
+#[test]
+fn animation_speed_scales_playback_once_and_survives_a_restart() {
+    let mut host = animation_host();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let Value::Handle(id) = create(&mut host, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    let mut animation = Animation::new(drawn_model(), 7.).unwrap();
+    let mut cursor = AnimationCursor::default();
+    drawn_at(&host, id, &mut cursor, &mut animation, 7.1).unwrap();
+    assert_eq!(scale(&animation), 1., "the native default is 1.0");
+
+    assert_eq!(
+        speed_call(&mut host, Value::Handle(id), 2.5).unwrap(),
+        Value::Null
+    );
+    drawn_at(&host, id, &mut cursor, &mut animation, 7.2).unwrap();
+    assert_eq!(scale(&animation), 2.5);
+
+    // The speed is a field of the destructable: a restart keeps it, and the
+    // log does not reapply it over a later change made through the model.
+    animation_call(&mut host, "SetDestructableAnimation", id, "birth").unwrap();
+    drawn_at(&host, id, &mut cursor, &mut animation, 7.3).unwrap();
+    assert_eq!(scale(&animation), 2.5);
+    animation.set_time_scale(1., 7.3).unwrap();
+    drawn_at(&host, id, &mut cursor, &mut animation, 7.4).unwrap();
+    assert_eq!(scale(&animation), 1., "an applied call is not reapplied");
+
+    speed_call(&mut host, Value::Handle(id), 0.).unwrap();
+    drawn_at(&host, id, &mut cursor, &mut animation, 7.5).unwrap();
+    assert_eq!(scale(&animation), 0., "zero freezes playback");
+}
+
+#[test]
+fn animation_speed_set_before_the_first_draw_applies_when_drawn() {
+    let mut host = animation_host();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let Value::Handle(id) = create(&mut host, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    speed_call(&mut host, Value::Handle(id), -1.).unwrap();
+    let mut animation = Animation::new(drawn_model(), 20.).unwrap();
+    let mut cursor = AnimationCursor::default();
+    drawn_at(&host, id, &mut cursor, &mut animation, 20.).unwrap();
+    assert_eq!(scale(&animation), -1.);
+}
+
+#[test]
+fn animation_speed_refuses_bad_arguments_and_a_missing_clock() {
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let mut host = animation_host();
+    let Value::Handle(id) = create(&mut host, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    let nan = speed_call(&mut host, Value::Handle(id), f32::NAN).unwrap_err();
+    assert!(
+        nan.contains("incompatible native/type declaration"),
+        "{nan}"
+    );
+    let wrong = host
+        .native(
+            "SetDestructableAnimationSpeed",
+            &[Value::Handle(id), Value::Int(2)],
+        )
+        .unwrap_err();
+    assert!(
+        wrong.contains("incompatible native/type declaration"),
+        "{wrong}"
+    );
+    assert_eq!(speed_call(&mut host, Value::Null, 2.).unwrap(), Value::Null);
+    assert!(host.destructable_animation(id).is_none());
+
+    let mut untimed = clockless_animation_host();
+    let Value::Handle(untimed_id) = create(&mut untimed, objectid, 0).unwrap() else {
+        panic!("destructable handle");
+    };
+    let clock = speed_call(&mut untimed, Value::Handle(untimed_id), 2.).unwrap_err();
+    assert!(clock.contains("missing game clock"), "{clock}");
 }

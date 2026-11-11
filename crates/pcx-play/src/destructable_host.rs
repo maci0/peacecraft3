@@ -284,13 +284,25 @@ pub struct AnimationRequest {
     requested: f64,
 }
 
+/// The last `SetDestructableAnimationSpeed` call. `serial` counts the calls, so a
+/// renderer can tell a new call from one it has applied.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpeedCall {
+    factor: f32,
+    requested: f64,
+    serial: u64,
+}
+
 /// A destructable's animation calls since its last `SetDestructableAnimation`.
 /// `epoch` changes on each restart, so a renderer can tell a restarted sequence
 /// from a continued one.
+/// The speed is a property of the destructable, not of the sequence, so a restart
+/// keeps it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DestructableAnimation {
     epoch: u64,
     requests: Vec<AnimationRequest>,
+    speed: Option<SpeedCall>,
 }
 
 /// A renderer's position in a [`DestructableAnimation`] log.
@@ -298,6 +310,7 @@ pub struct DestructableAnimation {
 pub struct AnimationCursor {
     epoch: u64,
     applied: usize,
+    speed_serial: u64,
 }
 
 impl DestructableAnimation {
@@ -313,6 +326,7 @@ impl DestructableAnimation {
             *cursor = AnimationCursor {
                 epoch: self.epoch,
                 applied: 0,
+                speed_serial: cursor.speed_serial,
             };
         }
         let pending = self
@@ -327,6 +341,11 @@ impl DestructableAnimation {
                 animation.select(&request.clip, at, None)?;
             }
             cursor.applied += 1;
+        }
+        if let Some(speed) = self.speed.filter(|s| s.serial != cursor.speed_serial) {
+            let at = speed.requested.max(animation.request_clock());
+            animation.set_time_scale(speed.factor, at)?;
+            cursor.speed_serial = speed.serial;
         }
         Ok(())
     }
@@ -705,7 +724,7 @@ pub struct PlacedDestructable {
 /// destructables keep zero (`0x6be8c0`, the mode-1 pool floor).
 const LIVING_LIFE_FLOOR: f32 = 1.0;
 
-const RUNTIME: [(&str, &[&str], &str); 16] = [
+const RUNTIME: [(&str, &[&str], &str); 17] = [
     (
         "SetDestructableInvulnerable",
         &["destructable", "boolean"],
@@ -738,6 +757,11 @@ const RUNTIME: [(&str, &[&str], &str); 16] = [
     (
         "QueueDestructableAnimation",
         &["destructable", "string"],
+        "nothing",
+    ),
+    (
+        "SetDestructableAnimationSpeed",
+        &["destructable", "real"],
         "nothing",
     ),
     ("GetDestructableOccluderHeight", &["destructable"], "real"),
@@ -1362,6 +1386,13 @@ impl ObjectHost {
         ) {
             return Err(self.inner.error(name, Failure::WrongFamily));
         }
+        if name == "SetDestructableAnimationSpeed" {
+            let [Value::Real(factor)] = rest else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            self.record_destructable_speed(id, name, *factor)?;
+            return Ok(Value::Null);
+        }
         if ANIMATION_NATIVES.contains(&name) {
             let Some(Value::Str(clip)) = rest.first() else {
                 return Err(self.inner.error(name, Failure::Signature));
@@ -1516,6 +1547,39 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Stores the destructable's animation speed factor. The factor is not
+    /// range-checked, so zero freezes and a negative value plays backwards, as for
+    /// units.
+    fn record_destructable_speed(
+        &mut self,
+        id: HandleId,
+        name: &str,
+        factor: f32,
+    ) -> Result<(), Error> {
+        let Some(now) = self.timer_game_time() else {
+            return Err(self
+                .inner
+                .error(name, Failure::DestructableState("missing game clock")));
+        };
+        let log = self.destructable_animations.entry(id).or_default();
+        let serial = log
+            .speed
+            .map_or(0, |s| s.serial)
+            .checked_add(1)
+            .ok_or_else(|| {
+                self.inner.error(
+                    name,
+                    Failure::DestructableState("animation speed serial overflow"),
+                )
+            })?;
+        log.speed = Some(SpeedCall {
+            factor,
+            requested: now,
+            serial,
+        });
+        Ok(())
+    }
+
     /// The script animation calls a renderer applies to this destructable's model.
     pub fn destructable_animation(&self, id: HandleId) -> Option<&DestructableAnimation> {
         self.destructable_animations.get(&id)
@@ -1637,6 +1701,9 @@ fn runtime_signature(name: &str, rest: &[Value]) -> bool {
         }
         "SetDestructableAnimation" | "QueueDestructableAnimation" => {
             matches!(rest, [Value::Str(_)])
+        }
+        "SetDestructableAnimationSpeed" => {
+            matches!(rest, [Value::Real(value)] if value.is_finite())
         }
         "DestructableRestoreLife" => {
             matches!(rest, [Value::Real(value), Value::Bool(_)] if value.is_finite())

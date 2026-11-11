@@ -36,6 +36,33 @@ clock. A destructable first drawn after a call therefore starts the clip when it
 drawn. Start times of calls made while the destructable is off-screen are not
 established.
 
+## Destructable animation speed
+
+Reviewed exe SHA-256 `3f2ed012...0eed`. `common.j` declares
+`SetDestructableAnimationSpeed takes destructable d, real speedFactor returns nothing`.
+The registration `0x49d1a8` (signature `(Hdestructable;R)V`) pushes handler `0x4a7b30`:
+
+- `0x481470` resolves the handle to the destructable object; a null result ends the call
+  (a null or removed destructable is ignored).
+- Otherwise `0x6d2ca0` stores the real at `[object+0x164]` unchanged (no clamp or
+  validation), reads the model pointer at `[object+0x28]` (`0x6a2900`) and calls
+  `0x967830(model, speed)`, which calls the model's virtual slot `+0x28` (a null model
+  reports error `0x57`). Unit `SetUnitTimeScale` ends in the same `0x967830` call
+  (`script-unit-animation.md`), so the speed is the model time scale.
+- The constructor `0x6cf36f` initialises `[object+0x164]` to `1.0` (`0x3f800000`). The model
+  create path (`0x6d1e4c`) and the hide path (`0x6d20a2`) reapply the stored value, so the
+  speed belongs to the destructable and survives hiding, showing and restarting a clip.
+  `SetDestructableAnimation` (`0x4a7a60` to `0x4a7a80`) does not touch it.
+
+Implementation: `ObjectHost` keeps the last call (factor, game time, serial) beside the
+animation log, outside the per-restart epoch. The renderer applies an unseen call through
+`Animation::set_time_scale` at `max(call time, animation clock)`, which keeps the visible
+phase as it does for units; zero freezes and a negative factor plays backwards (the
+recreation's unit semantics; the native passes the real to the model unchanged). The
+native refuses a non-finite real and a missing game clock, like the sibling setters. Not
+decoded: how the model virtual slot `+0x28` treats zero or negative factors; the
+recreation reuses its unit time-scale behaviour for them.
+
 ## Water base colour
 
 `SetWaterBaseColor` stores its four channels in `PresentationState::water_base_color`
