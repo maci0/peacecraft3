@@ -1031,3 +1031,54 @@ One run each, headless, `chapter-sweep.sh` over the last 18 rows of `routes.tsv`
 | OrcX01_02 / _03 / _04 / _05 | from OrcX01 | pass, 84 / 101 / 265 / 68 |
 | OrcX02_02 / _03 / _04 / _05 / _06 / _07 / _08 / _09 / _10 | from OrcX02 | pass, 325 / 305 / 355 / 206 / 300 / 68 / 53 / 127 / 16 (`_03` was `ANss`) |
 | OrcX03b | from OrcX03a | parent runs; child refuses `IsUnitIdType` (unsupported native, `war3map.j:2015`) |
+
+## 2026-11-11 `IsUnitIdType` (OrcX03b)
+
+Same exe (SHA-256 `3f2ed012...0eed`, 1.29.2.9231). Registration: signature `0xe72688`, name
+`0xe72698`, handler `0x499b10` (pushed at `0x49dcd8`..`0x49dce7`; the second table at `0xcb8fc5`
+pushes an inert stub). `war3map.j:2015` of OrcX03b calls
+`IsUnitIdType(GetUnitTypeId(GetFilterUnit()), UNIT_TYPE_STRUCTURE)`.
+
+Observed in code. The handler takes the rawcode and the `unittype` number `n`; `n` above 26 answers
+false. A byte table at `0x499cc8` and a jump table at `0x499ca8` select the test. It never reads a
+live unit: it reads the type record of table `0x113e8d8` (lookup `0x6993a0`; a missing record reads
+0 through each accessor).
+
+| `unittype` | Test |
+|---|---|
+| `HERO` (0) | `0x499060`: the rawcode's first character is `A` to `Z`. No record read. |
+| `STRUCTURE` (2) | `0x5cc9f0`, the same routine as the structure counter class (`script-unit-world.md`). |
+| `FLYING` (3) | `0x689490` (`type+0x1a8`) equals 2. |
+| `GROUND` (4) | the same value equals 13 (`0x499b80`). |
+| `ATTACKS_FLYING` (5), `ATTACKS_GROUND` (6) | OR of the target masks `type+0xa0+4*slot` (`0x67b1e0`) of the slots enabled in `weapsOn` (`type+0x9c`, `0x6a1fd0`, bits 1 and 2); bit 2 for flying, bit 1 for ground. |
+| `MELEE_ATTACKER` (7), `RANGED_ATTACKER` (8) | any enabled slot with weapon number `type+0xf8+4*slot` (`0x67b220`) equal to 1 (`0x499430`) respectively 2 to 8 (`0x4997f0`), unless the slot's target mask is exactly 1, `0x40`, `0x80` or `0x100`. |
+| 9, 10, 14 to 20 | `type+0x1c8` (`0x680040`) ANDed with the bit `0x48a660` maps from `n` (table `0xe6eae0`): giant 1, summoned 4, undead 2, mechanical 8, peon `0x10`, sapper `0x20`, townhall `0x40`, ancient `0x80`, tauren `0x800`. The field is the `UnitBalance` `type` token list parsed by `0x690da0` (token table `0x10dcc60`, which agrees). |
+| 1, 11 to 13, 21 to 26 | false without reading the type: dead, stunned, plagued, snared, poisoned, polymorphed, sleeping, resistant, ethereal, magic immune. |
+
+Token tables read from the image: `movetp` (`0x691a80`, table `0x10dccc0`) `fly` 2, `foot` 1, `horse`
+4, `hover` 8, `float` `0x10`, `amph` `0x20`, `unbuild` `0x40`, else 0; `weapTp` (`0x6ac680`) `normal`
+1, `missile` 2, `artillery` 3, `instant` 4, `msplash` 5, `mbounce` 6, `mline` 7, `aline` 8,
+placeholder 0; `targs` (`0x6ae660`, delimiters space, comma, hyphen, tab; table `0x10dce70`, 51
+rows; an unknown token adds nothing) `none` 1, `ground` 2, `air` 4, `structure` 8, `tree` `0x40`,
+`wall` `0x80`, `debris` `0x100` and the rest listed in `unit_type_host.rs`. The loader
+(`0x67ce77`, `0x67c8db`..`0x67cb1d`) stores the targs mask at `type+0xa0+4*slot`, the weapon number
+at `type+0xf8+4*slot` and `weapsOn` at `type+0x9c`.
+
+Consequences, observed from the compare and the table: no `movetp` token has code 13, so
+`IsUnitIdType(x, UNIT_TYPE_GROUND)` is false for every type, while the live `IsUnitType` ground test
+is "not flying". The type test differs from the live one in the dead, sleeping, summoned and
+attack-reach tests (live state versus type data); `IsUnitType` and `IsUnitIdType` do not share a
+routine, and the live handler (`0x49a210`) reaches the attack tests through `0xb211c0`/`0xb21320`.
+
+Inferred, not read: the column identities behind `type+0xa0` (`targs1`/`targs2`) and `type+0x1c8`
+(`type`), from the parser each accessor feeds and from the live equivalent at `0xb23161`; `0x433490`
+as a case-insensitive compare; `STRUCTURE` as `UnitBalance` `isbldg` (as in `campaign-minimap.md`).
+
+Recreation (`unit_type_host.rs`, `unit_id_type_tests.rs`): `ObjectHost::unit_id_type` answers the
+table above from the catalog row of the rawcode and shares `class` and `structure` with
+`IsUnitType`. A rawcode with no catalog row has no record: every record test is false and the
+structure test refuses (the new-record path of `0x5cc9f0` is not decoded). A `weapTp` token outside
+the decoded numbers refuses.
+
+Probe: OrcX03b from OrcX03a runs the init triggers past `war3map.j:2015` and passes,
+`executed_units=261` (the parent's 246 first).

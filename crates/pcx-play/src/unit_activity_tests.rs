@@ -6,6 +6,8 @@ mod captains;
 mod follow;
 #[path = "campaign_gathering_host_tests.rs"]
 pub(super) mod gathering;
+#[path = "unit_id_type_tests.rs"]
+mod id_type;
 #[path = "unit_patrol_tests.rs"]
 mod patrol;
 #[path = "order_queue_tests.rs"]
