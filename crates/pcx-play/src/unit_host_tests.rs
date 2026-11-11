@@ -3734,6 +3734,9 @@ mod invulnerability;
 #[path = "unit_waygate_tests.rs"]
 mod waygate;
 
+#[path = "unit_local_ui_tests.rs"]
+mod local_ui;
+
 #[path = "unit_owner_tests.rs"]
 mod ownership;
 

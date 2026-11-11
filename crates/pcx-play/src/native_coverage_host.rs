@@ -317,6 +317,8 @@ impl ObjectHost {
             // unit_pause_host.rs
             "IsUnitPaused",
             "PauseUnit",
+            // hero_button_reserve_host.rs
+            "SetReservedLocalHeroButtons",
             // unit_alt_icon_host.rs
             "UnitSetUsesAltIcon",
             // unit_waygate_host.rs

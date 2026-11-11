@@ -302,6 +302,8 @@ pub(super) struct Admission {
     models: Option<ModelLoader>,
     blend: Option<crate::unit_blend::Rules>,
     rarity: Option<Result<crate::unit_animation_rarity::State, String>>,
+    /// Integer from the last `SetReservedLocalHeroButtons`.
+    pub(super) reserved_local_hero_buttons: Option<i32>,
 }
 
 impl Admission {
@@ -417,6 +419,7 @@ impl ObjectHost {
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
         self.unit_alt_icon_declarations(&declaration_source)?;
+        self.hero_button_reserve_declaration(&declaration_source)?;
         self.unit_waygate_declarations(&declaration_source)?;
         self.unit_revive_declarations(&declaration_source)?;
         self.unit_look_at_declarations(&declaration_source)?;
@@ -504,6 +507,7 @@ impl ObjectHost {
             models: None,
             blend: None,
             rarity: None,
+            reserved_local_hero_buttons: None,
         });
         Ok(self)
     }
@@ -1357,6 +1361,9 @@ impl ObjectHost {
             return Some(result);
         }
         if let Some(result) = self.unit_alt_icon_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.hero_button_reserve_native(name, args) {
             return Some(result);
         }
         if let Some(result) = self.unit_waygate_native(name, args) {

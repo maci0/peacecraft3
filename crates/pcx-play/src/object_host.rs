@@ -1530,6 +1530,9 @@ mod unit_pause;
 #[path = "unit_alt_icon_host.rs"]
 mod unit_alt_icon;
 
+#[path = "hero_button_reserve_host.rs"]
+mod hero_button_reserve;
+
 #[path = "placement_events_host.rs"]
 mod placement_events;
 
