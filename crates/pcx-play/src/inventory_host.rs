@@ -11,6 +11,10 @@ use crate::item_heal::heal_life;
 /// The proc state of a spell orb is kept once per holder, so a second one is refused.
 const TWO_SPELL_ORBS: &str =
     "two spell orbs on one holder are unsupported: the proc counters are kept once per holder";
+/// Each Spell Shield blocks on its own cooldown and the client asks them in ability-list order,
+/// which the held slots do not record.
+const TWO_SPELL_SHIELDS: &str =
+    "two Spell Shields on one holder are unsupported: the client tries them in ability-list order";
 
 /// Passive item or powerup deltas applied to one unit's pools.
 #[derive(Clone, Copy)]
@@ -483,6 +487,7 @@ impl ObjectHost {
             reincarnation: None,
             life_steal: None,
             detector: None,
+            spell_shield: None,
         };
         for (item, _) in self
             .executed_items()
@@ -537,6 +542,14 @@ impl ObjectHost {
             }
             if let Some(taken) = passive.spell_damage_taken {
                 bonus.spell_damage_taken = Some(bonus.spell_damage_taken.unwrap_or(1.0) * taken);
+            }
+            if let Some(shield) = passive.spell_shield {
+                if bonus.spell_shield.is_some() {
+                    return Err(self
+                        .inner
+                        .error("inventory", Failure::UnitActivity(TWO_SPELL_SHIELDS.into())));
+                }
+                bonus.spell_shield = Some(shield);
             }
             if let Some(value) = passive.move_speed_bonus {
                 bonus.move_speed_bonus =

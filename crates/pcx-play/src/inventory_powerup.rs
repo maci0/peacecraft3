@@ -232,6 +232,9 @@ pub struct AttributeBonus {
     /// The detection an `Adet` ability on this item grants (Gem of True Seeing), `None` without
     /// one. Read per item and not aggregated; the recreation has no invisible units to apply it to.
     pub detector: Option<Detector>,
+    /// The Spell Shield an `ANss` ability on this item grants, `None` without one. Retained per
+    /// item; a unit holds at most one. Hosted spell casts refuse where the client would consult it.
+    pub spell_shield: Option<SpellShield>,
 }
 
 #[derive(Clone, Debug)]
@@ -286,6 +289,8 @@ pub struct Rules {
     life_steal: Option<LifeStealClass>,
     /// The `Adet` class, attached by `with_detector`.
     detector: Option<DetectorClass>,
+    /// The `ANss` class, attached by `with_spell_shield`.
+    spell_shield: Option<SpellShieldClass>,
     /// `AUau` and `AHad`, attached by `with_auras`.
     auras: Option<AuraClasses>,
 }
@@ -466,6 +471,7 @@ impl Rules {
         let spell_orb = SpellOrbImage::read(&pe).map_err(|e| fail(&e))?;
         let reincarnation = ReincarnationImage::read(&pe).map_err(|e| fail(&e))?;
         let detector = DetectorImage::read(&pe).map_err(|e| fail(&e))?;
+        let spell_shield = SpellShieldImage::read(&pe).map_err(|e| fail(&e))?;
         let purge = PurgeImage::read(&pe).map_err(|e| fail(&e))?;
         Self::decode(
             tables,
@@ -490,6 +496,7 @@ impl Rules {
         .and_then(|rules| rules.with_reincarnation(&reincarnation))
         .and_then(|rules| rules.with_life_steal(&life_steal))
         .and_then(|rules| rules.with_detector(&detector))
+        .and_then(|rules| rules.with_spell_shield(&spell_shield))
         .and_then(|rules| rules.with_auras(&aura))
         .map_err(|e| fail(&e))
     }
@@ -551,6 +558,9 @@ impl Rules {
     fn is_registered(&self, class: &str) -> bool {
         let amount = |c: &Option<AmountClass>| c.as_ref().is_some_and(|c| c.class == class);
         if self.detector.as_ref().is_some_and(|d| d.class == class) {
+            return true;
+        }
+        if self.spell_shield.as_ref().is_some_and(|s| s.class == class) {
             return true;
         }
         if self.reincarnation.as_ref().is_some_and(|classes| {
@@ -1108,6 +1118,7 @@ impl Rules {
             reincarnation: None,
             life_steal: None,
             detector: None,
+            spell_shield: None,
             auras: None,
         })
     }
@@ -1337,6 +1348,18 @@ impl Rules {
                     ));
                 }
                 held.detector = Some(self.detector_row(alias, class)?);
+                continue;
+            }
+            if let Some(class) = &self.spell_shield
+                && code == class.class
+            {
+                if held.spell_shield.is_some() {
+                    return Err(format!(
+                        "two spell shield abilities on {} are unsupported",
+                        item.rawcode()
+                    ));
+                }
+                held.spell_shield = Some(self.spell_shield_row(alias)?);
                 continue;
             }
             if let Some(classes) = &self.reincarnation
@@ -2088,6 +2111,11 @@ pub(crate) mod detector;
 pub use detector::Detector;
 use detector::DetectorClass;
 pub(crate) use detector::DetectorImage;
+#[path = "inventory_spell_shield.rs"]
+pub(crate) mod spell_shield;
+pub use spell_shield::SpellShield;
+use spell_shield::SpellShieldClass;
+pub(crate) use spell_shield::SpellShieldImage;
 #[path = "inventory_reincarnation.rs"]
 pub(crate) mod reincarnation;
 pub use reincarnation::Reincarnation;

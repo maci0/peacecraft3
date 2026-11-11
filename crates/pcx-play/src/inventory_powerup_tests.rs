@@ -856,6 +856,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             move_speed_bonus: None,
             reincarnation: None,
             detector: None,
+            spell_shield: None,
             move_speed_refresh_skipped: false,
             life_steal: None,
         }
@@ -1428,6 +1429,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             move_speed_bonus: None,
             reincarnation: None,
             detector: None,
+            spell_shield: None,
             move_speed_refresh_skipped: false,
             life_steal: None,
         }
@@ -1777,3 +1779,5 @@ mod purge;
 mod detector;
 #[path = "inventory_reincarnation_tests.rs"]
 mod reincarnation;
+#[path = "inventory_spell_shield_tests.rs"]
+mod spell_shield;

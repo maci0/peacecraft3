@@ -100,6 +100,7 @@ const VENOM_TARGS: &str = "ground,air,organic";
 const POISON_FIRST_TICK: f32 = 0.01;
 /// `DataB1` of the fixture spell-resistance row.
 const SPELL_REDUCTION: &str = "0.25";
+const SPELL_SHIELD_COOLDOWN: &str = "40";
 const KILJAEDEN_DAMAGE: f32 = 6.0;
 /// Damage-bonus entry of the spells attack type against the fixture units' medium defense.
 const SPELLS_VS_MEDIUM: f32 = 0.5;
@@ -368,6 +369,23 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
             "0",
             "",
         ],
+        vec![
+            "ANss",
+            "ANss",
+            "1",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            SPELL_SHIELD_COOLDOWN,
+            "_",
+            "-",
+            "0",
+            "0",
+            "BNss",
+        ],
     ]);
     // Held auras: `DataA1` is the speed or armor, `DataB1` the regeneration (unholy) or the
     // percent flag (devotion), `DataC1` the unholy percent flag.
@@ -478,6 +496,8 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["ocor", "AIcb", "0", "0", "0", "-"],
             &["ofro", "AIob", "0", "0", "0", "-"],
             &["brac", "AIsr", "0", "0", "0", "-"],
+            &["spsh", "ANss", "0", "0", "0", "-"],
+            &["spss", "ANss,ANss", "0", "0", "0", "-"],
             &["pasp", "AIsx", "0", "0", "0", "-"],
             &["bspd", "AIms", "0", "0", "0", "-"],
             &["bsp2", "AIm2", "0", "0", "0", "-"],
@@ -1218,6 +1238,8 @@ fn open_fixture(
     .with_reincarnation(&crate::inventory_powerup::reincarnation::fixture::image())
     .unwrap()
     .with_spell_resistance(&registration("AIsr", "AIat"))
+    .unwrap()
+    .with_spell_shield(&crate::inventory_powerup::spell_shield::fixture::image())
     .unwrap()
     .with_attack_speed(&registration("AIas", "APbo"))
     .unwrap()
@@ -4414,6 +4436,8 @@ fn slot_input_from_another_player_changes_nothing() {
 
 #[path = "inventory_orb_host_tests.rs"]
 mod orb;
+#[path = "inventory_spell_shield_host_tests.rs"]
+mod spell_shield_host;
 
 #[path = "inventory_aura_host_tests.rs"]
 mod aura;

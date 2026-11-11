@@ -1677,3 +1677,52 @@ Decoded from the same image; no runtime capture.
   `AttributeBonus::detector`, count per owning player and apply it to every unit within `radius`
   of the holder. Tests: `inventory_detector_tests.rs` (rows, the radius column read from the image,
   refusals, registration) and an ignored test against the real image (`PEACECRAFT3_INSTALL`).
+
+## `ANss` (Amulet of Spell Shield `spsh`): read and retained, consulted only by hosted spells
+
+Decoded from the reviewed image (SHA-256 `3f2ed012…`); no runtime capture.
+
+- Class (observed): `CAbilitySpellShield` (RTTI type descriptor at `0x11252e8`, reached through
+  the vtable's locator at `0x1039c00`), vtable `0xfaaaac`, class getter slot 7 `0xc712d0` returns
+  `ANss`, name slot 22 `0xc712c0` returns the string `CAbilitySpellShield`. Registration window `0xc71d20` (`push
+  0x11b8e80`, `call 0xb2b1f0` which returns `AAsm`, `push eax`, `push "ANss"`, `call 0x7f6360`,
+  `add esp,0xc`, `ret`). `ANse` (Spell Shield, Rune) registers over `ANss` at `0xc71d40`. The row
+  `ANss` has code `ANss`, `levels` 1, `targs1` `_`, `Cool1` 40, `BuffID1` `BNss`, and no `Data`
+  values. The item text (`spsh`) says it "blocks a negative spell that an enemy casts on the Hero
+  once every <ANss,Cool1> seconds".
+- Overrides: slots 95 (`+0x17c`, `0xc71300`) returns `0x32`, slot 96 (`+0x180`, `0xc71310`) is the
+  block test, slots 196 and 197 return `0xd025b` and `0x2000001`.
+- Consumer (observed): `0x6d4c90(unit)` with three stack arguments walks the unit's ability list
+  (`unit+0x3e8`) once for each priority from `0x2b` to `0x32`, and calls slot 96 on every ability
+  whose slot 95 equals the priority, returning 1 at the first ability that answers nonzero.
+  Slot 95 of `ANss` is `0x32`, the last priority. Callers: the base spell start `0xb29b90` (target
+  unit in `ecx`, then the caster's owner through unit virtual `+0xec`, the ability's virtual
+  `+0x350` and the ability itself; only when the ability's virtual `+0x41c` answers nonzero; a
+  blocked spell skips `+0x42c`, the application of the spell), a projectile hit (`0xba06a0`) and
+  eleven other call sites (`rg 'call 0x6d4c90'`: `0x6e2887`, `0x6e59c7`, `0x6e8567`, `0xb29c75`,
+  `0xba06de`, `0xbe417e`, `0xc06c2a`, `0xc0c6c5`, `0xc0f943`, `0xc28154`, `0xc3ed89`, `0xc4b0a1`,
+  `0xc5314e`; not read beyond the first two).
+- Block test (observed, `0xc71310`, arguments: the caster's owner, a second value, the casting
+  ability): returns 0 (no block) when the holder's flag word `[holder+0x164]` has `0x40000000`
+  (the recreation maps this flag to illusions, `hero-skill-points.md`), when the shield's own
+  flags `[ability+0x20]` have `0x200` (meaning not decoded), or when `0x696780(holder, owner)` is
+  false. `0x696780` is the enemy test of `0xba0870` (the holder's owner is not allied with the
+  caster's owner, `0x478da0`). When a casting ability is given, it must also answer nonzero on
+  its virtual `+0x1d8` or `+0x1f8`; with no casting ability the test passes. A passing test calls
+  the shield's virtual `+0x380` (`0xb49ce0`, the generic ability use routine, not decoded) and
+  returns 1.
+- Recreation: the pickup is admitted. `Rules::spell_shield_row` reads `Cool1` and the class code
+  from the image registration (`SpellShieldImage`) and returns `SpellShield { cooldown }` on
+  `AttributeBonus::spell_shield`. A row with a negative or non-numeric `Cool1`, several levels, a
+  map modification, or two `ANss` abilities on one item refuses, and so does a holder with two
+  shields (the client tries them in ability-list order, which held slots do not record).
+- Not decoded, so the recreation neither blocks nor lets through: the casting ability's virtuals
+  `+0x1d8` and `+0x1f8` and its `+0x41c` for every hosted spell class, the meaning of
+  `[ability+0x20] & 0x200` (read as the cooldown state), and the effect of `+0x380`. The hosted
+  curse spells (Slow, Polymorph, Dark Conversion) call `refuse_spell_shield_consulted` before
+  they take effect and refuse when an enemy casts on a holder of a shield, naming those virtuals.
+  The Purge and spell orbs are not hooked: `0xb9e350` reaches `0xba0870` without a `0x6d4c90`
+  call that was seen, so whether they consult the shield is open. Tests:
+  `inventory_spell_shield_tests.rs` (rows, cooldown column, refusals, registration),
+  `inventory_spell_shield_host_tests.rs` (the consult refusal, allies, two shields, two abilities)
+  and the ignored real-image test in the first file (`PEACECRAFT3_INSTALL`).

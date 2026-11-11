@@ -1084,6 +1084,8 @@ impl ObjectHost {
         let (true, Some(spell)) = (usable, spell) else {
             return self.cancel_curse_cast(caster, now);
         };
+        self.refuse_spell_shield_consulted(caster, target, &String::from_utf8_lossy(&alias))
+            .map_err(|why| self.curse_error(why))?;
         let events = self.prepare_ability_events(
             caster,
             "EVENT_UNIT_SPELL_EFFECT",
