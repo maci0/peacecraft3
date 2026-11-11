@@ -558,3 +558,13 @@ reached by the startup probe. The native is implemented and unit-tested (see the
 
 Still refused: wide (`fatLOS`) occluders with a height above zero (gate and footprint source
 undecoded, see the occluder note) and `GetPlayerTypedUnitCount` (name table undecoded).
+
+## Boots under the stacking rule sets, aura decode
+
+First refusal of `selected_install_locked_chapter_startup_probe` (one run each, selected Legacy install, headless), before and after the change that admits `AIms` under `Misc/MoveSpeedBonusesStack` (the flag does not change the formula, see `passive-held-items.md`) and records the `AIau` decode.
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Undead02 | `UnitAddItemToSlotById` refused: `AIms` on `bspd`, `Misc/MoveSpeedBonusesStack` is set | startup passes: `executed_units=123`, `published=true` (first refusal moves past this chapter's startup) |
+| TFT OrcX03a | `UnitAddItemToSlotById` refused: `AIms` on `bspd`, `Misc/MoveSpeedBonusesStack` is set | `UnitAddItemToSlotById` refused: `AIva` on `modt` (unsupported passive ability) |
+| TFT HumanX06 | `UnitAddItem` refused: `AIau` (code `AUau`) on `lgdh` | same item, new message: the buff halves are decoded; the range event timing, buff end after leaving the area and the stacking test against the hero aura are not |
