@@ -1181,7 +1181,7 @@ fn max_mana_registration_requires_the_passive_base_and_a_distinct_class() {
 #[test]
 fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
     for (class, expected) in [
-        ("AIlb", "Bprg"),
+        ("AIlb", ""),
         ("AIrc", "death handler"),
         ("AUau", "buff BUau"),
         ("AIzz", ""),
@@ -1781,3 +1781,6 @@ mod orb;
 
 #[path = "inventory_spell_orb_tests.rs"]
 mod spell_orb;
+
+#[path = "inventory_purge_tests.rs"]
+mod purge;

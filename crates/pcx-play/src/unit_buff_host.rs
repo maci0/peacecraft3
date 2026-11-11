@@ -52,6 +52,10 @@ pub(crate) struct BuffTraits {
     pub timed_life: bool,
     pub aura: bool,
     pub auto_dispellable: bool,
+    /// Whether `magic` was read from the buff's class (slot `0x1d8`). The base class answers 1,
+    /// so a class nobody read is unknown, not non-magic: a dispel that tests the magic bit
+    /// refuses such a buff.
+    pub magic_decoded: bool,
 }
 
 /// One active buff on a unit, as attached by a producer.
@@ -75,7 +79,7 @@ impl ActiveBuff {
 pub(crate) const MAX_BUFFS_PER_UNIT: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RemoveOptions {
+pub(crate) struct RemoveOptions {
     remove_positive: bool,
     remove_negative: bool,
     magic: bool,
@@ -98,6 +102,18 @@ impl RemoveOptions {
         }
     }
 }
+
+/// The dispel of a Purge cast (`0xba0870` calling `0x6d87a0`): positive and negative buffs whose
+/// class is magic, never timed-life buffs or auras.
+pub(crate) const PURGE_DISPEL: RemoveOptions = RemoveOptions {
+    remove_positive: true,
+    remove_negative: true,
+    magic: true,
+    physical: false,
+    timed_life: false,
+    aura: false,
+    auto_dispel: false,
+};
 
 /// The shared helper's filter, read from `0x6D87A0`. A buff that is neither
 /// positive nor negative is never removable through this path.
@@ -238,6 +254,44 @@ impl ObjectHost {
         }
     }
 
+    /// Removes every buff of `unit` the filter selects and reports each to its producer so its
+    /// effect ends.
+    pub(crate) fn remove_matching_buffs(
+        &mut self,
+        unit: HandleId,
+        options: &RemoveOptions,
+    ) -> Result<(), Error> {
+        let mut removed = Vec::new();
+        if let Some(active) = self.unit_buffs.active.get_mut(&unit) {
+            active.retain(|buff| {
+                let remove = should_remove(buff, options);
+                if remove {
+                    removed.push(buff.rawcode);
+                }
+                !remove
+            });
+        }
+        for &rawcode in &removed {
+            self.record_placement_event(
+                unit,
+                crate::ai_placement::PlacementEventKind::BuffRemoved(rawcode),
+            );
+        }
+        for rawcode in removed {
+            self.curse_buff_removed(unit, rawcode)?;
+            self.orb_buff_removed(unit, rawcode)?;
+        }
+        Ok(())
+    }
+
+    /// The first buff of `unit` that is positive or negative and whose magic bit nobody read.
+    pub(crate) fn undecoded_magic_buff(&self, unit: HandleId) -> Option<[u8; 4]> {
+        self.unit_buffs.active.get(&unit)?.iter().find_map(|buff| {
+            let polar = buff.traits.positive || buff.traits.negative;
+            (polar && !buff.traits.magic_decoded).then_some(buff.rawcode)
+        })
+    }
+
     pub(super) fn unit_buff_native(
         &mut self,
         name: &str,
@@ -293,26 +347,7 @@ impl ObjectHost {
                 Entry::Unit { .. } => {}
                 _ => return Err(self.inner.error(name, Failure::WrongFamily)),
             }
-            let mut removed = Vec::new();
-            if let Some(active) = self.unit_buffs.active.get_mut(&id) {
-                active.retain(|buff| {
-                    let remove = should_remove(buff, &options);
-                    if remove {
-                        removed.push(buff.rawcode);
-                    }
-                    !remove
-                });
-            }
-            for &rawcode in &removed {
-                self.record_placement_event(
-                    id,
-                    crate::ai_placement::PlacementEventKind::BuffRemoved(rawcode),
-                );
-            }
-            for rawcode in removed {
-                self.curse_buff_removed(id, rawcode)?;
-                self.orb_buff_removed(id, rawcode)?;
-            }
+            self.remove_matching_buffs(id, &options)?;
             Ok(Value::Null)
         })())
     }

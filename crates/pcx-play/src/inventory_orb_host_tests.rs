@@ -333,6 +333,8 @@ fn a_second_orb_on_one_holder_is_refused_without_moving_the_item() {
 
 #[path = "inventory_frost_host_tests.rs"]
 mod frost;
+#[path = "inventory_purge_host_tests.rs"]
+mod purge;
 #[path = "inventory_speed_host_tests.rs"]
 mod speed;
 
@@ -623,12 +625,13 @@ fn a_marked_unit_cannot_die_until_the_summon_is_decoded() {
 }
 
 #[test]
-fn a_purge_proc_refuses_at_the_hit_with_the_wrapped_class() {
-    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"oli2");
+fn an_undecoded_wrapped_class_refuses_at_the_hit_with_its_class() {
+    // `AIsb` over `AIdz` wraps a row whose class is none of the decoded ones.
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"olix");
     attack(&mut h, hero, target);
     let refusal = run_to_refusal(&mut h, 1.0).expect("the proc reaches the undecoded cast");
     assert!(
-        refusal.contains("AIpg") && refusal.contains("Aprg"),
+        refusal.contains("Axxx") && refusal.contains("Aotr"),
         "{refusal}"
     );
     assert!(refusal.contains("not decoded"), "{refusal}");

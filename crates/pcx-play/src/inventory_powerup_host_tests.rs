@@ -113,6 +113,10 @@ const NEVER: &str = "0";
 /// shipped row.
 const ARROW_DURATION: f32 = 4.0;
 const ARROW_RANGE: &str = "600";
+/// `Dur1` and `HeroDur1` of the fixture lightning purge row (`AIlp`); its `DataA1` of 2 splits
+/// each into two steps.
+const LIGHTNING_DURATION: &str = "3";
+const LIGHTNING_HERO_DURATION: &str = "0.3";
 /// Secondary random stream the fixture spell orbs roll on (the fixture policy has three).
 const SPELL_ORB_STREAM: u8 = 1;
 
@@ -130,6 +134,8 @@ fn spell_orb_rows(orb_targs: &'static str) -> Vec<Vec<&'static str>> {
         orb("AIdf", ALWAYS, "ANbs"),
         orb("AIdz", NEVER, "ANbs"),
         orb("AIll", ALWAYS, "AIpg"),
+        orb("AIlz", ALWAYS, "AIp0"),
+        orb("AIlx", ALWAYS, "Axxx"),
         vec![
             "ANbs",
             "ANbs",
@@ -164,6 +170,55 @@ fn spell_orb_rows(orb_targs: &'static str) -> Vec<Vec<&'static str>> {
             "-",
             "15",
             "5",
+            "Bprg",
+            "-",
+            "-",
+        ],
+        // A wrapped row of a class none of the decoded ones.
+        vec![
+            "Axxx", "Aotr", "1", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-",
+            "-",
+        ],
+        // The shipped purge row without the damage and the pauses.
+        vec![
+            "AIp0",
+            "Aprg",
+            "1",
+            "5",
+            "-",
+            "-",
+            "-",
+            "-",
+            "700",
+            "-",
+            "air,ground,ward",
+            "-",
+            "15",
+            "5",
+            "Bprg",
+            "-",
+            "-",
+        ],
+        // The lightning orb (old) and its purge sibling.
+        vec![
+            "AIlb", "AIlb", "1", "6", "-", "-", "-", "2", "-", "-", orb_targs, "-", "-", "-", "-",
+            "-", "-",
+        ],
+        vec![
+            "AIlp",
+            "AIlp",
+            "1",
+            "2",
+            "-",
+            "35",
+            "-",
+            "-",
+            "-",
+            "-",
+            orb_targs,
+            "-",
+            LIGHTNING_DURATION,
+            LIGHTNING_HERO_DURATION,
             "Bprg",
             "-",
             "-",
@@ -290,11 +345,15 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
         row.extend(["-", "-"]);
     }
     rows.extend(spell_orb_rows(orb_targs));
+    for row in &mut rows {
+        row.push("-");
+    }
     let refs: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
     sylk(
         &[
             "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
             "Cool1", "targs1", "Area1", "Dur1", "HeroDur1", "BuffID1", "UnitID1", "Cost1",
+            "DataF1",
         ],
         &refs,
     )
@@ -354,6 +413,9 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["odef", "AIdf", "0", "0", "0", "-"],
             &["odez", "AIdz", "0", "0", "0", "-"],
             &["oli2", "AIll", "0", "0", "0", "-"],
+            &["oli3", "AIlz", "0", "0", "0", "-"],
+            &["olix", "AIlx", "0", "0", "0", "-"],
+            &["olig", "AIlb,AIlp", "0", "0", "0", "-"],
         ],
     );
     let plain_ability_rows: &[&[&str]] = &[
@@ -1051,6 +1113,8 @@ fn open_fixture(
     .with_spell_orb(&crate::inventory_powerup::spell_orb::fixture::image(
         SPELL_ORB_STREAM,
     ))
+    .unwrap()
+    .with_purge(&crate::inventory_powerup::purge::fixture::image())
     .unwrap()
     .with_spell_resistance(&registration("AIsr", "AIat"))
     .unwrap()

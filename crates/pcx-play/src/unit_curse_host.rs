@@ -58,6 +58,7 @@ use std::collections::BTreeMap;
 pub(super) const POLYMORPH_SPEED_REFUSAL: &str = "slow on a polymorphed unit is not modelled: the speed writes of the polymorph type change are not decoded";
 const POLYMORPH_SPEED_REFUSAL_SLOWED: &str = "polymorph on a slowed unit is not modelled: the speed writes of the polymorph type change are not decoded";
 const POLYMORPH_SPEED_REFUSAL_FROSTED: &str = "polymorph on a frosted unit is not modelled: the speed writes of the polymorph type change are not decoded";
+const POLYMORPH_SPEED_REFUSAL_PURGED: &str = "polymorph on a purged unit is not modelled: the speed writes of the polymorph type change are not decoded";
 /// Parent-row `code` of the Slow class.
 pub(super) const SLOW_CLASS: [u8; 4] = *b"Aslo";
 /// Parent-row `code` of the Polymorph class.
@@ -1348,6 +1349,9 @@ impl ObjectHost {
     ) -> Result<(), Error> {
         if self.unit_frosted(target) {
             return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL_FROSTED));
+        }
+        if self.unit_purge_slowed(target) {
+            return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL_PURGED));
         }
         let state = self.curses.as_mut().expect("admitted");
         if let Some(active) = state.polymorphs.get_mut(&target) {

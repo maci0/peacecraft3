@@ -1561,6 +1561,7 @@ impl ObjectHost {
         self.forget_morph_unit(unit);
         self.forget_curse_unit(unit);
         self.forget_orb_unit(unit);
+        self.forget_purge_unit(unit)?;
         self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
@@ -1974,6 +1975,7 @@ impl ObjectHost {
         self.advance_chain_lightning(now)?;
         self.advance_curses(now)?;
         self.advance_orbs(now)?;
+        self.advance_purges(now)?;
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.

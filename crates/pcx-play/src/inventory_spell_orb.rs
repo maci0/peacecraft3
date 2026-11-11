@@ -80,6 +80,7 @@ pub struct BlackArrow {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WrappedAbility {
     BlackArrow(BlackArrow),
+    Purge(Purge),
     /// A class whose cast effect is not decoded; a proc that reaches it refuses.
     Undecoded {
         alias: [u8; 4],
@@ -365,8 +366,23 @@ impl Rules {
         let wrapped = fourcc(alias, "UnitID1", &wrapped)?;
         let wrapped_alias = std::str::from_utf8(&wrapped).expect("alphanumeric");
         let code = self.ability_code(wrapped_alias)?;
+        let purge_class = self
+            .orbs
+            .as_ref()
+            .and_then(|orbs| orbs.purge.as_ref())
+            .map(|purge| purge.purge.as_str());
         let ability = if code == class.black_arrow {
             WrappedAbility::BlackArrow(self.black_arrow(wrapped_alias)?)
+        } else if purge_class == Some(code.as_str()) {
+            let purge = self.purge(wrapped_alias)?;
+            // The generic cast start spends the cost and sets the cooldown; neither is decoded.
+            if purge.costs {
+                return Err(format!(
+                    "wrapped ability {wrapped_alias} Cost1 or Cool1 is not zero; the generic \
+                     spell cost is not decoded"
+                ));
+            }
+            WrappedAbility::Purge(purge)
         } else {
             WrappedAbility::Undecoded {
                 alias: wrapped,
@@ -442,7 +458,7 @@ impl SpellClass {
     }
 }
 
-fn row_real(row: Object<'_>, alias: &str, column: &str) -> Result<f32, String> {
+pub(super) fn row_real(row: Object<'_>, alias: &str, column: &str) -> Result<f32, String> {
     let cell = row
         .cell(SlkId::AbilityData, column)
         .map_err(|e| e.to_string())?;
@@ -454,7 +470,7 @@ fn row_real(row: Object<'_>, alias: &str, column: &str) -> Result<f32, String> {
     }
 }
 
-fn cell_text(row: Object<'_>, _alias: &str, column: &str) -> Result<String, String> {
+pub(super) fn cell_text(row: Object<'_>, _alias: &str, column: &str) -> Result<String, String> {
     Ok(row
         .cell(SlkId::AbilityData, column)
         .map_err(|e| e.to_string())?
@@ -463,7 +479,7 @@ fn cell_text(row: Object<'_>, _alias: &str, column: &str) -> Result<String, Stri
         .to_owned())
 }
 
-fn fourcc(alias: &str, column: &str, text: &str) -> Result<[u8; 4], String> {
+pub(super) fn fourcc(alias: &str, column: &str, text: &str) -> Result<[u8; 4], String> {
     <[u8; 4]>::try_from(text.as_bytes())
         .ok()
         .filter(|code| code.iter().all(u8::is_ascii_alphanumeric))
@@ -551,7 +567,7 @@ pub(crate) mod fixture {
     const SLOTS: u32 = 0x4000;
 
     /// `table[i]` for the reciprocal of `1 + i / 1024`, in the layout the reviewed routine reads.
-    fn reciprocal_table() -> Vec<u8> {
+    pub(crate) fn reciprocal_table() -> Vec<u8> {
         (0..RECIPROCAL_ENTRIES)
             .flat_map(|i| {
                 let value = 2.0 / (1.0 + i as f64 / 1024.0) - 1.0;
@@ -615,7 +631,7 @@ pub(crate) mod fixture {
         code
     }
 
-    fn registration(source: &str, base: &str) -> Vec<u8> {
+    pub(crate) fn registration(source: &str, base: &str) -> Vec<u8> {
         let mut w = vec![PUSH_IMM32, 1, 2, 3, 4, PUSH_IMM32];
         w.extend(base.bytes().rev());
         w.push(PUSH_IMM32);
@@ -627,8 +643,13 @@ pub(crate) mod fixture {
 
     /// The computed-base registration at `BLACK_ARROW_WINDOW` and its base function.
     fn computed(source: &str) -> Vec<u8> {
+        computed_at(source, BLACK_ARROW_WINDOW)
+    }
+
+    /// The computed-base registration at `window`.
+    pub(crate) fn computed_at(source: &str, window: u32) -> Vec<u8> {
         let rel_base: i32 = 0x100 - 10;
-        let rel_register = (i64::from(REGISTER_FN) - (i64::from(BLACK_ARROW_WINDOW) + 21)) as i32;
+        let rel_register = (i64::from(REGISTER_FN) - (i64::from(window) + 21)) as i32;
         let mut w = vec![PUSH_IMM32, 1, 2, 3, 4, CALL_REL32];
         w.extend(rel_base.to_le_bytes());
         w.push(PUSH_EAX);

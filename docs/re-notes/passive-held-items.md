@@ -650,7 +650,7 @@ the recreation does not need because the shipped key is 1 and an illusion keeps 
 that `[unit+0x164]` bit `0x40000000` is the illusion flag is inferred from the key name; and any
 cap or floor the cooldown consumer applies to the multiplier.
 
-## Spell orbs (`AIsb`: Orb of Darkness `AIdf`, Orb of Lightning `AIll`, Orb of Slow `AIsb`): proc and Black Arrow implemented, Purge and Slow refused on a proc
+## Spell orbs (`AIsb`: Orb of Darkness `AIdf`, Orb of Lightning `AIll`, Orb of Slow `AIsb`): proc, Black Arrow and Purge implemented, Slow refused on a proc
 
 All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objdump` and `rizin`.
 "Observed" is read from the machine code; "inferred" is named as such.
@@ -765,9 +765,83 @@ All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objd
   (`0xba0d70`), and `DataA`, `DataB`, `DataD`, `DataE`. Labels (`AEVAL_PRG1..6`): `DataA` movement
   update frequency, `DataB` attack update frequency, `DataC` summoned unit damage, `DataD` unit
   pause duration, `DataE` hero pause duration, `DataF` mana loss.
-- Not decoded: `0xba0870` (where the dispel by relation, the summoned damage and the mana loss
-  are expected), the `Bprg` classes (`0xf3c528`, `0xf3d130`, see `ai-construction.md`): the
-  dispel, the decaying slow, the pause and the summoned-unit damage.
+- Entry (observed, `0xb9e350`): reads `DataF` (`0x46f0e0`) and `DataC` (`0x46eed0`), then calls
+  `0xba0870` (cdecl, 12 arguments) with the caster, the caster's owner player (unit virtual
+  `+0xec`, a getter of `[unit+0x160]`), the target, the class word of virtual `+0x350` (a jump to
+  `+0x310`, `0xb9e2f0`, `0xd008f`), the ability, the constants 1, 1, 0, 1, `&DataC`, `&DataF` and
+  `0x40`. A target with flag `0x100` (dead) gets only the dispel and damage call and then a
+  notification (`0xb9e482`, `0x4704d0`). Otherwise, when the caster's owner is not allied with the
+  target's owner (`0x696a90` is `0x478e00`, the alliance bit of the caster's owner towards the
+  target's owner, the same bit table `IsUnitAlly` reads at `0x499980`), it applies `Bprg`.
+- `0xba0870` (observed): `enemy` is `0x696780(target, owner)`, true when the target's owner is not
+  allied with the caster's owner (the `IsUnitEnemy` predicate, `0x499a30`). `ams` is a buff of
+  class `Bams` (getter `0xbac9d0`) on the target. `summoned` is target flag `[+0x454] & 4`.
+  `blocked` is 0 when the target flag `[+0x164] & 0x40000000` is set, else nonzero when the unit
+  virtual `+0x11c` is nonzero or the veto `0x682180(target, mask, ability)` is.
+  - An enemy that is `summoned`, without `ams` and not `blocked` takes an attack record
+    (`0x6a9940`) of `DataC` damage, damage type `0x4000` (bit 14, magic; the poison tick uses bit
+    26, universal), attack type 0 (spells), source the caster and flags `0x40`, plus `0x20` when
+    the configuration lookup `0x4304c0(0xe69798, 0xf3e718)` is nonzero. It reaches the target through
+    the unit virtual `+0x120` (`0x6677c0`, the damage path).
+  - Any other target takes a record of zero damage with flags `0x10` through the same virtual, and
+    the cast stops there when the target is `blocked`.
+  - Then the dispel: `0x6d87a0(target, 0, 1, 0, 0, 0, 1, 1, caster, 1)`, stdcall with nine
+    arguments in the order the call pushes them. The helper walks the target's buffs and removes
+    each that is negative (`+0x1e0`) or positive (`+0x1e4`) as arguments 7 and 6 allow (both
+    here), whose magic bit (`+0x1d8`, argument 2) is set, whose timed-life bit (`+0x334`,
+    argument 3 is 0) and aura bit (`+0x1e8`, argument 4 is 0) are clear. There is no test of the
+    caster or of the target's relation inside the helper. So a Purge removes positive and negative
+    magic buffs from allies, enemies and neutrals alike; the original does not choose a polarity
+    by relation. Buff base class `0xea5cc8` answers `+0x1d8` with 1 (`0x6f1e80`), `+0x1dc`,
+    `+0x1e0`, `+0x1e4`, `+0x1e8` and `+0x334` with 0; a class decides the rest.
+  - Last, when the target's `[+0x20] & 8` is clear, `ams` is false and `DataF` is not zero, it calls
+    `0x69e310` (mana loss, not decoded; every shipped row has no `DataF`).
+- `Bprg` (observed): class getter `0xb9d5e0`, vtable `0xf3c528`, base `0xea5cc8`. `+0x1d8` (`0xb9da00`)
+  is 0 (a Purge does not remove it) and `+0x1e0` (`0xb9d9f0`) is 1 (negative). `0xba01b0` removes a
+  `Bprg` already on the target (`0x6d6570` then `0x6d8530`), builds the buff and calls its slot
+  `+0x35c` (`0xb9d5f0`) with the target, the duration, the caster handle (stored at `+0xd0/+0xd4`)
+  and `DataA`, `DataB`, `DataD`, `DataE`. The duration is `HeroDur1` (`0x46f500`) for the hero
+  test above and `Dur1` (`0xba0d70`) else.
+  - Slot `+0x35c` starts the buff duration at `duration + [0x10db058]` (`0.01`, the same global the
+    poison buff reads) through `+0x328`. It stores `A != 0` as `1.0` or `0.0` at `+0xe0`, `1 / A` at
+    `+0xf0`, `B != 0` as `1.0` or `0.0` at `+0xe8`, `1 / B` at `+0xf8`, `DataD` at `+0x100` and
+    `DataE` at `+0x108` (the divide is `0x9a02d0`).
+  - Movement: `0xb67720(unit+0x3f8, -[+0xe0])` adds `-[+0xe0]` to the movement multiplier, the
+    object `unit_speed.rs` models, so a nonzero `DataA` removes the whole speed (the speed floor of
+    the unit applies). The attack side does the same with `0xb1e490(unit+0x3f4, -[+0xe8], 0)`.
+  - The step timer at `+0x10c` starts at `Dur / A` (`HeroDur / A`) seconds with event `0xd01c1`,
+    and the attack timer at `+0x120` at `Dur / B` with `0xd01c3`. That the timer repeats is
+    inferred from the step arithmetic below, not from the timer routine.
+  - Step (`0xba1130`, observed): when `|+0xe0|` is under `[0x10db054]` (`0.001`) nothing happens;
+    otherwise `+0xe0 := +0xe0 - +0xf0` (`0x9a00b0` subtracts) and `0xb67720(unit+0x3f8,
+    old - new)` gives that much back. After `A` steps the slow is gone, and the buff ends at
+    `Dur + 0.01`. The attack step (`0xba1060`) mirrors it for `B`.
+  - Pause (`0xb9d7e5` onward, observed): for `DataD` (a non-hero) or `DataE` (a hero) not zero,
+    the movement object's disable counter (`[movement+0x80]`) is incremented through `0xb666b0`,
+    which stops the unit's motion (`0x7fcd60` on `unit+0x26c`) when the counter leaves 0, and a
+    one-shot timer at `+0x134` of that length posts event `0xd019c`. The handler `0xba0f30`
+    decrements the counter (`0xb665d0`), stops the timer and applies a zero-damage record
+    (flags `0x210`) from the caster.
+  - Event dispatch (slot 3, `0xb9dca0`, observed): `0xd019c` runs `0xba0f30`, `0xd01c1` runs
+    `0xba1130`, `0xd01c3` runs `0xba1060`, everything else goes to the base.
+  - Removal (slot 209, `0xb9dcf0`, observed): stops the three timers, ends an active pause, gives
+    back what `+0xe0` and `+0xe8` still hold, zeroes both, and applies a zero-damage record
+    (flags `0x10`) from the caster when it still resolves.
+- Cast through an orb (observed): the lightning orb handler (`0xca1610`) finds the `AIlp` ability of
+  the owner, asks its `+0x434` (`0xb28470`, an error code, not decoded) and, when that is zero,
+  calls its `+0x42c` (`0xca2810`, a jump to `0xb9e350`) with the target; it never runs the generic
+  cast start `0xb4a940`, so no mana is spent and no cooldown set whatever the row's `Cost1` and
+  `Cool1`. The spell orb path (`0xc9f3d0`) runs `0xb4a940`, which spends the mana of virtual `+0x3dc`
+  through `0x69e310` and sets the cooldown; the shipped `AIpg` row has neither. The base class
+  `0xb29c89` calls `+0x42c` from the cast completion, and the Purge class's own `+0x42c` slot is
+  `0xb9e350` (the table entry at `0xf3ccd8`), so the generic cast reaches the same code. That the
+  orb's `0xb4a940` reaches that completion in the same call is inferred, as for Black Arrow.
+- Open: `+0x434` (`0xb28470`), the veto `0x682180`, virtual `+0x11c` and target flag
+  `0x40000000` (the recreation treats the cast as not blocked); the zero-damage records and what
+  the target does with them (retaliation, damage events); the damage path of the magic type
+  (`0x6677c0`); the mana loss `0x69e310`; the movement disable counter and what a disabled unit
+  does with its orders; the hero test beyond the rawcode rule (`0xcaf450`, see Black Arrow); and
+  the magic bit of every buff class other than `Bprg`, the poison buffs and `BNba`.
 
 ### Recreation
 
@@ -789,8 +863,9 @@ All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objd
   `BNba` (negative) is attached for `Dur1` (zero for a hero) unless the target already has the
   minion buff; a second cast restarts the timer; expiry and `UnitRemoveBuffs` end it. The death of
   a marked unit refuses before any change (`require_black_arrow_unmarked`), because the summon
-  placement `0xcaf240` -> `0x687ca0` is not decoded. A proc of any other wrapped class (Purge
-  `Aprg`, Slow `Aslo`) refuses at the hit with the class named.
+  placement `0xcaf240` -> `0x687ca0` is not decoded. A proc of the Purge class casts it (see
+  "Purge recreation" below); a proc of any other wrapped class (Slow `Aslo`) refuses at the hit with
+  the class named.
 - Refused or open: the wrapped ability is not added to the holder's ability list (the original
   adds it through `0x6dd220`), so `GetUnitAbilityLevel(holder, 'ANbs')` reads 0; the cast range
   test (`+0x3f4`) is replaced by a refusal when the weapon range exceeds the wrapped `Rng1`;
@@ -806,6 +881,34 @@ All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objd
   `local_original_image_supplies_the_stream_the_table_and_the_classes` reads the real image
   (`PEACECRAFT3_INSTALL`): stream `0x24`, the numerators above, and the divide within 2e-6 of the
   exact quotient.
+
+### Purge recreation
+
+- Rules: `crates/pcx-play/src/inventory_purge.rs` reads the registrations (`Aprg` over `AAsm`,
+  `AIlp` over `Aprg`, `AIlb` over `AIDB`), the duration slack (`0x10db058`) and the reciprocal table
+  from the image; the step `1 / DataA` and the intervals `Dur / DataA`, `HeroDur / DataA` go
+  through the same divide helper as the spell orb table, so the arithmetic is the reviewed
+  routine's. `DataB` and `DataF` must be zero (the attack-speed slow and the mana loss are not
+  hosted), `DataA` zero leaves a buff without a slow, a repeating timer of no length refuses, and
+  a map-modified row refuses (`effect_row`). A spell orb that wraps a row with `Cost1` or `Cool1`
+  refuses (the generic cast start); the lightning orb ignores them, as the original does.
+- Host: `crates/pcx-play/src/purge_host.rs`. One cast on a living target: a summoned enemy refuses
+  (the magic damage path is not decoded) unless `DataC` is zero; a nonzero pause refuses (the
+  disable counter is not hosted); a buff that is positive or negative and whose magic bit nobody
+  read (`BuffTraits::magic_decoded`) refuses; a polymorphed target refuses when the slow would
+  apply. Then the dispel runs through the buff host (`PURGE_DISPEL`, the `0x6d87a0` filter), a
+  non-allied living target gets `Bprg` (negative, magic bit 0, decoded) and its movement
+  multiplier loses `1.0` through `shift_unit_speed`, and the steps and the expiry run from
+  `advance_purges` in the combat step. A step on the expiry runs first. `UnitRemoveBuffs`,
+  death and removal end the slow and give back what is left. A `Bprg` on the target is replaced,
+  never stacked, and a second cast restarts the decay.
+- Decoded magic bits: only `Bprg`, the poison buffs (`BIpb`, `BIpd`, `BIpi`) and `BNba` declare
+  `magic_decoded`. The frost, corruption and curse buffs are negative with the bit unread, so a
+  Purge cast on a unit that carries one refuses by name until its class is read.
+- Tests: `inventory_purge_tests.rs` (rows, registrations, refusals, the real image in an ignored
+  test), `inventory_purge_host_tests.rs` (slow and steps for a unit and a hero, replacement
+  by later hits, the dispel filter, the unread-buff refusal, an ally, a summoned enemy, removal and
+  death, the spell orb path and the shipped pause row).
 
 ## Open held classes (decoded in part, still refused at pickup; `AIpb` below is implemented)
 
@@ -905,7 +1008,7 @@ unit, and a tick whose holder unit was removed (the client resolves a null sourc
 `0x40000000`, the target kinds of slots 83 and 84, and what dispel does to only the aggregate or
 only one stack are not decoded.
 
-### `AIlb` (Orb of Lightning old, `olig` with `AIlp`): decoded, refused
+### `AIlb` (Orb of Lightning old, `olig` with `AIlp`): implemented
 
 - Registration (observed): window `0xca6da0` (`push 0x11b97e4`, `push "AIDB"`, `push "AIlb"`),
   factory `0xc9ebe0` -> `0xca6570`, vtable `0xfc0ec4`. It differs from `AIDB` in slots 1, 7
@@ -921,10 +1024,10 @@ only one stack are not decoded.
   `0xca27f0`. It derives from the Purge class `Aprg` and uses the Purge code (`0xb9e350`) as the
   cast. Row `AIlp` ("LightningPurge"): `Dur1` 3, `HeroDur1` 0.3, `DataA1` 2, `DataC1` 35, `BuffID1`
   `Bprg`, `targs1` `ground,air,ward`. `olig` lists `AIlb,AIlp`; `AIlb` row: `DataA1` 6, `DataE1` 2.
-- Why it stays refused: the effect is a Purge cast (`Aprg`, buff `Bprg`: movement slow with a
-  dispel of magic buffs and the summoned-unit rule). The recreation has no Purge and no speed
-  host for it (another lane is refactoring movement speed), so the pickup refuses with
-  `UNMODELED_PASSIVE_CLASSES` naming `AIlp`, `Aprg` and `Bprg`.
+- Recreation: the pickup is admitted. `OrbKind::Lightning` carries the Purge of the `AIlp` row on the
+  same item; the orb arms on its own `targs1` and the sibling must list the same classes. Every
+  armed hit casts the Purge before the attack damage, free of mana and cooldown (see "Purge
+  recreation").
 
 ### `AIrc` (Ankh of Reincarnation `ankh`)
 

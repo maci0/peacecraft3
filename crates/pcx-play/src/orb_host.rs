@@ -222,6 +222,9 @@ impl ObjectHost {
         if let OrbKind::Spell(spell) = orb.kind {
             return self.orb_spell_hit(&spell, source, target);
         }
+        if let OrbKind::Lightning(purge) = orb.kind {
+            return self.cast_purge(&purge, source, target);
+        }
         if let OrbKind::Frost {
             move_decrease,
             attack_decrease,
@@ -368,6 +371,8 @@ impl ObjectHost {
                 buff,
                 BuffTraits {
                     negative: true,
+                    // The poison buffs read magic 0 (`+0x1d8`), see the re-note.
+                    magic_decoded: true,
                     ..BuffTraits::default()
                 },
             ),
@@ -587,7 +592,7 @@ impl ObjectHost {
         {
             self.orbs.marks.remove(&unit);
         }
-        Ok(())
+        self.purge_buff_removed(unit, rawcode)
     }
 
     /// A dead or removed unit keeps no penalty, frost or poison.
@@ -665,14 +670,18 @@ impl ObjectHost {
                 held: held || procced,
             },
         );
+        let range = match spell.wrapped {
+            WrappedAbility::BlackArrow(arrow) => Some(arrow.range),
+            WrappedAbility::Purge(purge) => Some(purge.range),
+            WrappedAbility::Undecoded { .. } => None,
+        };
         if procced
-            && let WrappedAbility::BlackArrow(arrow) = spell.wrapped
-            && weapon_range > arrow.range
+            && let Some(range) = range
+            && weapon_range > range
         {
             return Err(self.orb_error(format!(
-                "a proc of the wrapped ability needs its Rng1 {} to cover the weapon range \
-                 {weapon_range}; the cast range test is not decoded",
-                arrow.range
+                "a proc of the wrapped ability needs its Rng1 {range} to cover the weapon range \
+                 {weapon_range}; the cast range test is not decoded"
             )));
         }
         Ok(())
@@ -705,6 +714,13 @@ impl ObjectHost {
                 }
                 self.orb_attack_stopped(source);
                 self.black_arrow_mark(&arrow, target)
+            }
+            WrappedAbility::Purge(purge) => {
+                if !self.purge_target_valid(&purge, target)? {
+                    return Ok(());
+                }
+                self.orb_attack_stopped(source);
+                self.cast_purge(&purge, source, target)
             }
             WrappedAbility::Undecoded { alias, code } => Err(self.orb_error(format!(
                 "a spell orb proc casts {} (class {}), whose cast effect is not decoded: \
@@ -777,6 +793,8 @@ impl ObjectHost {
                 arrow.buff,
                 BuffTraits {
                     negative: true,
+                    // `BNba` slot `+0x1d8` (`0xc72140`) returns 0.
+                    magic_decoded: true,
                     ..BuffTraits::default()
                 },
             ),
