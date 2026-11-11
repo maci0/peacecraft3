@@ -331,8 +331,11 @@ Registration, reviewed image (SHA-256 `3f2ed012…`), static disassembly with `o
 - `AIcb` window at `0xca6ce0`: the same shape with class `AIcb`.
 - `AIgd` has no registration. Its row's code is `AIfb`, so the code check resolves it to the
   `AIfb` window.
-- Base `AIDB` has no row in `Units\AbilityData.slk`, so it is a native base like `APbo`. These
-  windows use `AIDB`, not `APbo`, so a family that admits them needs its own base decision.
+- Base `AIDB` is itself a registered class (window `0xca6d00`). Its base argument is the return
+  value of `0xbc92b0`, which is `mov eax, "AIat"; ret`. So `AIDB` derives from the flat attack-damage
+  class `AIat` (window `0xbc9c80`), not from `APbo`. The shipped `AbilityData.slk` has no `AIDB` row.
+- Further `AIDB`-based registrations with the same shape: `AIcb` (`0xca6ce0`), `AIDE` (`0xca6d20`),
+  `AIfb` (`0xca6d40`) and `AIzb` (`0xca6d60`). No shipped `AbilityData` row was checked for `AIDE` or `AIzb`.
 
 Shipped rows (`Units\AbilityData.slk`, War3x.mpq; blank cells omitted):
 
@@ -369,6 +372,21 @@ Why each family stays refused:
 - `AIgd`: even with the `AIfb` class admitted, `Idam` does not admit the `AIgd` alias, so its
   amount (6) refuses at the alias check.
 
+Class-code getters found this pass (observed, `objdump`/`rizin`, `mov eax, <code>; ret`):
+`AIcb` at `0xca67a0`, `AIDB` at `0xca67b0` and at `0xc9e2a0` (the last is a vtable entry at
+`0xfbf7d8`, a single pointer hit in the image), `AIDE` at `0xc9ef20`. The `AIDB` vtable start and
+the slot index of the getter are not established. Neighbouring slots point into `0xc9e1xx` to
+`0xc9ecxx`, which suggests this class's own methods, but no on-hit handler was identified.
+The `AIgd` code `0x41496764` has no immediate in `.text`. The three descriptor pointers
+(`0x11b98ec`, `0x11b9784`, `0x11b98d4`) read as zero in the file image, so their runtime
+contents are not established.
+
+Not decoded (open, refused): the on-hit damage path (bonus as a separate hit or added to the
+attack, and its armor interaction), splash (`Area1`, falloff, targets), the air-ranged switch,
+the `AIcb` armor debuff (`BIcb`, duration, stacking), and the amount source for `AIgd` (its
+`Idam` admission versus native `DataA1` lookup). No orb is admitted until its on-hit effect is
+complete.
+
 Not verified: native order of on-hit effects against armor, splash damage and targeting, whether
 the bonus is a separate armor-reduced hit, the meaning of `Enabled Attack Index` 2 for a hero
 with one attack, the air-ranged switch, and `BIcb` duration and stacking.
@@ -380,3 +398,19 @@ the same `UnitAddItemToSlotById` call before and after this doc change. The code
 REA `search` and `inspect` with `REA_ANALYSIS_PROVIDER=ghidra` failed on this host: the Ghidra
 flatpak `active` path resolves to a previous commit that lacks `support/launch.properties`
 (`Ghidra LaunchSupport -envvars`). The registrations above come from `objdump`, not from REA.
+
+### Locked-chapter probe, orb pass (selected install, unchanged code)
+
+Each row is the first refusal of `selected_install_locked_chapter_startup_probe`. Before and after
+are the same because this pass changed no code; the orb effects remain refused.
+
+| Chapter | First refusal |
+|---|---|
+| RoC Undead02 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
+| RoC Orc02Interlude | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
+| RoC Undead01 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
+| RoC NightElf06 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
+| TFT UndeadX01Interlude | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
+| TFT HumanX05 | `UnitAddItemToSlotById`: `AIcb` with code `AIcb` on `ocor` |
+| TFT UndeadX08 | `UnitAddItemToSlotById`: `AIgd` with code `AIfb` on `gldo` |
+| TFT UndeadX02 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
