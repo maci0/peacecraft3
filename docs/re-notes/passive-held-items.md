@@ -26,7 +26,7 @@ derived on demand from the held slots, so no add/remove state exists.
   reprices life, maximum life and mana. A held item that is not dropped retains its
   maximum-life and mana contributions. Death itself does not clear current mana, and removal
   while dead still reprices mana by the rounded ratio instead of forcing zero.
-- Orbs (`AIfb`, `AIgd`, `AIcb`) add their flat damage and run their on-hit effect; see "Orb
+- Orbs (`AIfb`, `AIgd`, `AIcb`, `AIob`, `AIpb`) add their flat damage and run their on-hit effect; see "Orb
   families" below. A holder takes at most one orb.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
@@ -649,7 +649,7 @@ the recreation does not need because the shipped key is 1 and an illusion keeps 
 that `[unit+0x164]` bit `0x40000000` is the illusion flag is inferred from the key name; and any
 cap or floor the cooldown consumer applies to the multiplier.
 
-## Open held classes (decoded in part, still refused at pickup)
+## Open held classes (decoded in part, still refused at pickup; `AIpb` below is implemented)
 
 Each class below is registered in the reviewed image and its first-level structure is read. The
 effect is not fully decoded or its host mechanism is absent, so the pickup refuses with the reason
@@ -680,20 +680,117 @@ in `UNMODELED_PASSIVE_CLASSES` (`crates/pcx-play/src/inventory_powerup.rs`), tes
   summon). The recreation has a slow buff but no Purge, no Black Arrow and no summon-on-kill, and
   the roles of `DataB1`..`DataD1` are open.
 
-### `AIpb` (Orb of Venom `oven`, with `Apo2`)
+### `AIpb` (Orb of Venom `oven`, with `Apo2`): implemented and tested
 
-- Registration (observed): window `0xca6e00` (`push 0x11b98bc`, `push "AIDB"`, `push "AIpb"`).
-  Descriptor `0xfc0eb4`, allocator `0xca6620`, vtable `0xfc1848`. It differs from `AIDB` only in
-  slots 1, 7 (`0xca2a80`), 22, 83, 84, 85 and 203 (`0xca2ca0`, returns `0x4000000`), the same slot
-  set as `AIfb` and `AIcb`.
-- Handler (slot 85, `0xca2ab0`, observed): when armed it runs `0x4705f0`, clears the flag and, unless
-  the owner flag `0x40000000` is set, runs the callback `0xca6bf0` over the owner's abilities with the
-  target and attack record (`0x6d6460`). The callback is not decoded; it is how the poison reaches
-  the target. `oven` also lists `Apo2` (code `Apo2`, `Dur1` 6, `DataA1` 9, `DataD1` 1, buffs
-  `BIpb`, `BIpd`), a second class that is not decoded.
-- Why it stays refused: poison damage over time and its stacking and kill rules are not decoded or
-  hosted. `DataA1` (5) is the flat orb damage and `DataE1` (2) the air switch, which are the
-  already-implemented orb parts.
+Decoded from the reviewed image (SHA-256 `3f2ed012…`, `objdump`/`rizin`) and the shipped rows; no
+runtime capture. Observed unless marked inferred.
+
+- Registration: orb window `0xca6e00` (`push 0x11b98bc`, `push "AIDB"`, `push "AIpb"`), vtable
+  `0xfc1848`, slots 1, 7 (`0xca2a80`), 22, 83, 84, 85 and 203 (`0xca2ca0`, returns `0x4000000`) differ
+  from `AIDB`. Poison class `Apo2`: window `0xca6de0` (`push 0x11b994c`, `call 0xbe2590` which
+  returns `Apoi`, `push eax`, `push "Apo2"`, `call 0x7f6360`), descriptor `0xfc11f8`, factory
+  `0xca1c20`, constructor `0xca3e00`, vtable `0xfc1b8c`, class getter `0xca2d20`. `Rules::read` decodes
+  both windows and requires the orb over `AIDB` and the poison class over `Apoi`.
+- Item: `oven` lists `AIpb,Apo2` (`ItemData`). The orb handler (slot 85, `0xca2ab0`) runs, when the orb
+  is armed (`0x100`) and the owner flag `0x40000000` is clear, the callback `0xca6bf0` over every
+  ability of the owner (`0x6d6460`). The callback keeps the abilities whose class is `Apo2`
+  (`0x7f55f0` against getter slot `+0x1c`) and whose slot `+0x90` equals the orb's, which pairs the
+  two abilities of one item. For that ability it calls slot `+0x350` (`0xbdcf40`, the target-class
+  veto `0x682450` over the poison row's own `targs1` word `[this+0x4c]`; nonzero skips the whole
+  hit, including the attack damage), then slot `+0x354` (`0xca2d70`, apply poison), then applies the
+  attack record through the unit virtual `+0x120`. The poison is therefore applied before the hit's
+  damage. The unit-target slots 83 and 84 (`0xca2c00`, `0xca2b60`) find `Apo2` by class instead and
+  call `+0x358` and `+0x35c`; their target kinds are not decoded.
+- Row values (slot `+0x354`, owner flag clear): `DataA` (`0x46ed70`, level record `+0x20`) damage per
+  second, `DataB` (`0x46ee20`, `+0x24`) move slow, `DataC` (`0x46eed0`, `+0x28`) attack slow, `DataD`
+  (`0x46ef80`, truncated by `0x9a07b0`), `Dur1` (`0x46f3a0`, `+0x8`) or `HeroDur1` (`0x46f500`, `+0xc`)
+  when `0xcaf450` qualifies the target (inferred: hero). The owner flag zeroes `DataA`..`DataC`.
+  `DataD & 8` indexes `BuffID1` (`0xb3abe0` passes `(DataD & 8) != 0` to the buff-id getter
+  `0x46ea70`); `DataD & 7` is the stacking mode. Mode 0 looks for one `BIpb` buff on the target and
+  refreshes or creates it (`+0x388`, `+0x380`); that path runs through the base refresh `0x6f5020`,
+  which has a flag-`0x80` branch that is not decoded, so mode 0 stays refused. Modes 1 to 7 are the
+  stacking path below. `DataD` bits bound which of `A`, `B`, `C` a stack carries (bit 1 `A`, bit 2
+  `B`, bit 4 `C`; the other values read as 0).
+- Row `Apo2`: `DataA1` 9, `DataB1` and `DataC1` unset, `DataD1` 1, `Dur1` 6, `HeroDur1` 6, `BuffID1`
+  `BIpb,BIpd`, `targs1` `ground,air,organic`; row `AIpb`: `DataA1` 5 (the flat orb damage), `DataE1` 2
+  (the air switch), `targs1` `ground,air,organic`.
+- Stacking path (mode 1, `0xca2d70`, then `0xca4d60`, `0xca53f0`): the callback `0xca4d60` walks the
+  target's buffs for class `BIpi` whose source handle (`+0xd0/+0xd4`, compared by `0xbe29e0` with the
+  holder's handle) is the holder; found, it restarts that buff's timer with the new duration (`+0x358`
+  = `0x6f6c30`) and the hit adds nothing else. Not found, a `BIpi` buff is created (`0xca53f0`, class
+  vtable `0xfbec7c`, base `Bpsi`) and attached (`0x6d4880`), storing the holder, the masked
+  `A`/`B`/`C`, `DataD` and the buff id (`0xbdf970`). So there is one stack per holder: the same holder
+  refreshes, another holder adds a stack.
+- Aggregate: attaching a `BIpi` buff (slot `+0x35c`, `0xc9d190`) looks for a `BIpd`-class buff on the
+  target (`0x6d6570`, class `Bpsd`). Absent, it creates one (`0xca52f0`, vtable `0xfc2480`, buff id
+  copied from the stack, default `BIpd`), applies the stack's `A`, `B`, `C` with duration 0 (no
+  expiry) and the stack's holder as source, and attaches it. Present, `0xbe2740` adds 1 to a counter
+  at `+0x104`, adds the stack's values to the sums at `+0xf0` (`A`), `+0x10c` (`B`), `+0x114` (`C`),
+  and replaces the source with the new stack's holder (refresh `+0x388` = `0xbdec40`, which calls the
+  base refresh `0x6f5020` with duration 0). Removing a stack (slot `+0x360`, `0xc9d390`) subtracts its
+  values and the counter through `0xbe2400` and removes the aggregate (`0x6d8530`) when the counter
+  was 0. The counter is therefore stacks minus one.
+- Tick (aggregate buff, `0x6efd30`, slot `+0x36c` of the periodic buff base): the first tick comes
+  `[0x10db058]` seconds after the aggregate is created (slot `+0x360`, `0x6ef800`, initialized float
+  `0.01`), later ticks every `[0x112d810]` seconds (slot `+0x364`, `0x6ef820`, set to the integer 1 by
+  `0x401460`) through the timer events `0xd01e2` and `0xd01c1` (handler `0x6ef880`). A tick is
+  skipped when the target has a `BUsl` buff (class getter `0xb3ba50`). The amount is the sum `A`
+  (`+0xf0`, slot `+0x368`); a negative amount heals (`EtherealHealBonus`, not decoded). Otherwise it
+  builds an attack record (`0x6a9940`) with that amount, damage type `0x4000000` (universal, slot
+  `+0x37c`, `0xca3c00`), attack type 0 (the spells row), the source unit (handle `+0xf4/+0xf8`, null
+  when it no longer resolves) and flags 2 (0 on the first tick), and applies it through the target's
+  virtual `+0x120`: no armor, killing allowed. The `MagicImmunesResistDamage` gate does not cover
+  the universal type (the masks at `0x10dce64` and `0x10dce68`, read from the image, lack bit 26).
+- Buff traits (`BIpb`, `BIpd`, `BIpi`): magic 0 (`+0x1d8`), physical 0 (`+0x1dc`), negative 1 (`+0x1e0`),
+  positive 0, timed life 0 (`+0x334`), auto-dispel 0 (`+0x338`, calls `+0x1d8`).
+- `organic` (`targs1` token, mask `0x4000000` in the table at `0x10dce70`) is the unit class bit the
+  class routine `0x6b1c90` sets when the unit flag `[+0x454] & 0x8` (mechanical) is clear.
+- Slows: `+0x380` (`0xbde9a0`) adds `-B` to the movement multiplier (`0xb67720` on `unit+0x3f8`,
+  the same object `AIob` uses) and `-C` to the attack-side object (`0xb1e490` on `unit+0x3f4`).
+  The shipped venom row has no `B` or `C`, so no slow is hosted and a nonzero `DataB1` or `DataC1`
+  refuses.
+
+Recreation: `OrbKind::Poison` (`inventory_powerup.rs`), host `orb_host.rs`. A hit that arms the orb
+(the orb's `targs1` classes, `organic` excluding `UNIT_TYPE_MECHANICAL` units) attaches the buff
+(negative only) and one stack for the holder, or restarts the holder's stack timer. The first stack
+starts the tick schedule: the first tick at hit + 0.01 (read from the image,
+`POISON_FIRST_TICK_VA`), then every 1.0 (`POISON_TICK_INTERVAL`, the integer from `0x401460`). Each
+tick is the sum of the stack amounts through the spells row of the damage-bonus table, scaled by
+held spell resistance (same record fields as the fire splash: inferred), credited to the holder of
+the latest added stack, and skipped on a `BUsl` buff or an untargetable unit. A stack ends at its
+own expiry; the last one ends the poison and the buff. `UnitRemoveBuffs` of the poison buff and
+death end all of it (inferred: removal of the aggregate and every stack). A missile weapon poisons
+on impact. Tests: `inventory_venom_tests.rs` (rows, registrations, refusals) and
+`inventory_venom_host_tests.rs` (tick schedule, refresh, stacking across holders, hero duration,
+kill, mechanical target, sleep, buff removal, missile).
+
+Refused or open: `DataD & 7 == 0` (single-buff mode), `DataB1` or `DataC1` nonzero, a negative
+`DataA1` (heal over time), a map-modified `AIpb` or `Apo2` row, orb and poison `targs1` that
+differ, an orb row without exactly one `Apo2` beside it, poison buffs of two different ids on one
+unit, and a tick whose holder unit was removed (the client resolves a null source). The owner flag
+`0x40000000`, the target kinds of slots 83 and 84, and what dispel does to only the aggregate or
+only one stack are not decoded.
+
+### `AIlb` (Orb of Lightning old, `olig` with `AIlp`): decoded, refused
+
+- Registration (observed): window `0xca6da0` (`push 0x11b97e4`, `push "AIDB"`, `push "AIlb"`),
+  factory `0xc9ebe0` -> `0xca6570`, vtable `0xfc0ec4`. It differs from `AIDB` in slots 1, 7
+  (`0xca1600`), 22, 83 (`0xca1930`), 84 (`0xca16d0`), 85 (`0xca1610`), 124 (`0xca1ba0`) and 203.
+- Handler (slot 85, `0xca1610`, observed): armed (`0x100`), owner flag `0x40000000` clear, it finds the
+  owner's `AIlp` ability (`0x6d6570`, class `0x41496c70`), asks its slot `+0x434` (`0xca2800` ->
+  `0xb28470`) whether it may act on the target, runs its slot `+0x42c` (`0xca2810` -> `0xb9e350`) on
+  the target, then applies the attack record through the unit virtual `+0x120`. Slots 83 and 84
+  (`0xca1930`, `0xca16d0`) do the same for other target kinds with the row values read like the
+  poison class (`0xca66d0` is the non-hero duration getter, `HeroDur1` for a hero).
+- `AIlp` (observed): registration `0xca6dc0` (`push 0x11b97cc`, `call 0xba0e30` which returns `Aprg`,
+  `push "AIlp"`), descriptor `0xfc075c`, factory `0xca0800`, vtable `0xfc13e8`, class getter
+  `0xca27f0`. It derives from the Purge class `Aprg` and uses the Purge code (`0xb9e350`) as the
+  cast. Row `AIlp` ("LightningPurge"): `Dur1` 3, `HeroDur1` 0.3, `DataA1` 2, `DataC1` 35, `BuffID1`
+  `Bprg`, `targs1` `ground,air,ward`. `olig` lists `AIlb,AIlp`; `AIlb` row: `DataA1` 6, `DataE1` 2.
+- Why it stays refused: the effect is a Purge cast (`Aprg`, buff `Bprg`: movement slow with a
+  dispel of magic buffs and the summoned-unit rule). The recreation has no Purge and no speed
+  host for it (another lane is refactoring movement speed), so the pickup refuses with
+  `UNMODELED_PASSIVE_CLASSES` naming `AIlp`, `Aprg` and `Bprg`.
 
 ### `AIrc` (Ankh of Reincarnation `ankh`)
 

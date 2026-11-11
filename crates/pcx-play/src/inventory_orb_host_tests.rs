@@ -473,3 +473,6 @@ fn an_orb_on_a_unit_with_no_second_weapon_keeps_weapon_one() {
         "no second weapon: the hero walks as before",
     );
 }
+
+#[path = "inventory_venom_host_tests.rs"]
+mod venom;

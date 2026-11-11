@@ -89,6 +89,15 @@ const FROST_HERO_DURATION: &str = "1";
 const FROST_MOVE: f32 = 0.5;
 const FROST_ATTACK: f32 = 0.25;
 const FROST_DAMAGE: f32 = 6.0;
+/// Orb of Venom: the flat damage of the orb row, and the poison row's damage per second, timers
+/// (the hero duration is the longer one so the two are told apart) and target classes.
+const VENOM_DAMAGE: f32 = 5.0;
+const POISON_DPS: &str = "9";
+const POISON_DURATION: &str = "6";
+const POISON_HERO_DURATION: &str = "8";
+const VENOM_TARGS: &str = "ground,air,organic";
+/// First tick delay the fixture registration passes (the reviewed image holds 0.01).
+const POISON_FIRST_TICK: f32 = 0.01;
 /// `DataB1` of the fixture spell-resistance row.
 const SPELL_REDUCTION: &str = "0.25";
 const KILJAEDEN_DAMAGE: f32 = 6.0;
@@ -158,6 +167,40 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
             FROST_DURATION,
             FROST_HERO_DURATION,
             "Bfro",
+        ],
+        vec![
+            "AIpb",
+            "AIpb",
+            "1",
+            "5",
+            "0",
+            "0",
+            "0",
+            "2",
+            "-",
+            "-",
+            VENOM_TARGS,
+            "-",
+            "0",
+            "0",
+            "",
+        ],
+        vec![
+            "Apo2",
+            "Apo2",
+            "1",
+            POISON_DPS,
+            "0",
+            "0",
+            "1",
+            "-",
+            "-",
+            "-",
+            VENOM_TARGS,
+            "-",
+            POISON_DURATION,
+            POISON_HERO_DURATION,
+            "BIpb,BIpd",
         ],
         vec![
             "AIsr",
@@ -237,6 +280,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["bspd", "AIms", "0", "0", "0", "-"],
             &["bsp2", "AIm2", "0", "0", "0", "-"],
             &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
+            &["oven", "AIpb,Apo2", "0", "0", "0", "-"],
         ],
     );
     let plain_ability_rows: &[&[&str]] = &[
@@ -558,6 +602,34 @@ fn orb_base_code() -> Vec<u8> {
     b
 }
 
+/// The poison registration (`Apo2`) in the reviewed 25-byte layout, with its base function 0x100
+/// bytes after the window.
+fn poison_registration() -> Vec<u8> {
+    use crate::inventory_powerup::{
+        CALL_REL32, CLEANUP_RET, POISON_WINDOW, PUSH_EAX, PUSH_IMM32, REGISTER_FN,
+    };
+    let rel_base: i32 = 0x100 - 10;
+    let rel_register = (i64::from(REGISTER_FN) - (i64::from(POISON_WINDOW) + 21)) as i32;
+    let mut w = vec![PUSH_IMM32, 1, 2, 3, 4, CALL_REL32];
+    w.extend(rel_base.to_le_bytes());
+    w.push(PUSH_EAX);
+    w.push(PUSH_IMM32);
+    w.extend(b"Apo2".iter().rev());
+    w.push(CALL_REL32);
+    w.extend(rel_register.to_le_bytes());
+    w.extend(CLEANUP_RET);
+    w
+}
+
+/// The base function the poison window calls: `mov eax, "Apoi"; ret`.
+fn poison_base_code() -> Vec<u8> {
+    use crate::inventory_powerup::{MOV_EAX_IMM32, RET};
+    let mut b = vec![MOV_EAX_IMM32];
+    b.extend(b"Apoi".iter().rev());
+    b.push(RET);
+    b
+}
+
 /// The base function the healing window calls: `mov eax, "AAsm"; ret`.
 fn healing_base() -> Vec<u8> {
     use crate::inventory_powerup::{MOV_EAX_IMM32, RET};
@@ -836,6 +908,13 @@ fn open_with_regens_overlays_extra(
             .as_bytes(),
         )],
         4096,
+    )
+    .unwrap()
+    .with_venom_orb(
+        &registration("AIpb", "AIDB"),
+        &poison_registration(),
+        &poison_base_code(),
+        POISON_FIRST_TICK.to_le_bytes(),
     )
     .unwrap()
     .with_spell_resistance(&registration("AIsr", "AIat"))

@@ -527,3 +527,15 @@ First refusal of `selected_install_locked_chapter_startup_probe`, before (the ta
 | TFT OrcX03a | `AIms` on `bspd` (speed-multiplier reason) | `UnitAddItemToSlotById` refused: `AIms` on `bspd`, `Misc/MoveSpeedBonusesStack` is set, where the summed bonus record reaches the speed is not decoded (`passive-held-items.md`) |
 | RoC Undead02 | `AIms` on `bspd` | same refusal as OrcX03a |
 | TFT HumanX06 | `AIau` (code `AUau`) on `lgdh` (not a decoded class) | `UnitAddItem` refused: `AIau` on `lgdh`, with the decoded parts named (class `aura`, buff `BUau`); the aura scan, buff duration and regeneration addition are open |
+
+## Probe results (2026-11-11, Orb of Venom and AIlb lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the refusal recorded
+above for each chapter (not re-run on a baseline build); "after" is a probe on this branch.
+Decode and addresses: [passive-held-items.md](passive-held-items.md) (`AIpb`, `AIlb`).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT UndeadX02 | `AIpb` on `oven` unsupported | `IssueImmediateOrder` (`war3map.j:2600`): unit activity morph flags `0x1` of class `Abur` is not decoded |
+| TFT UndeadX05 | `UnitAddItem`: `AIpb` on `oven` (custom item `I003`) unsupported | `UnitAddItem`: unsupported passive ability `AIsx` with code `AIas` on `gcel` |
+| RoC Undead02Interlude | `UnitAddItemToSlotById`: `AIlb` on `olig` unsupported | unchanged chapter stop, now with the reason: `AIlb` casts `AIlp`, a Purge (`Aprg`, `Bprg`) the recreation lacks |

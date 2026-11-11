@@ -1181,7 +1181,7 @@ fn max_mana_registration_requires_the_passive_base_and_a_distinct_class() {
 fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
     for (class, expected) in [
         ("AIsb", "wrapped ability"),
-        ("AIpb", "poison"),
+        ("AIlb", "Bprg"),
         ("AIrc", "death handler"),
         ("AUau", "buff BUau"),
         ("AIzz", ""),

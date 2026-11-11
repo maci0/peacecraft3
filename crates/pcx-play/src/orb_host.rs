@@ -1,5 +1,5 @@
 //! On-hit effects of held orbs (`AIfb` Orb of Fire and Orb of Kil'jaeden, `AIcb` Orb of
-//! Corruption, `AIob` Orb of Frost). The decoded rules and their evidence are in
+//! Corruption, `AIob` Orb of Frost, `AIpb` Orb of Venom). The decoded rules and their evidence are in
 //! `docs/re-notes/passive-held-items.md`.
 //!
 //! Every orb adds its `DataA1` to the holder's attack damage like any `AIat` item (that part is
@@ -15,6 +15,11 @@
 //!   `FrostAttackSpeedDecrease` (`MiscGame.txt`) for `Dur1` (`HeroDur1` for a hero). A second hit
 //!   restarts the timer; the decreases never stack.
 //!
+//! - Venom: one poison stack per holder on the target, refreshed by that holder's later hits. The
+//!   stacks tick together once a second (first tick 0.01 s after the first stack) for the sum of
+//!   their damage per second, universal damage of the spells attack type, until the last stack
+//!   ends.
+//!
 //! The orb arms when the target's class is listed in the orb row's `targs1` (so a structure is
 //! outside the stock orbs). Which unit-state flags the client also tests are open; see the note.
 use super::combat::Weapon;
@@ -28,6 +33,13 @@ use std::collections::BTreeMap;
 /// Attack-type name of the splash record, whose index in the client's damage-bonus table is zero.
 const SPLASH_ATTACK_TYPE: &str = "spells";
 const NAME: &str = "orb hit";
+/// Seconds between poison ticks after the first: slot `+0x364` of the periodic buff base
+/// (`0x6ef820`) returns the global `0x112d810`, which the static initializer `0x401460` sets to
+/// the integer 1.
+const POISON_TICK_INTERVAL: f32 = 1.0;
+/// A unit with this buff takes no poison tick: the tick routine `0x6efd30` looks it up through
+/// the class getter `0xb3ba50` and returns when it is present.
+const POISON_SUPPRESSING_BUFF: [u8; 4] = *b"BUsl";
 
 struct ActivePenalty {
     buff: [u8; 4],
@@ -45,10 +57,29 @@ struct ActiveFrost {
     movement: Option<f32>,
 }
 
+/// One holder's poison on a unit. A later hit by the same holder restarts `expires_at`; a hit by
+/// another holder adds a stack.
+struct PoisonStack {
+    source: HandleId,
+    damage: f32,
+    expires_at: f64,
+}
+
+/// The poison on one unit: the stacks, and the periodic damage they add up to.
+struct ActivePoison {
+    buff: [u8; 4],
+    stacks: Vec<PoisonStack>,
+    /// The unit the tick damage is credited to: the holder of the first stack, then of the
+    /// latest stack added.
+    credit: HandleId,
+    next_tick: f64,
+}
+
 #[derive(Default)]
 pub(super) struct State {
     penalties: BTreeMap<HandleId, ActivePenalty>,
     frosts: BTreeMap<HandleId, ActiveFrost>,
+    poisons: BTreeMap<HandleId, ActivePoison>,
 }
 
 impl ObjectHost {
@@ -120,13 +151,18 @@ impl ObjectHost {
     /// `movetp` of `fly`) or ground.
     fn orb_covers(&self, orb: &Orb, victim: &Definition) -> Result<bool, Error> {
         let structure = super::unit_types::structure(victim).map_err(|e| self.orb_error(e))?;
-        Ok(if structure {
+        let class = if structure {
             orb.targets.structure
         } else if super::unit_types::flying(victim) {
             orb.targets.air
         } else {
             orb.targets.ground
-        })
+        };
+        // `organic` is the class bit a mechanical unit lacks.
+        let organic = !orb.targets.organic
+            || !super::unit_types::class(victim, "UNIT_TYPE_MECHANICAL")
+                .map_err(|e| self.orb_error(e))?;
+        Ok(class && organic)
     }
 
     /// Whether the orb changes the target's armor before the attack damage is computed.
@@ -134,9 +170,34 @@ impl ObjectHost {
         matches!(orb.kind, OrbKind::Corruption { .. })
     }
 
-    /// Applies or refreshes the corruption penalty or the frost decreases on `target`. The fire
-    /// orb does nothing here.
-    pub(super) fn orb_debuff(&mut self, orb: &Orb, target: HandleId) -> Result<(), Error> {
+    /// Applies or refreshes the corruption penalty, the frost decreases or the poison of
+    /// `source` on `target`. The fire orb does nothing here.
+    pub(super) fn orb_debuff(
+        &mut self,
+        orb: &Orb,
+        source: HandleId,
+        target: HandleId,
+    ) -> Result<(), Error> {
+        if let OrbKind::Poison {
+            damage_per_second,
+            duration,
+            hero_duration,
+            first_tick_delay,
+            buff,
+        } = orb.kind
+        {
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| self.orb_error("clock missing"))?;
+            let hero = self.executed_unit(target)?.definition.rawcode[0].is_ascii_uppercase();
+            let expires_at = now + f64::from(if hero { hero_duration } else { duration });
+            let stack = PoisonStack {
+                source,
+                damage: damage_per_second,
+                expires_at,
+            };
+            return self.orb_poison(target, buff, stack, now + f64::from(first_tick_delay));
+        }
         if let OrbKind::Frost {
             move_decrease,
             attack_decrease,
@@ -252,6 +313,120 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// One poison hit. The holder's own stack only restarts its timer; a new holder adds a stack
+    /// and becomes the damage credit. The first stack attaches the buff and starts the tick
+    /// schedule at `first_tick`; later stacks leave the schedule alone.
+    fn orb_poison(
+        &mut self,
+        target: HandleId,
+        buff: [u8; 4],
+        stack: PoisonStack,
+        first_tick: f64,
+    ) -> Result<(), Error> {
+        if let Some(poison) = self.orbs.poisons.get_mut(&target) {
+            if poison.buff != buff {
+                return Err(
+                    self.orb_error("poisons of different buffs on one unit are not modelled")
+                );
+            }
+            match poison.stacks.iter_mut().find(|s| s.source == stack.source) {
+                Some(own) => own.expires_at = stack.expires_at,
+                None => {
+                    poison.credit = stack.source;
+                    poison.stacks.push(stack);
+                }
+            }
+            return Ok(());
+        }
+        self.attach_unit_buff(
+            target,
+            ActiveBuff::new(
+                buff,
+                BuffTraits {
+                    negative: true,
+                    ..BuffTraits::default()
+                },
+            ),
+        )?;
+        self.orbs.poisons.insert(
+            target,
+            ActivePoison {
+                buff,
+                credit: stack.source,
+                stacks: vec![stack],
+                next_tick: first_tick,
+            },
+        );
+        Ok(())
+    }
+
+    /// Runs the poison events of `unit` that are due at `now` in time order: the stack expiries
+    /// and the ticks. The last expiry ends the poison.
+    fn advance_poison(&mut self, unit: HandleId, now: f64) -> Result<(), Error> {
+        loop {
+            let Some(poison) = self.orbs.poisons.get_mut(&unit) else {
+                return Ok(());
+            };
+            let expiry = poison
+                .stacks
+                .iter()
+                .map(|stack| stack.expires_at)
+                .fold(f64::INFINITY, f64::min);
+            if expiry <= now && expiry <= poison.next_tick {
+                poison.stacks.retain(|stack| stack.expires_at > expiry);
+                if poison.stacks.is_empty() {
+                    self.end_orb_poison(unit);
+                    return Ok(());
+                }
+            } else if poison.next_tick <= now {
+                let total: f32 = poison.stacks.iter().map(|stack| stack.damage).sum();
+                let credit = poison.credit;
+                poison.next_tick += f64::from(POISON_TICK_INTERVAL);
+                self.poison_tick(unit, credit, total)?;
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
+    /// One poison tick: `total` damage of the spells attack type and universal damage type, so
+    /// armor does not apply, credited to `credit`. A sleeping unit (buff `BUsl`) takes none
+    /// (`0x6efd30`), and neither does a unit that is not a valid target.
+    fn poison_tick(&mut self, unit: HandleId, credit: HandleId, total: f32) -> Result<(), Error> {
+        if self
+            .unit_buffs(unit)?
+            .iter()
+            .any(|buff| buff.rawcode() == POISON_SUPPRESSING_BUFF)
+        {
+            return Ok(());
+        }
+        let Some(victim) = self.weapon_target(unit) else {
+            return Ok(());
+        };
+        let Some(combat) = victim.combat.as_ref() else {
+            return Ok(());
+        };
+        let defense = combat.defense;
+        if self.executed_unit(credit).is_err() {
+            return Err(self.orb_error("the unit that poisoned this target no longer exists"));
+        }
+        let damage = self
+            .attack_type_damage(SPLASH_ATTACK_TYPE, total, defense)
+            .ok_or_else(|| self.orb_error("the damage-bonus table has no spells row"))?;
+        // The tick record has the spells attack type, which spell-resistance items scale.
+        let taken = self
+            .unit_hero_bonus(unit)?
+            .spell_damage_taken
+            .unwrap_or(1.0);
+        self.apply_damage(credit, unit, damage * taken, true)
+    }
+
+    fn end_orb_poison(&mut self, unit: HandleId) {
+        if let Some(poison) = self.orbs.poisons.remove(&unit) {
+            self.detach_unit_buff(unit, poison.buff);
+        }
+    }
+
     /// Fire orb splash around `target`: the full `DataA1` to each living enemy of `source`
     /// within `Area1` plus its collision radius of the target's position, never the target.
     pub(super) fn orb_splash(
@@ -325,6 +500,10 @@ impl ObjectHost {
         for unit in frozen {
             self.end_frost(unit)?;
         }
+        let poisoned: Vec<HandleId> = self.orbs.poisons.keys().copied().collect();
+        for unit in poisoned {
+            self.advance_poison(unit, now)?;
+        }
         Ok(())
     }
 
@@ -356,11 +535,20 @@ impl ObjectHost {
         {
             self.end_frost(unit)?;
         }
+        if self
+            .orbs
+            .poisons
+            .get(&unit)
+            .is_some_and(|poison| poison.buff == rawcode)
+        {
+            self.orbs.poisons.remove(&unit);
+        }
         Ok(())
     }
 
-    /// A dead or removed unit keeps no penalty or frost.
+    /// A dead or removed unit keeps no penalty, frost or poison.
     pub(super) fn forget_orb_unit(&mut self, unit: HandleId) {
+        self.orbs.poisons.remove(&unit);
         self.orbs.penalties.remove(&unit);
         self.orbs.frosts.remove(&unit);
     }

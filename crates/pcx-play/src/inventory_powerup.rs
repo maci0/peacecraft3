@@ -42,6 +42,21 @@ const FIRE_ORB_WINDOW: u32 = 0xca6d40;
 const CORRUPTION_ORB_WINDOW: u32 = 0xca6ce0;
 /// Registration call for the Orb of Frost class (source `AIob`, base `AIDB`).
 const FROST_ORB_WINDOW: u32 = 0xca6d80;
+/// Registration call for the Orb of Venom class (source `AIpb`, base `AIDB`).
+const VENOM_ORB_WINDOW: u32 = 0xca6e00;
+/// Registration call for the poison class the venom orb triggers (source `Apo2`, base from the
+/// call `0xbe2590`, which returns `Apoi`). Same 25-byte layout as the orb base window.
+pub(crate) const POISON_WINDOW: u32 = 0xca6de0;
+/// The class `0xbe2590` returns: the base the poison class registers over.
+const POISON_BASE_CLASS: &str = "Apoi";
+/// Initialized global the poison buff reads as the delay of its first tick (`0x6ef800`, the
+/// `+0x360` slot of the periodic buff base).
+const POISON_FIRST_TICK_VA: u32 = 0x10db058;
+/// `DataD` bits of the poison row. Slot `+0x354` of the poison class (`0xca2d70`) splits `DataD`
+/// into `& 7` (the stacking mode; 0 is the single-buff mode, which stays refused) and `& 8`
+/// (which `BuffID1` entry names the buff). Any other bit refuses.
+const POISON_MODE_MASK: i64 = 7;
+const POISON_SECOND_BUFF_BIT: i64 = 8;
 /// Registration call for the spell-resistance class (source `AIsr`, base `AIat`).
 const SPELL_RESISTANCE_WINDOW: u32 = 0xbc9ee0;
 /// Registration call for the held attack-speed class (source `AIas`, base `APbo`).
@@ -71,9 +86,9 @@ const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
          that wrapped ability (slow, purge or black arrow) is not modeled",
     ),
     (
-        "AIpb",
-        "the venom orb adds damage and the air attack switch, and its poison comes from \
-         a second ability whose class is not modeled",
+        "AIlb",
+        "the lightning orb casts its sibling ability AIlp on each armed hit; AIlp is a purge \
+         (class Aprg, buff Bprg) and the recreation has no purge",
     ),
     (
         "AIrc",
@@ -120,6 +135,9 @@ pub struct OrbTargets {
     pub ground: bool,
     pub air: bool,
     pub structure: bool,
+    /// The `organic` token: the target is not a mechanical unit (unit flag `0x454` bit 8 clear,
+    /// mask bit `0x4000000` of the class routine `0x6b1c90`).
+    pub organic: bool,
 }
 
 /// The on-hit effect of an orb, besides the flat attack damage that every orb adds.
@@ -145,6 +163,17 @@ pub enum OrbKind {
         hero_duration: f32,
         buff: [u8; 4],
     },
+    /// Venom: poison that deals `damage_per_second` to the target once per second, first
+    /// `first_tick_delay` seconds after the hit, for `duration` (`hero_duration` for a hero).
+    /// The poison of one holder refreshes and the poison of different holders stacks. The buff
+    /// `buff` is the `BuffID1` entry the poison row's `DataD` selects.
+    Poison {
+        damage_per_second: f32,
+        duration: f32,
+        hero_duration: f32,
+        first_tick_delay: f32,
+        buff: [u8; 4],
+    },
 }
 
 /// The orb classes a row can belong to.
@@ -153,6 +182,7 @@ enum OrbFamily {
     Fire,
     Corruption,
     Frost,
+    Venom,
 }
 
 /// A held orb: `damage` is `DataA1`, already counted in [`AttributeBonus::damage`].
@@ -265,6 +295,17 @@ struct OrbClasses {
     corruption: String,
     /// `AIob` (Orb of Frost), attached by `with_frost_orb`.
     frost: Option<FrostClass>,
+    /// `AIpb` (Orb of Venom) and its poison class, attached by `with_venom_orb`.
+    venom: Option<VenomClasses>,
+}
+
+/// The registered Orb of Venom class, the poison class its item lists beside it, and the first
+/// tick delay read from the image.
+#[derive(Clone, Debug)]
+struct VenomClasses {
+    orb: String,
+    poison: String,
+    first_tick_delay: f32,
 }
 
 /// The registered Frost orb class and the `Misc` decreases its buff applies, attached by
@@ -353,6 +394,26 @@ impl Rules {
         let fire_orb = window(FIRE_ORB_WINDOW)?;
         let corruption_orb = window(CORRUPTION_ORB_WINDOW)?;
         let frost_orb = window(FROST_ORB_WINDOW)?;
+        let venom_orb = window(VENOM_ORB_WINDOW)?;
+        let poison = pe
+            .read_from(POISON_WINDOW, true)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..HEAL_WINDOW_LEN)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| fail("truncated poison registration window"))?;
+        let poison_base_va = call_target(&poison, POISON_WINDOW, 5).map_err(|e| fail(&e))?;
+        let poison_base_code = pe
+            .read_from(poison_base_va, true)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..BASE_FN_LEN)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| fail("truncated poison base function"))?;
+        let first_tick: [u8; 4] = pe
+            .read_from(POISON_FIRST_TICK_VA, false)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| fail("truncated poison first tick delay"))?;
         let spell_resistance = window(SPELL_RESISTANCE_WINDOW)?;
         let attack_speed = window(ATTACK_SPEED_WINDOW)?;
         let move_speed_bonus = window(MOVE_SPEED_BONUS_WINDOW)?;
@@ -370,6 +431,7 @@ impl Rules {
         .and_then(|rules| rules.with_heal(&heal, &base_code))
         .and_then(|rules| rules.with_orbs(&orb_base, &orb_base_code, &fire_orb, &corruption_orb))
         .and_then(|rules| rules.with_frost_orb(&frost_orb))
+        .and_then(|rules| rules.with_venom_orb(&venom_orb, &poison, &poison_base_code, first_tick))
         .and_then(|rules| rules.with_spell_resistance(&spell_resistance))
         .and_then(|rules| rules.with_attack_speed(&attack_speed))
         .and_then(|rules| rules.with_move_speed_bonus(&move_speed_bonus))
@@ -422,6 +484,7 @@ impl Rules {
             fire,
             corruption,
             frost: None,
+            venom: None,
         });
         Ok(self)
     }
@@ -462,7 +525,57 @@ impl Rules {
                         .frost
                         .as_ref()
                         .is_some_and(|frost| frost.class == class)
+                    || orbs
+                        .venom
+                        .as_ref()
+                        .is_some_and(|venom| venom.orb == class || venom.poison == class)
             })
+    }
+
+    /// Attaches the Orb of Venom and the poison class it triggers. The orb registers over the
+    /// orb base; the poison class registers over `Apoi`, whose base function the caller reads
+    /// from the image. `first_tick_delay` holds the initialized float the poison buff reads for
+    /// its first tick; it must be finite and positive.
+    pub(crate) fn with_venom_orb(
+        mut self,
+        orb_window: &[u8],
+        poison_window: &[u8],
+        poison_base_fn: &[u8],
+        first_tick_delay: [u8; 4],
+    ) -> Result<Self, String> {
+        let (orb, orb_base) = class_from_window(orb_window)?;
+        let (poison, poison_base) =
+            class_from_call_window_at(poison_window, POISON_WINDOW, poison_base_fn)?;
+        let orbs = self
+            .orbs
+            .as_ref()
+            .ok_or("the venom orb registration needs the orb base")?;
+        if orb_base != orbs.base {
+            return Err("venom orb registration must name the orb base class".into());
+        }
+        if poison_base != POISON_BASE_CLASS {
+            return Err(format!(
+                "poison registration must name base {POISON_BASE_CLASS}"
+            ));
+        }
+        if orbs.venom.is_some()
+            || orb == poison
+            || self.is_registered(&orb)
+            || self.is_registered(&poison)
+        {
+            return Err("venom orb registrations must name distinct classes".into());
+        }
+        let first_tick_delay = f32::from_le_bytes(first_tick_delay);
+        if !first_tick_delay.is_finite() || first_tick_delay <= 0.0 {
+            return Err("poison first tick delay is not a positive real".into());
+        }
+        let orbs = self.orbs.as_mut().expect("checked above");
+        orbs.venom = Some(VenomClasses {
+            orb,
+            poison,
+            first_tick_delay,
+        });
+        Ok(self)
     }
 
     /// Attaches the Orb of Frost class. Its registration must name the orb base, which
@@ -1041,9 +1154,26 @@ impl Rules {
                     Some(OrbFamily::Corruption)
                 } else if orbs.frost.as_ref().is_some_and(|frost| frost.class == code) {
                     Some(OrbFamily::Frost)
+                } else if orbs.venom.as_ref().is_some_and(|venom| venom.orb == code) {
+                    Some(OrbFamily::Venom)
                 } else {
                     None
                 };
+                if let Some(venom) = &orbs.venom
+                    && venom.poison == code
+                {
+                    // The poison ability is read through the venom orb that triggers it: the
+                    // orb handler finds it on the owner by the item that carries both.
+                    let orbs_listed = self.aliases_of_class(&abilities, &venom.orb)?;
+                    if orbs_listed.len() != 1 {
+                        return Err(format!(
+                            "poison ability {alias} on {} needs exactly one {} ability beside it",
+                            item.rawcode(),
+                            venom.orb
+                        ));
+                    }
+                    continue;
+                }
                 if let Some(family) = family {
                     if held.orb.is_some() {
                         return Err(format!(
@@ -1051,7 +1181,7 @@ impl Rules {
                             item.rawcode()
                         ));
                     }
-                    let orb = self.orb(alias, family)?;
+                    let orb = self.orb(alias, family, &abilities)?;
                     held.damage = held
                         .damage
                         .checked_add(orb.damage)
@@ -1154,8 +1284,94 @@ impl Rules {
             .map_err(|e| e.to_string())
     }
 
-    /// One orb ability row at the effect level.
-    fn orb(&self, alias: &str, family: OrbFamily) -> Result<Orb, String> {
+    /// The aliases in the comma list `abilities` whose row code is `class`.
+    fn aliases_of_class(&self, abilities: &str, class: &str) -> Result<Vec<String>, String> {
+        let mut found = Vec::new();
+        for alias in abilities
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty() && *a != "_")
+        {
+            if self.ability_code(alias)? == class {
+                found.push(alias.to_owned());
+            }
+        }
+        Ok(found)
+    }
+
+    /// The poison row an Orb of Venom triggers at the effect level: damage per second, the
+    /// durations and the buff, as the poison class reads them (`0xca2d70`). `DataB` and `DataC`
+    /// (move and attack slow) must be zero, because the recreation does not host those speed
+    /// modifiers for poison; `DataD` must select the stacking mode.
+    fn poison(&self, alias: &str, first_tick_delay: f32) -> Result<(OrbKind, OrbTargets), String> {
+        let ability = self.effect_row(alias, "poison")?;
+        let cell = |name: &str| {
+            ability
+                .cell(SlkId::AbilityData, name)
+                .map_err(|e| e.to_string())
+        };
+        let real = |name: &str| match cell(name)?.typed(FieldKind::Real) {
+            Ok(Value::Real(value)) if value.is_finite() => Ok(value as f32),
+            _ => Err(format!("{name} of poison {alias} is not a finite real")),
+        };
+        // An unset cell reads as zero in the level record.
+        let real_or_zero = |name: &str| {
+            if matches!(cell(name)?.text.trim(), "" | "-" | "_") {
+                Ok(0.0)
+            } else {
+                real(name)
+            }
+        };
+        let damage_per_second = real("DataA1")?;
+        if damage_per_second <= 0.0 {
+            return Err(format!(
+                "poison {alias} DataA1 is not positive; a heal over time is not decoded"
+            ));
+        }
+        if real_or_zero("DataB1")? != 0.0 || real_or_zero("DataC1")? != 0.0 {
+            return Err(format!(
+                "poison {alias} slows move or attack speed (DataB1, DataC1), which is not hosted"
+            ));
+        }
+        let mode = match cell("DataD1")?.typed(FieldKind::Int) {
+            Ok(Value::Integer(n)) => n,
+            _ => return Err(format!("DataD1 of poison {alias} is not an integer")),
+        };
+        if mode & POISON_MODE_MASK == 0 || mode & !(POISON_MODE_MASK | POISON_SECOND_BUFF_BIT) != 0
+        {
+            return Err(format!(
+                "poison {alias} DataD1 {mode} is not a decoded stacking mode"
+            ));
+        }
+        let (duration, hero_duration) = (real("Dur1")?, real("HeroDur1")?);
+        if duration <= 0.0 || hero_duration <= 0.0 {
+            return Err(format!(
+                "poison {alias} duration is not positive; a buff without a timer is not decoded"
+            ));
+        }
+        let index = usize::from(mode & POISON_SECOND_BUFF_BIT != 0);
+        let buff: [u8; 4] = cell("BuffID1")?
+            .text
+            .split(',')
+            .nth(index)
+            .map(|code| code.trim().as_bytes().to_vec())
+            .and_then(|code| code.try_into().ok())
+            .filter(|code: &[u8; 4]| code.iter().all(u8::is_ascii_alphanumeric))
+            .ok_or_else(|| format!("poison {alias} BuffID1 entry {index} is not a rawcode"))?;
+        let targets = orb_targets(alias, cell("targs1")?.text)?;
+        let kind = OrbKind::Poison {
+            damage_per_second,
+            duration,
+            hero_duration,
+            first_tick_delay,
+            buff,
+        };
+        Ok((kind, targets))
+    }
+
+    /// One orb ability row at the effect level. `abilities` is the item's ability list, which
+    /// the venom orb searches for its poison ability.
+    fn orb(&self, alias: &str, family: OrbFamily, abilities: &str) -> Result<Orb, String> {
         let ability = self.effect_row(alias, "orb")?;
         let cell = |name: &str| {
             ability
@@ -1236,6 +1452,29 @@ impl Rules {
                     return Err(format!("orb {alias} Area1 is not positive"));
                 }
                 OrbKind::Fire { area }
+            }
+            OrbFamily::Venom => {
+                let venom = self
+                    .orbs
+                    .as_ref()
+                    .and_then(|orbs| orbs.venom.as_ref())
+                    .ok_or_else(|| format!("orb {alias} needs the venom registration"))?;
+                let poisons = self.aliases_of_class(abilities, &venom.poison)?;
+                let [poison_alias] = poisons.as_slice() else {
+                    return Err(format!(
+                        "orb {alias} needs exactly one {} ability on its item",
+                        venom.poison
+                    ));
+                };
+                let (kind, poison_targets) = self.poison(poison_alias, venom.first_tick_delay)?;
+                // The orb arms on its own class list and the poison class vetoes on its own; a
+                // pair that differs would arm a hit the poison then refuses, which is not decoded.
+                if poison_targets != targets {
+                    return Err(format!(
+                        "orb {alias} and poison {poison_alias} list different target classes"
+                    ));
+                }
+                kind
             }
         };
         Ok(Orb {
@@ -1533,7 +1772,7 @@ fn class_from_call_window_at(
 }
 
 /// Unit-class tokens of an orb's `targs1`. The decoded flag word adds the enemies bit and takes
-/// the class bits from this list (`ground` 0x2, `air` 0x4, `structure` 0x8). Tokens that select
+/// the class bits from this list (`ground` 0x2, `air` 0x4, `structure` 0x8, `organic` 0x4000000). Tokens that select
 /// destructables, items or wards are accepted and have no effect on unit targets; relationship and
 /// state tokens, which the reviewed client resolves in the target query, are refused.
 fn orb_targets(alias: &str, targs: &str) -> Result<OrbTargets, String> {
@@ -1545,6 +1784,7 @@ fn orb_targets(alias: &str, targs: &str) -> Result<OrbTargets, String> {
             "ground" => targets.ground = true,
             "air" => targets.air = true,
             "structure" => targets.structure = true,
+            "organic" => targets.organic = true,
             "ward" | "debris" | "item" | "tree" | "wall" | "decoration" | "bridge" => {}
             other => {
                 return Err(format!("orb {alias} targs1 token {other:?} is not decoded"));

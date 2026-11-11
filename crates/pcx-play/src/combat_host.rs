@@ -1739,7 +1739,7 @@ impl ObjectHost {
         if self.weapon_target(missile.target).is_none() {
             return Ok(());
         }
-        self.orb_debuff(&armed.orb, missile.target)?;
+        self.orb_debuff(&armed.orb, missile.source, missile.target)?;
         if Self::orb_corrupts(&armed.orb) {
             let (armor, defense) = self.victim_armor(missile.target)?;
             missile.damage = self.armored_damage(armed.base, armed.weapon, armor, defense);
@@ -2256,7 +2256,7 @@ impl ObjectHost {
                         && let Some(orb) = &orb
                     {
                         // The client lowers the armor first, then applies the attack damage.
-                        self.orb_debuff(orb, swung)?;
+                        self.orb_debuff(orb, unit, swung)?;
                     }
                     let preflight = weapon.missile_speed == MissileSpeed::Instant
                         && self.campaign_flee_source_preflight(unit, swung)?;

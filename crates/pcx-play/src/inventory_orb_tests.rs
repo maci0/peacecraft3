@@ -226,7 +226,8 @@ fn fire_orb_reads_damage_area_and_target_classes_from_its_row() {
             targets: OrbTargets {
                 ground: true,
                 air: true,
-                structure: false
+                structure: false,
+                organic: false
             },
         })
     );
@@ -452,7 +453,8 @@ fn frost_orb_reads_durations_and_buff_from_its_row_and_decreases_from_misc() {
             targets: OrbTargets {
                 ground: true,
                 air: true,
-                structure: false
+                structure: false,
+                organic: false
             },
         })
     );
@@ -717,3 +719,5 @@ fn speed_bonus_registration_must_name_the_passive_base() {
         .unwrap();
     assert!(err.contains("distinct"), "{err}");
 }
+#[path = "inventory_venom_tests.rs"]
+mod venom;
