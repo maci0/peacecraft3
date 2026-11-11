@@ -139,7 +139,7 @@ what that leaves:
 - Consequence: `ntks`, `ucry` and `nnwl` have no automatic casts. A tick armed by an
   ON order refuses when game time reaches it instead of skipping the cast silently.
 
-## Frost Armor base class and Burrow (not bound)
+## Frost Armor base class and Burrow
 
 `CAbilityFrostArmor` (code `AUfa`, alias `[AUfa]`, which has no `Orderoff`) is not
 the class for `frostarmoroff`. Its OFF virtual is `mov eax, [global]`, not an
@@ -152,28 +152,25 @@ immediates.
 so the autocast OFF profile check cannot apply. `CAbilityBurrow` is a morph
 ability. The repo's form-change path is `prepare_form` in `unit_host.rs`, reached
 by Raven Form (`unit_morph_rules.rs`, `script-unit-morph.md`) and by Polymorph
-(`unit_curse_host.rs`). No burrow state or its movement and targeting effects
-exist in the repo. Burrow stays refused until that state and its effects are
-established.
+(`unit_curse_host.rs`). The class shares the Raven Form morph base and is bound by
+`unit_morph_rules.rs`; see [unit-root-burrow.md](unit-root-burrow.md). No burrow state or its
+movement and targeting effects exist in the repo, and the form swap of a form without the
+immediate-change bit (`Abur` `DataB=1`) is not decoded, so burrow on `Abur` stays refused.
 
-## Root and unroot (not autocast)
+## Root and unroot (not autocast; decoded in unit-root-burrow.md)
 
 `unroot` is the uproot order of the Night Elf root ability, not an autocast OFF.
-`[Aroo]` in `NightElfAbilityFunc.txt` and `[Aro1]`/`[Aro2]` in
-`NeutralAbilityFunc.txt` declare `Order=root` and `Unorder=unroot`; their `code`
-is `Aroo`, and the executable carries a `CAbilityRoot` class name. The
-locked-chapter probe for NightElf01 reaches `unroot` on unit `etol`, which
-carries `Aro1` at rank one, and receives the generic unsupported
+`[Aroo]` in `NightElfAbilityFunc.txt` declares `Order=root` and `Unorder=unroot`;
+`Aro1` and `Aro2` have no section of their own and their `code` is `Aroo`; the
+executable carries a `CAbilityRoot` class name. Before the class was bound, the NightElf01
+probe reached `unroot` on unit `etol` (`Aro1` at rank one) and received the generic unsupported
 immediate-order refusal.
 
-The root effect is not established. `ai-construction.md` records state bits
-`0x80` and `0x8000000` as candidate rooted/uprooted building states with an
-unproven mapping to live ability state, and the recreation does not implement
-that state. Missing evidence: the state transition, its timing, movement and
-attack effects, the cost or cooldown, and the return for an already-uprooted
-unit. A native trace or runtime probe must establish these before `unroot` is
-bound. Until then the order stays refused. No full autocast or interlude
-completion is claimed by these parser and synthetic host tests.
+The state transition, return values, attack mask and the refusals that remain are decoded in
+[unit-root-burrow.md](unit-root-burrow.md): `unroot` is accepted once for a rooted unit and the
+uprooted state is recorded. The candidate bits above are now read as: `0x80` set at attach,
+`0x8000000` rooted (cleared by uproot). Uprooted movement, the point order `root` and the deferred
+order path stay refused.
 
 ## Town Bell (`Amic`) immediate order: native decode (not implemented)
 

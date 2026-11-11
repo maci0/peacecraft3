@@ -393,3 +393,22 @@ is this lane. Decode and rules: [entangle-mine-conversion.md](entangle-mine-conv
 | RoC Undead02Interlude | `raisedeadon` (`ACrd`, code `Arai`) | passes; `UnitAddItemToSlotById` refused: unsupported passive ability `AIlb` on `olig` |
 | TFT UndeadX07a | `webon` (`ACwb`) | passes; probe exits 0 (`executed_units=64`) |
 | TFT NightElfX03 | `blackarrowon` unsupported immediate order | passes; `SetDoodadAnimationRect` refused: footprint doodad rectangle selection needs the native footprint cell-count origin (`script-doodads.md`) |
+
+## Probe results (2026-11-11, root and burrow lane)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the sweep-6 log, "after"
+is this branch. Decode, addresses and the rules implemented: [unit-root-burrow.md](unit-root-burrow.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf01 | `IssueImmediateOrder` `unroot` on `etol` (`war3map.j:810`) unsupported | probe passes (`executed_units=105`, published) |
+| RoC NightElf04 | `IssueImmediateOrder` `unroot` on `etoa` unsupported | probe passes (`executed_units=275`, published) |
+| TFT NightElfX07 | `IssueImmediateOrder` `unroot` on `eaow` (`war3map.j:1157`) unsupported | passes every `unroot`; `IssueImmediateOrder` at `war3map.j:1520` refused: autocast enabling for `Aweb` not implemented |
+| TFT NightElfX08 | `IssueImmediateOrder` `unroot` on `etrp` (`war3map.j:1094`) unsupported | passes `unroot`; `CreateUnit` at `war3map.j:1282` refused: `UnitBalance` `regenMana` required finite |
+| TFT UndeadX04 | `IssueImmediateOrder` `burrow` on `u000` (`war3map.j:1607`) unsupported | refused with a precise message: morph flags `0x1` of class `Abur`, form swap time for a form without the immediate bit not decoded |
+| TFT UndeadX07b | `IssueImmediateOrder` `burrow` on `nanb` (`war3map.j:1620`) unsupported | passes (no ability handles the order, native returns false); `GetDestructableOccluderHeight` unsupported (`Blizzard.j:4027`) |
+
+Open after this lane:
+
+- `burrow` on `Abur`: who posts event `0xd01c4`, hence when the form changes for `DataB=1`.
+- Uprooted movement, the point order `root`, and the creation-time rooted attack mask (`0xb8f470`).
