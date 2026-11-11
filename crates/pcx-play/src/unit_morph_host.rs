@@ -19,6 +19,14 @@ pub struct UnitMorph {
     flight: Option<Flight>,
 }
 
+/// Public flying height of a unit with no form: the target the setter (`0x4ab5a0`) stores at
+/// `unit+0x414` and the visual trajectory toward it. Absent until the script first sets it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnitHeight {
+    target: f32,
+    flight: Option<Flight>,
+}
+
 use super::{Entry, Error, EventSubject, Failure, ObjectHost, UnitAbilities};
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::{HandleId, RealOps, ScriptCall, Value, ast::BinOp};
@@ -187,9 +195,10 @@ impl ObjectHost {
                     Entry::Unit { record } => record,
                     _ => return Err(self.inner.error(name, Failure::WrongFamily)),
                 };
-                Ok(Value::Real(match &record.morph {
-                    Some(m) => m.height_target,
-                    None => self.morph_height(&record.definition)?,
+                Ok(Value::Real(match (&record.morph, &record.height) {
+                    (Some(m), _) => m.height_target,
+                    (None, Some(h)) => h.target,
+                    (None, None) => self.morph_height(&record.definition)?,
                 }))
             })());
         }
@@ -225,25 +234,15 @@ impl ObjectHost {
                 Failure::UnitActivity("finite height and nonnegative flight rate required".into()),
             ));
         }
-        // This first capability covers the observed ordinary form, without inventing
-        // a generic flight-granting ability or accepting unqualified ground behavior.
-        let morph = record.morph.as_ref().ok_or_else(|| {
-            let abilities = record.abilities.as_ref().map(|a| a.levels().take(16)
-                .map(|(alias, rank)| (alias, rank, self.unit_ability_available(unit, alias).map_err(|e| e.to_string())))
-                .collect::<Vec<_>>());
-            self.morph_error(format!(
-                "height setter without an admitted form is not qualified: unit={unit:?} rawcode={:?} owner={:?} revision={} movement={:?} shown={} paused={:?} vitals={:?} combat_admitted={} dead={:?} current_order={:?} abilities_first16={abilities:?} target={target:?} rate={rate:?} clock={:?}",
-                record.definition.rawcode, record.owner, record.definition_revision, record.movement(),
-                record.shown, record.paused_since, record.vitals, record.combat.is_some(),
-                record.combat.as_ref().map(|c| c.dead), self.current_unit_order(unit), self.timer_game_time(),
-            ))
-        })?;
         if record.paused_since.is_some()
             || record.combat.as_ref().is_some_and(|c| c.dead)
             || record.movement().map_err(|e| self.morph_error(e))?
                 != crate::unit_placement::Movement::Air
         {
-            return Err(self.morph_error("paused, dead or grounded height setter is not qualified"));
+            return Err(self.morph_error(
+                "paused, dead or grounded height setter is not qualified: the handler (0x4ab5a0) \
+                 checks no movement type, but pause, death and ground-unit altitude are not decoded",
+            ));
         }
         let rules = self
             .admitted_morph_rules()
@@ -265,7 +264,12 @@ impl ObjectHost {
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.morph_error("flight clock missing"))?;
-        let from = morph.flight.map_or(
+        let flight = match (&record.morph, &record.height) {
+            (Some(m), _) => m.flight,
+            (None, Some(h)) => h.flight,
+            (None, None) => None,
+        };
+        let from = flight.map_or(
             record
                 .flight_height
                 .unwrap_or(self.morph_height(&record.definition)?),
@@ -293,14 +297,18 @@ impl ObjectHost {
                 .map_err(|_| self.morph_error("flight index allocation failed"))?;
         }
         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-            let morph = record.morph.as_mut().expect("preflight form");
-            morph.height_target = target;
-            morph.flight = (duration > 0.).then_some(Flight {
+            let flight = (duration > 0.).then_some(Flight {
                 from,
                 to: target,
                 start: now,
                 finish,
             });
+            if let Some(morph) = record.morph.as_mut() {
+                morph.height_target = target;
+                morph.flight = flight;
+            } else {
+                record.height = Some(UnitHeight { target, flight });
+            }
             record.flight_height = Some(if duration == 0. { target } else { from });
         }
         if !self.morph_active.contains(&unit) {
@@ -881,17 +889,24 @@ impl ObjectHost {
             .iter()
             .filter_map(|u| {
                 let record = self.executed_unit(*u).ok()?;
-                let m = record.morph.as_ref()?;
-                if record.paused_since.is_some() && !m.delayed_timer_only() {
-                    return None;
-                }
-                let phase = m
-                    .pending
-                    .as_ref()
-                    .filter(|p| p.stage == EventPhase::Running)
-                    .map(|p| p.cast.map_or(p.finish, |t| t.min(p.finish)));
-                let flight = m.flight.map(|f| f.finish);
-                let due = match (phase, flight) {
+                let height_due = record.height.and_then(|h| h.flight).map(|f| f.finish);
+                let morph_due = record.morph.as_ref().and_then(|m| {
+                    if record.paused_since.is_some() && !m.delayed_timer_only() {
+                        return None;
+                    }
+                    let phase = m
+                        .pending
+                        .as_ref()
+                        .filter(|p| p.stage == EventPhase::Running)
+                        .map(|p| p.cast.map_or(p.finish, |t| t.min(p.finish)));
+                    let flight = m.flight.map(|f| f.finish);
+                    match (phase, flight) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (Some(a), None) | (None, Some(a)) => Some(a),
+                        (None, None) => None,
+                    }
+                });
+                let due = match (morph_due, height_due) {
                     (Some(a), Some(b)) => a.min(b),
                     (Some(a), None) | (None, Some(a)) => a,
                     (None, None) => return None,
@@ -914,6 +929,14 @@ impl ObjectHost {
                     record.flight_height = Some(flight.sample(now));
                     if flight.finish <= now {
                         m.flight = None;
+                    }
+                }
+                if let Some(h) = &mut record.height
+                    && let Some(flight) = h.flight
+                {
+                    record.flight_height = Some(flight.sample(now));
+                    if flight.finish <= now {
+                        h.flight = None;
                     }
                 }
             }
@@ -1050,12 +1073,13 @@ impl ObjectHost {
         Ok(())
     }
     fn retire_morph_index(&mut self, unit: HandleId) {
-        if self
-            .executed_unit(unit)
-            .ok()
-            .and_then(|r| r.morph.as_ref())
-            .is_none_or(|m| m.pending.is_none() && m.flight.is_none())
-        {
+        let busy = self.executed_unit(unit).ok().is_some_and(|r| {
+            r.morph
+                .as_ref()
+                .is_some_and(|m| m.pending.is_some() || m.flight.is_some())
+                || r.height.is_some_and(|h| h.flight.is_some())
+        });
+        if !busy {
             self.morph_active.retain(|u| *u != unit);
         }
     }
@@ -1064,6 +1088,16 @@ impl ObjectHost {
         unit: HandleId,
         operation: &str,
     ) -> Result<(), Error> {
+        if matches!(operation, "PauseUnit" | "unit death")
+            && self
+                .executed_unit(unit)?
+                .height
+                .is_some_and(|h| h.flight.is_some())
+        {
+            return Err(self.morph_error(format!(
+                "{operation} during a height trajectory is not qualified"
+            )));
+        }
         if self.executed_unit(unit)?.morph.as_ref().is_some_and(|m| {
             if operation == "PauseUnit" {
                 (m.pending.is_some() || m.flight.is_some()) && !m.delayed_timer_only()

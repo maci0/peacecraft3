@@ -145,6 +145,8 @@ pub struct ExecutedUnit {
     /// Changes when a same-handle form transition replaces the definition.
     pub definition_revision: u64,
     pub morph: Option<super::UnitMorph>,
+    /// Public flying height of a unit with no form, once the script has set it.
+    pub height: Option<super::UnitHeight>,
     /// Effective visual altitude; absence preserves the current source definition.
     /// This is independent of the public GetUnitFlyHeight target.
     pub flight_height: Option<f32>,
@@ -2646,6 +2648,7 @@ impl ObjectHost {
                 vertex_color: None,
                 definition_revision: 0,
                 morph: None,
+                height: None,
                 flight_height: None,
                 source,
                 x,

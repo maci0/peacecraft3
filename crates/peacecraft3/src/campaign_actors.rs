@@ -2479,6 +2479,7 @@ mod tests {
             vertex_color: None,
             definition_revision: 0,
             morph: None,
+            height: None,
             flight_height: None,
             creation_color: None,
             source: pcx_sim::world::Source {

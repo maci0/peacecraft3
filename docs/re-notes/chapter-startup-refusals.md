@@ -866,3 +866,36 @@ Same exe (SHA-256 `3f2ed012...0eed`). Decodes: [script-destructable-animation.md
 | TFT OrcX03a | `UnitAddItem`: orb `AIft` enabled attack index is not 2 | passes, `executed_units=246` |
 
 Not attempted: the `SetUnitFlyHeight` refusal, which is the unit height-setter qualification rather than a sibling native.
+
+## 2026-11-11 `SetUnitFlyHeight` on a unit with no form
+
+Same exe (SHA-256 `3f2ed012...0eed`, 1.29.2.9231). Registration: `(Hunit;RR)V` / `SetUnitFlyHeight`
+pushed at `0x49d485`, handler `0x4ab5a0` (the second table at `0xcb876d` pushes an inert stub).
+Observed in code:
+
+- The handler resolves the unit (`0x483940`) and returns on null. It checks no movement type,
+  ability or form. If the height is greater than 0.0 (`0x112d88c`) it passes it on, else it passes
+  the constant at `0x10db058` (`0x3c23d70a`, the existing `minimum_target`). It calls `0x69cd70`
+  with clamp flag 1 and the rate.
+- `0x69cd70` stores the height through the clamped-real member at `unit+0x410` (vtable `0xe6e2f0`,
+  setter `0x470130`: value `+0x414` = clamp(height, min `+0x418`, max `+0x41c`)). The constructor
+  `0x675b38` initializes value 0.0, min -FLT_MAX (`0x10db138`), max FLT_MAX (`0x10db134`), so an
+  ordinary unit is unclamped. `GetUnitFlyHeight` returns `unit+0x414`.
+- Then, when the counter `unit+0x40c` is 0, `0x6a0a90` interpolates the visual altitude (`+0x420`)
+  from its current value to `+0x414` over |delta| / rate, or sets it at once for rate 0. The counter
+  starts 0 (`0x675b38`); it is incremented only by `0x693a20` (called at `0xbadca4` when the ability's
+  word `+0x20` has bit `0x40000`) and decremented by `0x6a03b0`. A form ability in progress is the
+  case that holds it nonzero, which the morph state already models.
+
+Rule implemented: a unit with no form keeps its own target and trajectory (`UnitHeight`), starting
+from its authored `moveHeight` or the current sampled altitude, with the same arithmetic as the
+form path. Until the first call `GetUnitFlyHeight` reads `moveHeight`. Still refused, as not
+decoded: a paused or dead unit, a ground-movement unit (the handler has no check, but how a
+ground unit's altitude is applied is not read), and `PauseUnit` or death during a height
+trajectory. Units with a form behave as before.
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX02 | `SetUnitFlyHeight`: height setter without an admitted form is not qualified (unit `nzep`, air) | passes, `executed_units=238` |
+| RoC Human02Interlude | not re-run on the old tree | passes, `executed_units=40` |
+| TFT OrcX02_02 to OrcX02_10 | not in the campaign index (`requested map must come from the selected install's campaign index`) | unchanged, sub-map routes belong to another lane |

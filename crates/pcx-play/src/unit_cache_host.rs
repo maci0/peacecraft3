@@ -99,7 +99,7 @@ impl ObjectHost {
         if record.construction.is_some() || record.construction_request.is_some() {
             return Err("unit cache does not encode construction state".into());
         }
-        if record.morph.is_some() {
+        if record.morph.is_some() || record.height.is_some() {
             return Err("cached form state is not representable".into());
         }
         if record.vertex_color.is_some() {

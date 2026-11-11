@@ -1729,7 +1729,7 @@ pub use unit_guards::{GuardBudget, GuardState, UnitGuard};
 #[path = "unit_morph_host.rs"]
 mod unit_morph;
 pub use unit_morph::{
-    Context as MorphEventContext, EventPhase as MorphEventPhase, MorphPhase, UnitMorph,
+    Context as MorphEventContext, EventPhase as MorphEventPhase, MorphPhase, UnitHeight, UnitMorph,
 };
 
 #[path = "unit_root_host.rs"]

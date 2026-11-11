@@ -1362,22 +1362,23 @@ impl ObjectHost {
             return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL_SLOWED));
         }
         let record = self.executed_unit(target)?.clone();
-        let refusal = if record.morph.is_some() || self.mirror_busy(target) {
-            Some("a form or mirror state")
-        } else if record.illusion.is_some() {
-            Some("an illusion")
-        } else if record.construction.is_some() || record.construction_request.is_some() {
-            Some("construction")
-        } else if record.abilities.as_ref().is_some_and(|a| a.hero.is_some()) {
-            Some("a hero")
-        } else if self
-            .executed_items()
-            .any(|(_, item)| item.held_by.is_some_and(|(owner, _)| owner == target))
-        {
-            Some("held items")
-        } else {
-            None
-        };
+        let refusal =
+            if record.morph.is_some() || record.height.is_some() || self.mirror_busy(target) {
+                Some("a form or mirror state")
+            } else if record.illusion.is_some() {
+                Some("an illusion")
+            } else if record.construction.is_some() || record.construction_request.is_some() {
+                Some("construction")
+            } else if record.abilities.as_ref().is_some_and(|a| a.hero.is_some()) {
+                Some("a hero")
+            } else if self
+                .executed_items()
+                .any(|(_, item)| item.held_by.is_some_and(|(owner, _)| owner == target))
+            {
+                Some("held items")
+            } else {
+                None
+            };
         if let Some(reason) = refusal {
             return Err(
                 self.curse_error(format!("polymorph of a unit with {reason} is not modelled"))

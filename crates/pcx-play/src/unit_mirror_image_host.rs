@@ -132,7 +132,7 @@ impl ObjectHost {
         {
             return Err(fail("image snapshot requires a live ordinary caster"));
         }
-        if source.morph.is_some() {
+        if source.morph.is_some() || source.height.is_some() {
             return Err(fail(
                 "image snapshot of a morphed unit is not representable",
             ));

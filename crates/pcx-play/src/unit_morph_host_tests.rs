@@ -5,6 +5,7 @@ use pcx_sim::world::{ObjectCatalog, ResolutionProblem};
 const SCRIPT: &str = r#"
 globals
 unit U=null
+unit Fly=null
 integer Seen=0
 integer OldKinds=0
 integer OldOrders=0
@@ -12,6 +13,9 @@ integer Finishes=0
 integer Ends=0
 integer Mode=0
 endglobals
+function makefly takes nothing returns nothing
+set Fly=CreateUnit(Player(4),'u002',48.,16.,0.)
+endfunction
 function main takes nothing returns nothing
 set U=CreateUnit(Player(4),'u001',16.,16.,0.)
 endfunction
@@ -978,17 +982,7 @@ fn height_refusals_preserve_target_order_and_visual_state() {
         )
         .unwrap_err()
         .to_string();
-    for field in [
-        "SetUnitFlyHeight",
-        "unit=",
-        "rawcode=[117, 48, 48, 49]",
-        "movement=Ok(Ground)",
-        "shown=true",
-        "combat_admitted=true",
-        "abilities_first16=",
-        "target=99.0",
-        "rate=1.0",
-    ] {
+    for field in ["SetUnitFlyHeight", "grounded height setter", "0x4ab5a0"] {
         assert!(error.contains(field), "{field}: {error}");
     }
     assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
@@ -1396,4 +1390,73 @@ fn pausing_a_burrowing_unit_does_not_stop_the_form_timer() {
     pause(&mut vm, false);
     advance(&mut vm, ordered + 1.46);
     assert_eq!(rawcode(&mut vm, u), *b"u001");
+}
+
+#[test]
+fn air_unit_without_a_form_takes_the_height_setter_and_trajectory() {
+    let (mut vm, _) = open("0.75", "0.375");
+    vm.call("makefly", &[]).unwrap();
+    let Value::Handle(f) = vm.global("Fly") else {
+        panic!("flying unit")
+    };
+    advance(&mut vm, 0.5);
+    let get = |vm: &mut Vm| {
+        vm.host()
+            .inner
+            .native("GetUnitFlyHeight", &[Value::Handle(f)])
+    };
+    // Without a call the height is the unit's authored moveHeight.
+    assert_eq!(get(&mut vm).unwrap(), Value::Real(73.));
+    assert_eq!(
+        vm.host().inner.executed_unit(f).unwrap().flight_height,
+        None
+    );
+    vm.host()
+        .inner
+        .native(
+            "SetUnitFlyHeight",
+            &[Value::Handle(f), Value::Real(113.), Value::Real(80.)],
+        )
+        .unwrap();
+    let record = vm.host().inner.executed_unit(f).unwrap();
+    assert!(record.morph.is_none());
+    assert_eq!(record.flight_height, Some(73.));
+    assert_eq!(get(&mut vm).unwrap(), Value::Real(113.));
+    assert_eq!(vm.host().inner.test_morph_active_count(), 1);
+    advance(&mut vm, 0.625);
+    let mid = vm
+        .host()
+        .inner
+        .executed_unit(f)
+        .unwrap()
+        .flight_height
+        .unwrap();
+    assert!(mid > 73. && mid < 113., "{mid}");
+    // A pause mid-trajectory is not decoded and refuses.
+    let error = vm
+        .host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(f), Value::Bool(true)])
+        .unwrap_err();
+    assert!(error.to_string().contains("height trajectory"), "{error}");
+    advance(&mut vm, 2.);
+    assert_eq!(
+        vm.host().inner.executed_unit(f).unwrap().flight_height,
+        Some(113.)
+    );
+    assert_eq!(vm.host().inner.test_morph_active_count(), 0);
+    // A nonpositive target becomes the handler's minimum, and rate 0 is immediate.
+    vm.host()
+        .inner
+        .native(
+            "SetUnitFlyHeight",
+            &[Value::Handle(f), Value::Real(-9.), Value::Real(0.)],
+        )
+        .unwrap();
+    assert_eq!(get(&mut vm).unwrap(), Value::Real(0.03125));
+    assert_eq!(
+        vm.host().inner.executed_unit(f).unwrap().flight_height,
+        Some(0.03125)
+    );
+    assert_eq!(vm.host().inner.test_morph_active_count(), 0);
 }
