@@ -539,3 +539,22 @@ Decode and addresses: [passive-held-items.md](passive-held-items.md) (`AIpb`, `A
 | TFT UndeadX02 | `AIpb` on `oven` unsupported | `IssueImmediateOrder` (`war3map.j:2600`): unit activity morph flags `0x1` of class `Abur` is not decoded |
 | TFT UndeadX05 | `UnitAddItem`: `AIpb` on `oven` (custom item `I003`) unsupported | `UnitAddItem`: unsupported passive ability `AIsx` with code `AIas` on `gcel` |
 | RoC Undead02Interlude | `UnitAddItemToSlotById`: `AIlb` on `olig` unsupported | unchanged chapter stop, now with the reason: `AIlb` casts `AIlp`, a Purge (`Aprg`, `Bprg`) the recreation lacks |
+
+## 2026-11-11 player unit count, null `SetUnitState`, sight override test
+
+First refusal of `selected_install_locked_chapter_startup_probe`; "before" is this branch's base
+`b496c8f5`. Decode: [script-unit-world.md](script-unit-world.md) (Player unit count),
+[destructable-occluder-height.md](destructable-occluder-height.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC Undead03 | `SetUnitState` (`Blizzard.j:3315`, `SetUnitLifeBJ`): `arguments do not match the unit native declaration` (null unit; handler `0x4abba0` returns when the unit does not resolve) | passes (`executed_units=185`) |
+| TFT UndeadX07b | `native sight wide occluder unsupported: DTrf` | unchanged (message now names the undecoded gate) |
+
+`GetPlayerUnitCount` was not the first refusal at this base: the probe stops earlier on the null
+`SetUnitState`, and after that fix startup completes, so the `war3map.j:5454` call is not
+reached by the startup probe. The native is implemented and unit-tested (see the note above).
+`GetPlayerStructureCount(player, true)` now also counts queued structure-upgrade slots.
+
+Still refused: wide (`fatLOS`) occluders with a height above zero (gate and footprint source
+undecoded, see the occluder note) and `GetPlayerTypedUnitCount` (name table undecoded).

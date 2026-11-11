@@ -2226,3 +2226,62 @@ fn occluder_height_reads_the_catalog_until_set() {
         "{error}"
     );
 }
+
+#[test]
+fn sight_grid_takes_the_stored_occluder_height_over_the_catalog_height() {
+    use crate::native_sight::{
+        HeightGrid, Work,
+        tests::{rules, terrain},
+    };
+    let mut metadata = tree_metadata();
+    metadata.push(&["Aocc", "occH", "DestructableData", "real", "0", "stats"]);
+    metadata.push(&["Afat", "fatLOS", "DestructableData", "bool", "0", "stats"]);
+    let catalog = catalog_from(
+        &[&["LTlt", "50", "tree,ground", "37.5", "0"]],
+        &metadata,
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    );
+    let declarations = format!(
+        "{}native SetDestructableOccluderHeight takes destructable d, real height returns nothing\n",
+        life_declarations()
+    );
+    let mut host = host_from(&declarations, "", 8)
+        .with_destructables(DestructableBudget { max_records: 2 })
+        .unwrap();
+    host.admit_destructable_catalog(catalog).unwrap();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let Value::Handle(tree) = host
+        .native("CreateDestructable", &payload_at(objectid, 0.5, 0.5))
+        .unwrap()
+    else {
+        panic!("destructable handle");
+    };
+    let rules = rules();
+    let flat = terrain(2, 2, &[0; 9]);
+    let grid = |host: &ObjectHost| {
+        let mut work = Work::new(1000);
+        let mut grid = HeightGrid::new(&flat, 1., &rules, &mut work).unwrap();
+        host.occlude_destructables(&mut grid, &rules, &mut work)
+            .unwrap();
+        grid.heights().to_vec()
+    };
+    assert_eq!(grid(&host), [37, 0, 0, 0], "catalog occH until set");
+    host.native(
+        "SetDestructableOccluderHeight",
+        &[Value::Handle(tree), Value::Real(120.0)],
+    )
+    .unwrap();
+    assert_eq!(grid(&host), [120, 0, 0, 0], "stored height replaces occH");
+    host.native(
+        "SetDestructableOccluderHeight",
+        &[Value::Handle(tree), Value::Real(0.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        grid(&host),
+        [0, 0, 0, 0],
+        "a stored zero removes the occluder"
+    );
+}

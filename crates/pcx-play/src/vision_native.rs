@@ -134,6 +134,40 @@ impl ObjectHost {
         {
             return Err("native sight map/placement extents differ".into());
         }
+        self.occlude_destructables(&mut grid, rules, work)?;
+        for (_, unit) in self.executed_units() {
+            work.charge(1)?;
+            if !unit.shown
+                || unit.combat.as_ref().is_some_and(|c| c.dead)
+                || unit.vitals.is_some_and(|v| v.life <= 0.)
+            {
+                continue;
+            }
+            let height = super::super::super::unit_activity::column_real(
+                &unit.definition,
+                pcx_objects::editor::SlkId::UnitUi,
+                "occH",
+            )
+            .map_err(|e| format!("native sight unit occlusion height: {e}"))?;
+            grid.occlude(
+                unit.position
+                    .ok_or("native sight occluder position absent")?,
+                height,
+                rules,
+                work,
+            )?;
+        }
+        Ok(grid)
+    }
+
+    /// Raise the cell under each live destructable to its occluder height: the catalog `occH`,
+    /// or the height `SetDestructableOccluderHeight` stored for that destructable.
+    pub(crate) fn occlude_destructables(
+        &self,
+        grid: &mut HeightGrid,
+        rules: &Rules,
+        work: &mut Work,
+    ) -> Result<(), String> {
         let mut definitions = BTreeMap::new();
         for (handle, creation, state) in self.destructables_with_handles() {
             work.charge(1)?;
@@ -160,36 +194,14 @@ impl ObjectHost {
                     .unwrap_or(catalog_height);
                 if height > 0. && wide {
                     return Err(format!(
-                        "native sight wide occluder unsupported: {:?}",
+                        "native sight wide occluder unsupported: {:?}: the footprint is the 0x4c5770 pathing rectangle, but its gate and rectangle source are undecoded (docs/re-notes/destructable-occluder-height.md)",
                         creation.objectid.to_be_bytes()
                     ));
                 }
                 grid.occlude([creation.x, creation.y], height, rules, work)?;
             }
         }
-        for (_, unit) in self.executed_units() {
-            work.charge(1)?;
-            if !unit.shown
-                || unit.combat.as_ref().is_some_and(|c| c.dead)
-                || unit.vitals.is_some_and(|v| v.life <= 0.)
-            {
-                continue;
-            }
-            let height = super::super::super::unit_activity::column_real(
-                &unit.definition,
-                pcx_objects::editor::SlkId::UnitUi,
-                "occH",
-            )
-            .map_err(|e| format!("native sight unit occlusion height: {e}"))?;
-            grid.occlude(
-                unit.position
-                    .ok_or("native sight occluder position absent")?,
-                height,
-                rules,
-                work,
-            )?;
-        }
-        Ok(grid)
+        Ok(())
     }
 }
 
