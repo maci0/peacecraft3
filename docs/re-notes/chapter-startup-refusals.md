@@ -650,3 +650,27 @@ custom unit `u000`: [unit-root-burrow.md](unit-root-burrow.md).
 
 Whether the probe advances the game clock past `Dur` (`1.45` s) was not checked; the swap is covered
 by unit tests (`burrow_*` in `unit_morph_host_tests.rs`).
+
+## Moon Well autocast, Sentinel, alarm ignore and animation properties
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the refusal recorded
+for the chapter by the earlier lanes (not re-run on a baseline build); "after" is a probe on this
+branch. Decodes: [ability-autocast-on.md](ability-autocast-on.md) (`CAbilityManaBattery`),
+[ability-sentinel.md](ability-sentinel.md), [unit-alarm-ignore.md](unit-alarm-ignore.md),
+[unit-animation-properties.md](unit-animation-properties.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT NightElfX04 | `IssueImmediateOrder` `rechargeon` on `emow` unsupported | passes `rechargeon`; `SetUnitUseFood` (`Blizzard.j:3862`, `SetUnitUseFoodBJ`) is an unsupported native |
+| TFT NightElfX08 | `rechargeon` on `emow` unsupported | passes (`executed_units=297`) |
+| RoC NightElf03 | `IssueTargetOrder` `sentinel`: only the attack target order is supported | same stop, now naming the undecoded Sentinel cast (`CAbilitySentinel`) |
+| TFT UndeadX05 | `UnitIgnoreAlarm` unsupported native | passes (`executed_units=252`) |
+| RoC Human07 | `AddUnitAnimationProperties` unsupported (`Blizzard.j:2133`) | passes (`executed_units=121`) |
+
+`CAbilityManaBattery` (`Ambt`, `Amb2`) was missing from the bound autocast classes; it shares the
+base ON/OFF handlers. Its data authors only `Order=recharge`, so the toggle ids come from the class.
+
+`SetUnitUseFood` handler `0x4abc70` (not implemented): with a live unit it reads flag `0x200` of
+`[unit+0x16c]`. Enabling with the flag clear passes the unit type's food cost (`0x6902a0`) to the
+owner-side routine `0x4b57d0` (the counter it adjusts is not decoded) and sets `0x300`. Disabling with the flag set passes it negated
+and clears `0x300`. The unit's initial flag state and the player food model are not decoded here.

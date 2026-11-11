@@ -5968,6 +5968,17 @@ fn a_non_attack_target_order_at_nothing_or_a_removed_unit_issues_nothing() {
     assert!(error.contains("repair"), "{error}");
     assert!(error.contains(&format!("{a:?}")), "{error}");
     assert!(error.contains(&format!("{b:?}")), "{error}");
+    let sentinel = h
+        .native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("sentinel".into()),
+                Value::Handle(b),
+            ],
+        )
+        .unwrap_err();
+    assert!(sentinel.contains("CAbilitySentinel"), "{sentinel}");
     assert_eq!(issue(h, Value::Null).unwrap(), Value::Bool(false));
     h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
     assert_eq!(issue(h, Value::Handle(b)).unwrap(), Value::Bool(false));
