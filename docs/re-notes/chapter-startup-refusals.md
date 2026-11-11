@@ -467,3 +467,27 @@ on the lane worktree, before is the `sweep6` log.
 Also fixed without a probe change: the placement catalog read `w3h` (buffs) as the
 destructable member; it now reads `w3b`. Custom buffs (`w3h`) and custom item sale rows stay
 unresolved on their paths; no indexed chapter reaches them.
+
+## 2026-11-11 rooted attack mask, Aweb ON and occluder height
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the probe at `4364677f`
+(re-run for NightElfX07 and UndeadX07b; NightElf01 and NightElf04 passed there per the root lane),
+"after" is this branch. Decode: [unit-root-burrow.md](unit-root-burrow.md),
+[ability-autocast-on.md](ability-autocast-on.md),
+[destructable-occluder-height.md](destructable-occluder-height.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf01 | passes (`executed_units=105`) | passes (`executed_units=105`) |
+| RoC NightElf04 | passes (`executed_units=275`) | passes (`executed_units=275`) |
+| TFT NightElfX07 | passes (`executed_units=279`); the `Aweb` refusal in the root lane's row predates the ON binding | passes (`executed_units=279`) |
+| TFT UndeadX07b | `GetDestructableOccluderHeight` unsupported (`Blizzard.j:4027`) | `native sight wide occluder unsupported: DTrf` (vision rebuild; `DTrf` is the `Elevator` destructable with `occH` 0 and `fatLOS` 1, so the height above zero comes from `SetDestructableOccluderHeight`) |
+
+An unarmed rootable building (`edob`, `edos`: `weapTp1` a placeholder) rooted under `Aro1`
+`DataA=1` would refuse creation if the mask resolved attack 1 strictly; it enables nothing instead.
+
+Open after this lane:
+
+- `fatLOS` (wide) occluders with a height above zero: creation sets unit flag `0x400` and registers
+  through `0x6faea0` (`0x6ce2fc`..`0x6ce324`); the footprint it fills is not decoded.
+- Both attacks enabled at once (`weapsOn=3` or a `DataA` of 3): the combat model holds one weapon.

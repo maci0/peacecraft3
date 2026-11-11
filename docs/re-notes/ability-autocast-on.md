@@ -90,6 +90,22 @@ Default-enabled abilities (`UnitAbilities.auto`: `Ainf` on `ntks`, `Aweb` on `uc
 the same activation when the unit is created in the original. The recreation does not arm them; that
 gap predates this note and is unchanged.
 
+## `CAbilityWeb` (`Aweb`) uses the same ON handler (observed)
+
+The class name string is `0xf802f8`, its getter `0xc1bea0`, its name slot `0xf7def0`, so the
+vtable is `0xf7de98`. Its slots equal Inner Fire's: ON wrapper `+0x338` `0xb81080`, OFF wrapper
+`+0x33c` `0xb2a310`, handlers `+0x340`/`+0x344` `0xb99a80`/`0xb99b50`, hooks `+0x348`/`+0x34c`
+`0xbdb5e0`/`0xbdb5f0`, activate/deactivate `+0x434`/`+0x438` `0xb9c590`/`0xb9c5c0`. The ON id
+getter `+0x310` (`0xc1bf10`) returns `0xd00f4` (`webon`) and the group getter `+0x1b8`
+(`0xb81160`) returns 1. The shape check in `autocast_rules.rs` therefore binds it
+(`selected_original_autocast_classes_bind` asserts `Aweb`). The `Aweb` refusal in the root lane's
+`NightElfX07` row predates the ON binding: the probe at `4364677f`, before any change of this
+lane, already passes the chapter. There is no different handler shape to decode.
+
+TFT `NightElfX07` (`war3map.j:1520` onward) issues `webon` on `ucry` units; `Aweb` is default-on for
+`ucry` (`UnitAbilities.auto`), so the order returns false with no change, and the chapter probe
+passes (`executed_units=279`).
+
 ## Recreation
 
 - `autocast_rules.rs` decodes per class the ON handler shape (state bit, group call, tail hook), the
