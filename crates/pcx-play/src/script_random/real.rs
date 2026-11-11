@@ -6,6 +6,8 @@ const FRACTION: u32 = (1 << 23) - 1;
 const HIDDEN: u32 = 1 << 23;
 const EXPONENT: u32 = 0xff << 23;
 const BIAS: u32 = 127 << 23;
+/// Immediate the reviewed reciprocal adds to its table value (`0x9a1d4c`).
+const RECIPROCAL_BIAS: u32 = 0x7e80_0000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("selected real arithmetic requires finite normal operands or zero")]
@@ -129,6 +131,57 @@ pub fn mul(left: u32, right: u32) -> Result<u32, MathError> {
     checked(bits)
 }
 
+/// Integer part of a normal real, truncated toward zero (the reviewed conversion at `0x9a07b0`).
+/// Magnitudes below one convert to zero.
+pub fn truncate(bits: u32) -> Result<i32, MathError> {
+    checked(bits)?;
+    let exponent = (bits & EXPONENT) >> 23;
+    if exponent < 127 {
+        return Ok(0);
+    }
+    let mantissa = (bits & FRACTION) | HIDDEN;
+    let shift = 150_i32 - exponent as i32;
+    let magnitude = if shift >= 0 {
+        mantissa.checked_shr(shift as u32).unwrap_or(0)
+    } else {
+        mantissa.checked_shl(shift.unsigned_abs()).unwrap_or(0)
+    };
+    Ok(if bits & SIGN == 0 {
+        magnitude as i32
+    } else {
+        (magnitude as i32).wrapping_neg()
+    })
+}
+
+/// Bits of the reviewed reciprocal (`0x9a1d00`): the table entry for the top ten mantissa bits,
+/// interpolated by the low thirteen. `table` holds the image's 1025 entries.
+pub fn reciprocal(bits: u32, table: &[u32]) -> Result<u32, MathError> {
+    checked(bits)?;
+    let index = ((bits & FRACTION) >> 13) as usize;
+    let (Some(&entry), Some(&next)) = (table.get(index), table.get(index + 1)) else {
+        return Err(MathError::Unsupported);
+    };
+    let low = (bits & FRACTION) << 19;
+    let fraction = (((low >> 13) | low) >> 13) | low;
+    let step = ((u64::from(entry.wrapping_sub(next)) * u64::from(fraction)) >> 32) as u32;
+    let value = entry
+        .wrapping_sub(step)
+        .wrapping_sub(bits & EXPONENT)
+        .wrapping_add(RECIPROCAL_BIAS);
+    let signed = (bits & SIGN) | value;
+    let keep = !(((value.wrapping_sub(HIDDEN)) as i32) >> 31) as u32;
+    Ok(keep & signed)
+}
+
+/// `left / right` as the reviewed divide (`0x9a02d0`): one for equal bit patterns, otherwise
+/// `left` times the table reciprocal of `right`.
+pub fn divide(left: u32, right: u32, table: &[u32]) -> Result<u32, MathError> {
+    if left == right {
+        return Ok(1.0_f32.to_bits());
+    }
+    mul(left, reciprocal(right, table)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +235,71 @@ mod tests {
             Ok(2.25_f32.to_bits())
         );
         assert_eq!(mul((-0.0_f32).to_bits(), 1.0_f32.to_bits()), Ok(0));
+    }
+
+    #[test]
+    fn truncate_drops_the_fraction_toward_zero() {
+        for (value, expected) in [
+            (0.0_f32, 0),
+            (0.99, 0),
+            (1.0, 1),
+            (6.99, 6),
+            (7.5, 7),
+            (-3.2, -3),
+            (-0.5, 0),
+            (123_456.78, 123_456),
+        ] {
+            assert_eq!(truncate(value.to_bits()), Ok(expected), "{value}");
+        }
+        assert_eq!(truncate(f32::NAN.to_bits()), Err(MathError::Unsupported));
+    }
+
+    /// The reciprocal of `1 + i / 1024` in the routine's layout: the mantissa of twice the
+    /// reciprocal, minus one.
+    fn ideal_table() -> Vec<u32> {
+        (0..1025)
+            .map(|i| {
+                ((2.0 / (1.0 + f64::from(i) / 1024.0) - 1.0) * f64::from(1_u32 << 23)).round()
+                    as u32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn divide_follows_the_table_reciprocal_and_returns_one_for_equal_operands() {
+        let table = ideal_table();
+        for (numerator, denominator) in [
+            (38.0_f32, 10_000.0_f32),
+            (1.0, 3.0),
+            (7.0, 0.3),
+            (-5.0, 8.0),
+        ] {
+            let got =
+                f32::from_bits(divide(numerator.to_bits(), denominator.to_bits(), &table).unwrap());
+            let expected = numerator / denominator;
+            assert!(
+                ((got - expected) / expected).abs() < 3e-6,
+                "{numerator} / {denominator} = {got}, expected {expected}"
+            );
+        }
+        assert_eq!(
+            divide(10_000.0_f32.to_bits(), 10_000.0_f32.to_bits(), &table),
+            Ok(1.0_f32.to_bits())
+        );
+        // A power of two divides exactly through the first table entry.
+        assert_eq!(
+            divide(3.0_f32.to_bits(), 4.0_f32.to_bits(), &table),
+            Ok(0.75_f32.to_bits())
+        );
+        // A table that is too short, or an operand outside the normal range, refuses.
+        assert_eq!(
+            reciprocal(10_000.0_f32.to_bits(), &table[..4]),
+            Err(MathError::Unsupported)
+        );
+        assert_eq!(
+            reciprocal(f32::INFINITY.to_bits(), &table),
+            Err(MathError::Unsupported)
+        );
     }
 
     #[test]

@@ -129,3 +129,48 @@ fn secondary_die_refusals_preserve_all_streams() {
     );
     assert_eq!(missing, None);
 }
+
+#[test]
+fn secondary_real_draws_below_one_from_only_the_selected_stream() {
+    let policy = profile::fixture();
+    let mut state = Some(seeded(&policy, 17, 3).unwrap());
+    let before = state.clone().unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        let value = secondary_real(&policy, &mut state, 2).unwrap();
+        assert!((0.0..1.0).contains(&value), "{value}");
+        seen.push(value);
+    }
+    seen.dedup();
+    assert!(seen.len() > 1, "successive draws differ");
+    let after = state.as_ref().unwrap();
+    assert_eq!(after.primary_word(), before.primary_word());
+    let old: Vec<_> = before.secondary_words().collect();
+    let new: Vec<_> = after.secondary_words().collect();
+    assert_eq!((old[0], old[1]), (new[0], new[1]));
+    assert_ne!(old[2], new[2]);
+}
+
+#[test]
+fn secondary_real_refusals_preserve_all_streams() {
+    let policy = profile::fixture();
+    let mut state = Some(seeded(&policy, 17, 3).unwrap());
+    let before = state.clone();
+    assert_eq!(
+        secondary_real(&policy, &mut state, 3),
+        Err(StateError::SecondaryDie)
+    );
+    assert_eq!(state, before);
+    let mut other = profile::fixture();
+    other.key = [2; 32];
+    assert_eq!(
+        secondary_real(&other, &mut state, 0),
+        Err(StateError::Profile)
+    );
+    assert_eq!(state, before);
+    let mut missing = None;
+    assert_eq!(
+        secondary_real(&policy, &mut missing, 0),
+        Err(StateError::Uninitialized)
+    );
+}

@@ -188,6 +188,34 @@ pub fn secondary_die(
     Ok(result)
 }
 
+/// One real in `[0, 1)` from a retained secondary stream (the reviewed gameplay draw at
+/// `0x69a030`). It scales the stream's next word like [`real`] does for the primary stream, with
+/// the bounds fixed at zero and one and no near-equal early return.
+pub fn secondary_real(
+    policy: &Policy,
+    state: &mut Option<State>,
+    channel: usize,
+) -> Result<f32, StateError> {
+    if channel >= policy.secondary_count {
+        return Err(StateError::SecondaryDie);
+    }
+    let current = state.as_mut().ok_or(StateError::Uninitialized)?;
+    current.check(policy)?;
+    let selected = current
+        .secondary
+        .get_mut(channel)
+        .ok_or(StateError::SecondaryDie)?;
+    let next = selected.preview(policy);
+    let fraction = (next.word & policy.real_mask) | policy.real_base;
+    let offset = real::from_i32(policy.real_offset)?;
+    let fraction = real::add(fraction, offset)?;
+    let span = real::sub(1.0_f32.to_bits(), 0)?;
+    let scaled = real::mul(span, fraction)?;
+    let result = real::add(0, scaled)?;
+    *selected = next;
+    Ok(f32::from_bits(result))
+}
+
 pub fn real(
     policy: &Policy,
     state: &mut Option<State>,
