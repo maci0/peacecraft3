@@ -2,7 +2,8 @@
 //! returns to the calling VM, which keeps running; the consumer decides when the
 //! session ends. This scheduling choice does not claim unobserved native
 //! `ChangeLevel` teardown. Score-screen presentation is not implemented: the
-//! request carries the flag only.
+//! request carries the flag only. `ForceCampaignSelectScreen` sets a flag that no
+//! consumer reads yet: the return to the selection screen is not implemented.
 use super::{Error, Failure, ObjectHost};
 use crate::{campaign_progress::Progress, game_cache::Storage};
 use pcx_script::Value;
@@ -13,6 +14,7 @@ const MISSION: &str = "SetMissionAvailable";
 const CAMPAIGN: &str = "SetCampaignAvailable";
 const NEXT_LEVEL: &str = "SetNextLevel";
 const CHANGE_LEVEL: &str = "ChangeLevel";
+const CAMPAIGN_SELECT: &str = "ForceCampaignSelectScreen";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GameExitRequest {
@@ -23,11 +25,12 @@ pub struct GameExitRequest {
 }
 
 pub(super) struct GameExits {
-    admitted: [bool; 5],
+    admitted: [bool; 6],
     max_pending: usize,
     requests: Vec<GameExitRequest>,
     progress: Option<(Progress, Arc<dyn Storage>)>,
     next_level: Option<String>,
+    campaign_select_requested: bool,
 }
 
 impl ObjectHost {
@@ -42,13 +45,14 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<GameExitRequest>(max_pending)
             .map_err(|_| self.inner.error(END_GAME, Failure::Capacity))?;
-        let mut admitted = [false; 5];
+        let mut admitted = [false; 6];
         for (index, (name, args)) in [
             (END_GAME, &["boolean"][..]),
             (MISSION, &["integer", "integer", "boolean"][..]),
             (NEXT_LEVEL, &["string"][..]),
             (CHANGE_LEVEL, &["string", "boolean"][..]),
             (CAMPAIGN, &["integer", "boolean"][..]),
+            (CAMPAIGN_SELECT, &[][..]),
         ]
         .into_iter()
         .enumerate()
@@ -86,6 +90,7 @@ impl ObjectHost {
             requests: Vec::new(),
             progress: None,
             next_level: None,
+            campaign_select_requested: false,
         });
         Ok(self)
     }
@@ -94,6 +99,14 @@ impl ObjectHost {
         self.game_exit
             .as_ref()
             .is_some_and(|state| state.admitted[0])
+    }
+
+    /// Whether an executed `ForceCampaignSelectScreen` has been recorded. No consumer
+    /// acts on it yet.
+    pub fn campaign_select_requested(&self) -> bool {
+        self.game_exit
+            .as_ref()
+            .is_some_and(|state| state.campaign_select_requested)
     }
 
     /// Explicit availability only; unknown fresh-profile defaults remain unknown.
@@ -207,6 +220,9 @@ impl ObjectHost {
         if name == CHANGE_LEVEL && state.admitted[3] {
             return Some(self.change_level(args));
         }
+        if name == CAMPAIGN_SELECT && state.admitted[5] {
+            return Some(self.force_campaign_select(args));
+        }
         if name != END_GAME || !state.admitted[0] {
             return None;
         }
@@ -305,6 +321,20 @@ impl ObjectHost {
             next_level: Some(next_level),
         });
         // The host returns to the VM caller after queueing the request.
+        Ok(Value::Null)
+    }
+
+    fn force_campaign_select(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let [] = args else {
+            return Err(self.inner.error(
+                CAMPAIGN_SELECT,
+                Failure::ClockState("ForceCampaignSelectScreen takes no arguments"),
+            ));
+        };
+        self.game_exit
+            .as_mut()
+            .expect("admitted campaign select")
+            .campaign_select_requested = true;
         Ok(Value::Null)
     }
 

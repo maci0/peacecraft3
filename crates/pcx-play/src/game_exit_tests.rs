@@ -382,3 +382,50 @@ fn selected_common_change_level_contract_is_admitted() {
         }]
     );
 }
+
+const CAMPAIGN_SELECT_DECLARATION: &str =
+    "native ForceCampaignSelectScreen takes nothing returns nothing\n";
+
+#[test]
+fn force_campaign_select_screen_is_recorded_and_does_not_end_the_session() {
+    let p = program(
+        &format!("{DECLARATION}{CAMPAIGN_SELECT_DECLARATION}"),
+        "",
+        r#"
+globals
+integer progress = 0
+endglobals
+function select takes nothing returns integer
+call ForceCampaignSelectScreen()
+set progress = progress + 3
+return progress
+endfunction
+"#,
+    );
+    let mut vm = Vm::new(&p, host(p.clone(), 4));
+    vm.init_globals().unwrap();
+    assert!(!vm.host().campaign_select_requested());
+    assert_eq!(vm.call("select", &[]).unwrap(), Value::Int(3));
+    assert!(vm.host().campaign_select_requested());
+    assert!(vm.host().game_exit_requests().is_empty());
+    assert!(!vm.host().has_pending_game_exit());
+}
+
+#[test]
+fn force_campaign_select_screen_refuses_arguments_and_needs_its_declaration() {
+    let p = program(
+        &format!("{DECLARATION}{CAMPAIGN_SELECT_DECLARATION}"),
+        "",
+        "",
+    );
+    let mut h = host(p, 4);
+    assert!(
+        h.native("ForceCampaignSelectScreen", &[Value::Int(1)])
+            .is_err()
+    );
+    assert!(!h.campaign_select_requested());
+    assert!(h.native("ForceCampaignSelectScreen", &[]).is_ok());
+    assert!(h.campaign_select_requested());
+    let undeclared = host(program(DECLARATION, "", ""), 4);
+    assert!(!undeclared.campaign_select_requested());
+}
