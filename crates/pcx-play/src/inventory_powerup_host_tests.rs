@@ -954,14 +954,25 @@ fn open_fixture(
         FieldKind::Bool,
         "0",
     ));
-    // The unit classes a spell orb's wrapped ability tests (`organic`) come from `type`.
-    fields.push(column(
-        b"B002",
-        SlkId::UnitBalance,
-        "type",
-        FieldKind::Token,
-        "_",
-    ));
+    // The unit classes a spell orb's wrapped ability tests (`organic`) come from `type`; a test
+    // that supplies its own `type` column replaces this default.
+    let extra_sets_type = extra.iter().any(|(_, field)| {
+        field.metadata.as_ref().is_some_and(|meta| {
+            matches!(
+                &meta.source,
+                FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "type"
+            )
+        })
+    });
+    if !extra_sets_type {
+        fields.push(column(
+            b"B002",
+            SlkId::UnitBalance,
+            "type",
+            FieldKind::Token,
+            "_",
+        ));
+    }
     fields.extend(extra.iter().cloned());
     let declarations = format!(
         "{}\n{}{DECLARATIONS}{POWERUP_DECLARATIONS}",
