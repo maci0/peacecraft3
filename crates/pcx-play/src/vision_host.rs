@@ -56,8 +56,16 @@ impl VisionShape {
 /// cannot be inferred from shape or `after_units`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisionOrigin {
-    Unit { unit: HandleId },
-    Modifier { modifier: HandleId },
+    Unit {
+        unit: HandleId,
+    },
+    Modifier {
+        modifier: HandleId,
+    },
+    /// The sight area of an owl attached to a tree by the Sentinel ability.
+    Sentinel {
+        tree: HandleId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -298,6 +306,19 @@ impl ObjectHost {
                 },
                 source_height: None,
             })?;
+        }
+        let owls = self.sentinel_vision(viewer, &mut |owner| {
+            let kinds = table
+                .sharing_kinds
+                .get_or_insert_with(|| self.sharing_kinds());
+            self.shares_vision(owner, viewer, kinds)
+        })?;
+        for owl in owls {
+            scanned = scanned.saturating_add(1);
+            if scanned > limit {
+                return Err(fail("vision scan budget exceeded".into()));
+            }
+            push(owl)?;
         }
         // Preserve modifier creation order within each phase.
         sources.sort_by_key(|circle| circle.after_units);

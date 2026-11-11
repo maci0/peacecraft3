@@ -1026,6 +1026,7 @@ impl ObjectHost {
             _ => unreachable!("prepared destructable entry"),
         }
         self.sync_destructable_collision(plan.id, !plan.dead);
+        self.end_sentinels_on(plan.id);
         if plan.events > 0 {
             self.push_death_events(plan.id, plan.events);
         }
@@ -1196,6 +1197,7 @@ impl ObjectHost {
             }
             _ => unreachable!("checked destructable entry"),
         }
+        self.end_sentinels_on(id);
         Ok(())
     }
 
@@ -1208,6 +1210,7 @@ impl ObjectHost {
             _ => unreachable!("planned destructable entry"),
         }
         self.sync_destructable_collision(plan.id, !plan.dead);
+        self.end_sentinels_on(plan.id);
     }
 
     fn death_event_count(&self, id: HandleId) -> usize {

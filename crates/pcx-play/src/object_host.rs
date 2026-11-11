@@ -124,6 +124,7 @@ pub struct ObjectHost {
     player_scores: Option<Vec<player_score::PlayerScoreCounter>>,
     unit_explosions: Option<unit_explosion::UnitExplosions>,
     unit_food_use: Option<unit_food_use::UnitFoodUse>,
+    sentinels: sentinel::Sentinels,
     player_removal: Option<player_removal::PlayerRemovalState>,
     localized_queries: Option<crate::script_localization::Bank>,
     game_pause: Option<Option<bool>>,
@@ -362,6 +363,7 @@ impl ObjectHost {
             items: None,
             unit_explosions: None,
             unit_food_use: None,
+            sentinels: sentinel::Sentinels::default(),
             item_drops: None,
             item_queries: None,
             item_sales: None,
@@ -1419,6 +1421,8 @@ mod item_creation;
 mod widget_enumeration;
 pub use item_creation::{ExecutedItem, ItemBudget, ItemCommand, ItemDrop};
 
+#[path = "sentinel_host.rs"]
+mod sentinel;
 #[path = "unit_explosion_host.rs"]
 mod unit_explosion;
 #[path = "unit_food_use_host.rs"]

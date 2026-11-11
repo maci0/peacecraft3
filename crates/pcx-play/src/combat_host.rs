@@ -40,7 +40,7 @@ const GROUND_ORDER: &str = "attackground";
 const KILL: &str = "KillUnit";
 /// Cargo load order text.
 const CARGO_LOAD: &str = "load";
-/// The Night Elf Sentinel order string (`Aesn`); only used to name the undecoded cast in the refusal.
+/// The Night Elf Sentinel order string (`Aesn`).
 const SENTINEL_ORDER: &str = "sentinel";
 
 pub(super) const ABSENT_MISSILE_SPEED: &str =
@@ -1465,12 +1465,15 @@ impl ObjectHost {
                 {
                     return Ok(Value::Bool(self.order_entangle_instant(*caster, *mine)?));
                 }
+                if let (Value::Str(text), Value::Handle(caster), Value::Handle(tree)) =
+                    (&args[1], unit, target)
+                    && text == SENTINEL_ORDER
+                {
+                    return Ok(Value::Bool(self.order_sentinel(*caster, *tree)?));
+                }
                 let detail = match &args[1] {
                     Value::Str(text) if text == super::entangle::TIMED_ORDER => {
                         "the timed entangle stage (Cast1) is not decoded (entangle-mine-conversion.md)"
-                    }
-                    Value::Str(text) if text == SENTINEL_ORDER => {
-                        "the Sentinel cast (CAbilitySentinel, Aesn): its target validation, owl missile and owl effect are not decoded (ability-sentinel.md)"
                     }
                     _ => "only the attack target order is supported",
                 };

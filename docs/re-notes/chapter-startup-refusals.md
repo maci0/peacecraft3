@@ -703,3 +703,18 @@ First refusal of `selected_install_locked_chapter_startup_probe`; "before" is `4
 `AItx` ("AttackBonus +20", item, code `AIat`) is not in the damage metadata alias list of
 `inventory_powerup.rs`; whether the class reads `DataA` for it was not decoded, so OrcX02 stays
 refused there.
+
+## 2026-11-11 `Sentinel` and `SetUnitUseFood`
+
+First refusal of `selected_install_locked_chapter_startup_probe`; "before" is the refusal recorded
+above for the chapter, "after" is a probe on this branch with `.scratch/run-asset-gate.sh`. Decodes:
+[ability-sentinel.md](ability-sentinel.md), [unit-use-food.md](unit-use-food.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf03 | `IssueTargetOrder` `sentinel`: the Sentinel cast (`CAbilitySentinel`) not decoded | passes (`executed_units=112`) |
+| TFT NightElfX04 | `SetUnitUseFood` (`Blizzard.j:3862`) unsupported native | passes (`executed_units=224`) |
+
+The Sentinel order is accepted without the missile flight: the owl's sight circle (`DataB`) attaches
+at the cast, not at impact, and the in-flight radius (`DataA`) is not modeled. A target that is not a
+live tree, a tree beyond `Rng1`, and an exhausted Sentinel still refuse.
