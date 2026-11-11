@@ -427,16 +427,104 @@ fn ability_class_must_match_the_client_registration() {
     assert!(rules.strength_effect(&tstr()).is_err());
 }
 
-#[test]
-fn custom_items_refuse_until_item_overrides_are_qualified() {
-    let mut overlay = Overlay::default();
-    overlay
-        .custom
-        .insert("tsx1".into(), ("tstr".into(), Vec::new()));
-    let rules = rules(&Tome::default(), overlay, "AIsm").unwrap();
+/// An `ItemData` column of a definition, as `MetadataCatalog` yields it.
+fn item_field(
+    fourcc: &[u8; 4],
+    column: &str,
+    value: Result<pcx_sim::world::FieldValue, pcx_sim::world::FieldProblem>,
+) -> (pcx_objects::Fourcc, pcx_sim::world::ObjectField) {
+    let field = pcx_sim::world::ObjectField {
+        metadata: Some(pcx_objects::editor::FieldDef {
+            fourcc: *fourcc,
+            from: SlkId::UnitMetaData,
+            field: column.into(),
+            slk: "ItemData".into(),
+            index: -1,
+            declared: "int".into(),
+            kind: FieldKind::Int,
+            category: String::new(),
+            source: FieldSource::Column {
+                slk: SlkId::ItemData,
+                column: column.into(),
+            },
+            measured: true,
+        }),
+        value,
+    };
+    (*fourcc, field)
+}
+
+fn stock_cell(text: &str) -> Result<pcx_sim::world::FieldValue, pcx_sim::world::FieldProblem> {
+    Ok(pcx_sim::world::FieldValue::Cell(text.into()))
+}
+
+fn custom_tstr(fields: Vec<(pcx_objects::Fourcc, pcx_sim::world::ObjectField)>) -> Definition {
     let mut custom = tstr();
     custom.rawcode = *b"tsx1";
-    assert!(rules.strength_effect(&custom).is_err());
+    custom.fields = fields.into_iter().collect();
+    custom
+}
+
+#[test]
+fn custom_items_read_their_stock_base_row() {
+    // The map's W3T defines `tsx1` over `tstr`; the ability overlay knows nothing of items.
+    let rules = rules(&Tome::default(), Overlay::default(), "AIsm").unwrap();
+    assert_eq!(
+        rules.strength_effect(&custom_tstr(Vec::new())).unwrap(),
+        Some(StrengthEffect { strength: 7 })
+    );
+}
+
+#[test]
+fn custom_item_overrides_replace_the_base_cell() {
+    let rules = rules(&Tome::default(), Overlay::default(), "AIsm").unwrap();
+    // `powerup` 0 turns the base tome into a plain item that grants nothing on use.
+    let plain = item_field(
+        b"ixx1",
+        "powerup",
+        Ok(pcx_sim::world::FieldValue::Override(
+            pcx_objects::Value::Int(0),
+        )),
+    );
+    assert_eq!(
+        rules.strength_effect(&custom_tstr(vec![plain])).unwrap(),
+        None
+    );
+    // A stock-valued cell keeps the base row.
+    let stock = item_field(b"ixx1", "powerup", stock_cell("1"));
+    assert!(
+        rules
+            .strength_effect(&custom_tstr(vec![stock]))
+            .unwrap()
+            .is_some()
+    );
+    // Two fields naming one column are ambiguous, and an indexed override is refused.
+    let twice = custom_tstr(vec![
+        item_field(b"ixx1", "powerup", stock_cell("1")),
+        item_field(b"ixx2", "powerup", stock_cell("1")),
+    ]);
+    let error = rules.strength_effect(&twice).unwrap_err();
+    assert!(error.contains("ambiguous"), "{error}");
+    let indexed = custom_tstr(vec![item_field(
+        b"ixx1",
+        "powerup",
+        Err(pcx_sim::world::FieldProblem::Indexed([1, 0])),
+    )]);
+    let error = rules.strength_effect(&indexed).unwrap_err();
+    assert!(error.contains("indexed"), "{error}");
+}
+
+#[test]
+fn custom_item_with_a_missing_base_row_or_wrong_family_refuses() {
+    let rules = rules(&Tome::default(), Overlay::default(), "AIsm").unwrap();
+    let mut custom = custom_tstr(Vec::new());
+    custom.base_rawcode = "zzzz".into();
+    let error = rules.strength_effect(&custom).unwrap_err();
+    assert!(error.contains("no shipped object zzzz"), "{error}");
+    let mut unit = custom_tstr(Vec::new());
+    unit.kind = ObjectKind::Unit;
+    let error = rules.strength_effect(&unit).unwrap_err();
+    assert!(error.contains("not an item definition"), "{error}");
 }
 
 #[test]

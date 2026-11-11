@@ -9,8 +9,8 @@ use crate::{
     scripts::AssetIdentity,
 };
 use pcx_objects::editor::defaults::{DefaultTables, Family, Object, Value};
-use pcx_objects::editor::{FieldKind, Overlay, SlkId};
-use pcx_sim::world::Definition;
+use pcx_objects::editor::{FieldKind, FieldSource, ObjectKind, Overlay, SlkId};
+use pcx_sim::world::{Definition, FieldProblem, FieldValue};
 use std::sync::Arc;
 
 /// Registration call for the powerup class (source `AIsm`, base `AIxm`).
@@ -653,14 +653,14 @@ impl Rules {
     /// Mixed lists and healing that is not admitted refuse.
     pub fn heal_effect(&self, definition: &Definition) -> Result<Option<i32>, String> {
         let item = self.item_row(definition)?;
-        let abilities = item_text(item, "abilList")?;
+        let abilities = item_text(definition, item, "abilList")?;
         let aliases: Vec<&str> = abilities
             .split(',')
             .map(str::trim)
             .filter(|a| !a.is_empty() && *a != "_")
             .collect();
         // A passive or unusable item has no activation, so it is not a use: no effect, no refusal.
-        if aliases.is_empty() || !item_flag(item, "usable")? {
+        if aliases.is_empty() || !item_flag(definition, item, "usable")? {
             return Ok(None);
         }
         let Some(heal) = &self.heal else {
@@ -696,7 +696,7 @@ impl Rules {
     /// not `_`. A missing `targs1` cell refuses, since the selection convention is not guessed.
     pub fn heal_requires_target(&self, definition: &Definition) -> Result<bool, String> {
         let item = self.item_row(definition)?;
-        let abilities = item_text(item, "abilList")?;
+        let abilities = item_text(definition, item, "abilList")?;
         let [alias] = abilities.split(',').map(str::trim).collect::<Vec<_>>()[..] else {
             return Err("healing target needs exactly one ability".into());
         };
@@ -716,7 +716,7 @@ impl Rules {
     /// of the range field are not applied here, and that is not qualified.
     pub fn heal_range(&self, definition: &Definition) -> Result<f32, String> {
         let item = self.item_row(definition)?;
-        let abilities = item_text(item, "abilList")?;
+        let abilities = item_text(definition, item, "abilList")?;
         let [alias] = abilities.split(',').map(str::trim).collect::<Vec<_>>()[..] else {
             return Err("healing range needs exactly one ability".into());
         };
@@ -797,16 +797,16 @@ impl Rules {
         definition: &Definition,
     ) -> Result<Option<StrengthEffect>, String> {
         let item = self.item_row(definition)?;
-        if !item_flag(item, "powerup")? {
+        if !item_flag(definition, item, "powerup")? {
             return Ok(None);
         }
-        if !item_flag(item, "usable")?
-            || !item_flag(item, "perishable")?
-            || item_text(item, "uses")? != "1"
+        if !item_flag(definition, item, "usable")?
+            || !item_flag(definition, item, "perishable")?
+            || item_text(definition, item, "uses")? != "1"
         {
             return Err("powerup item flags or uses are unsupported".into());
         }
-        let abilities = item_text(item, "abilList")?;
+        let abilities = item_text(definition, item, "abilList")?;
         let [alias] = abilities.split(',').map(str::trim).collect::<Vec<_>>()[..] else {
             return Err("mixed or empty powerup ability list is unsupported".into());
         };
@@ -835,10 +835,10 @@ impl Rules {
         definition: &Definition,
     ) -> Result<Option<AttributeBonus>, String> {
         let item = self.item_row(definition)?;
-        if item_flag(item, "powerup")? || item_flag(item, "usable")? {
+        if item_flag(definition, item, "powerup")? || item_flag(definition, item, "usable")? {
             return Ok(None);
         }
-        let abilities = item_text(item, "abilList")?;
+        let abilities = item_text(definition, item, "abilList")?;
         let mut held = AttributeBonus::default();
         for alias in abilities
             .split(',')
@@ -1180,12 +1180,16 @@ impl Rules {
     }
 
     fn item_row(&self, definition: &Definition) -> Result<Object<'_>, String> {
-        let name = std::str::from_utf8(&definition.rawcode).map_err(|_| "invalid item rawcode")?;
-        if self.overlay.new_object(name).is_some() {
-            return Err("custom item rows are unsupported".into());
+        if definition.kind != ObjectKind::Item {
+            return Err(format!(
+                "{}: not an item definition",
+                definition.base_rawcode
+            ));
         }
+        // The definition is already resolved through the map's W3T: a custom item reads its
+        // stock base row, and `item_text` applies the authored overrides on top.
         self.tables
-            .object(Family::Item, name)
+            .object(Family::Item, &definition.base_rawcode)
             .map_err(|e| e.to_string())
     }
 
@@ -1273,14 +1277,40 @@ impl Rules {
     }
 }
 
-fn item_text(item: Object<'_>, key: &str) -> Result<String, String> {
+/// An `ItemData` column of the selected definition: the map's override when it authored one,
+/// otherwise the stock base-row cell. An indexed override refuses.
+fn item_text(definition: &Definition, item: Object<'_>, key: &str) -> Result<String, String> {
+    let mut fields = definition.fields.values().filter(|field| {
+        field.metadata.as_ref().is_some_and(|metadata| {
+            matches!(
+                &metadata.source,
+                FieldSource::Column { slk: SlkId::ItemData, column } if column == key
+            )
+        })
+    });
+    match (fields.next(), fields.next()) {
+        (Some(_), Some(_)) => Err(format!("ambiguous ItemData/{key} field")),
+        (Some(field), None) => match &field.value {
+            Ok(FieldValue::Override(pcx_objects::Value::Int(n))) => Ok(n.to_string()),
+            Ok(FieldValue::Override(pcx_objects::Value::Str(text))) => std::str::from_utf8(text)
+                .map(|text| text.trim().to_owned())
+                .map_err(|_| format!("non-UTF8 ItemData/{key} override")),
+            Ok(FieldValue::Override(_)) => Err(format!("unsupported ItemData/{key} override type")),
+            Err(FieldProblem::Indexed(_)) => Err(format!("indexed ItemData/{key} override")),
+            Ok(FieldValue::Cell(_)) | Err(_) => item_cell(item, key),
+        },
+        (None, _) => item_cell(item, key),
+    }
+}
+
+fn item_cell(item: Object<'_>, key: &str) -> Result<String, String> {
     item.cell(SlkId::ItemData, key)
         .map(|c| c.text.trim().to_owned())
         .map_err(|e| e.to_string())
 }
 
-fn item_flag(item: Object<'_>, key: &str) -> Result<bool, String> {
-    match item_text(item, key)?.as_str() {
+fn item_flag(definition: &Definition, item: Object<'_>, key: &str) -> Result<bool, String> {
+    match item_text(definition, item, key)?.as_str() {
         "0" => Ok(false),
         "1" => Ok(true),
         _ => Err(format!("item {key} is not a boolean flag")),
