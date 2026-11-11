@@ -503,3 +503,17 @@ at `87bf80be`, "after" is this lane. Decodes: [wisp-harvest.md](wisp-harvest.md)
 | RoC NightElf02 | `UnitId` unsupported (`Blizzard.j:2998`) | probe passes (exit 0, `executed_units=135`) |
 | TFT NightElfX06 | `harvest` target order on a wisp: unit has no `Ahar` harvest capability (`Blizzard.j:7808`) | probe passes (exit 0, `executed_units=188`) |
 | RoC Undead03 | `SetUnitState`: arguments do not match the unit native declaration (`Blizzard.j:3315`, `SetUnitManaBJ` of a null `udg_Arthas`) | `GetPlayerUnitCount` unsupported (`war3map.j:5454`), not started |
+
+## Probe results (2026-11-11, shop default slots and held attack speed)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the base of this lane (`0ff16d9c`), "after" is its final commit. Decodes: [script-stock-slots.md](script-stock-slots.md#default-slot-count) and the attack speed section of [passive-held-items.md](passive-held-items.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT UndeadX03 | `AddUnitToStock`: shop slot count is not assigned | passes startup (`executed_units=208`) |
+| TFT UndeadX06 | `UnitAddItem`: unsupported passive ability `AIsx` with code `AIas` on `gcel` | `UnitAddItem`: unsupported passive ability `AIdf` with code `AIsb` on `odef` (the orb wraps Black Arrow; not a close sibling, see the `AIsb` entry in passive-held-items.md) |
+
+Open after this lane:
+
+- A unit without an `Asid` or `Asud` ability stores stock here; the native returns silently for it.
+- Attack speed: that agility and the cooldown consumer use the same multiplier object, and the illusion gate, are inferred or not modelled (see passive-held-items.md).
