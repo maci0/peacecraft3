@@ -324,6 +324,8 @@ impl ObjectHost {
             "SetReservedLocalHeroButtons",
             // unit_alt_icon_host.rs
             "UnitSetUsesAltIcon",
+            // unit_creep_guard_host.rs
+            "SetUnitCreepGuard",
             // unit_waygate_host.rs
             "WaygateActivate",
             "WaygateGetDestinationX",

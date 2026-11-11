@@ -224,6 +224,8 @@ pub struct ExecutedUnit {
     pub paused_since: Option<f64>,
     /// `UnitSetUsesAltIcon` state. Its presentation consumer is not decoded.
     pub uses_alt_icon: bool,
+    /// `SetUnitCreepGuard` state. The ability code that reads it is not modeled.
+    pub creep_guard: bool,
     /// Natural sleep state when admitted from the selected unit definition.
     pub sleep: Option<super::unit_sleep::UnitSleep>,
     /// Live life/mana when vitals are admitted.
@@ -421,6 +423,7 @@ impl ObjectHost {
         self.unit_visibility_declarations(&declaration_source)?;
         self.unit_pause_declarations(&declaration_source)?;
         self.unit_alt_icon_declarations(&declaration_source)?;
+        self.unit_creep_guard_declaration(&declaration_source)?;
         self.hero_button_reserve_declaration(&declaration_source)?;
         self.alt_minimap_icon_declaration(&declaration_source)?;
         self.unit_waygate_declarations(&declaration_source)?;
@@ -1365,6 +1368,9 @@ impl ObjectHost {
             return Some(result);
         }
         if let Some(result) = self.unit_alt_icon_native(name, args) {
+            return Some(result);
+        }
+        if let Some(result) = self.unit_creep_guard_native(name, args) {
             return Some(result);
         }
         if let Some(result) = self.hero_button_reserve_native(name, args) {
@@ -2582,6 +2588,7 @@ impl ObjectHost {
                 shown: true,
                 paused_since: None,
                 uses_alt_icon: false,
+                creep_guard: false,
                 sleep: None,
                 vitals: None,
                 permanent_strength: 0,

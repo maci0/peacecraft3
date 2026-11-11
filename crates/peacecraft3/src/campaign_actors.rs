@@ -2509,6 +2509,7 @@ mod tests {
             shown: true,
             paused_since: None,
             uses_alt_icon: false,
+            creep_guard: false,
             sleep: None,
             vitals: None,
             combat: None,

@@ -134,6 +134,51 @@ fn alt_minimap_icon_refuses_trigger_strings_and_bad_arguments_without_a_write() 
     assert_eq!(host.alt_minimap_icon(), Some("keep"));
 }
 
+const CREEP_GUARD: &str = "native SetUnitCreepGuard takes unit whichUnit, boolean creepGuard returns nothing\nnative RemoveUnit takes unit u returns nothing\n";
+
+#[test]
+fn unit_creep_guard_stores_the_flag_on_the_unit_only() {
+    let mut s = open_extra(CREEP_GUARD);
+    s.vm.init_globals().unwrap();
+    s.vm.call("setup", &[]).unwrap();
+    let unit = s.vm.global("U");
+    let Value::Handle(id) = unit else {
+        panic!("unit")
+    };
+    let host = &mut s.vm.host().inner;
+    assert!(!host.executed_unit(id).unwrap().creep_guard);
+    assert_eq!(
+        host.native("SetUnitCreepGuard", &[unit.clone(), Value::Bool(true)])
+            .unwrap(),
+        Value::Null
+    );
+    assert!(host.executed_unit(id).unwrap().creep_guard);
+    assert!(!host.executed_unit(id).unwrap().uses_alt_icon);
+    host.native("SetUnitCreepGuard", &[unit.clone(), Value::Bool(false)])
+        .unwrap();
+    assert!(!host.executed_unit(id).unwrap().creep_guard);
+}
+
+#[test]
+fn unit_creep_guard_ignores_null_and_removed_units_and_refuses_bad_calls() {
+    let mut s = open_extra(CREEP_GUARD);
+    s.vm.init_globals().unwrap();
+    s.vm.call("setup", &[]).unwrap();
+    let unit = s.vm.global("U");
+    let host = &mut s.vm.host().inner;
+    host.native("SetUnitCreepGuard", &[Value::Null, Value::Bool(true)])
+        .unwrap();
+    host.native("RemoveUnit", std::slice::from_ref(&unit))
+        .unwrap();
+    host.native("SetUnitCreepGuard", &[unit, Value::Bool(true)])
+        .unwrap();
+    let wrong_family = host
+        .native("SetUnitCreepGuard", &[Value::Int(0), Value::Bool(true)])
+        .unwrap_err();
+    assert!(wrong_family.contains("another family"), "{wrong_family}");
+    assert!(host.native("SetUnitCreepGuard", &[Value::Null]).is_err());
+}
+
 const CAMERA: &str = "type camerafield extends handle
 type camerasetup extends handle
 constant native ConvertCameraField takes integer i returns camerafield

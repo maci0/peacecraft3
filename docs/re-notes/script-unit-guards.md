@@ -28,6 +28,16 @@ These are shipped instruction observations from the qualified local image,
 not a recording of native execution. Private disassembly inputs/output stay
 under `.scratch/unit-guard-host/` and are not committed.
 
+## SetUnitCreepGuard
+
+Registration push at `0x49d4da` (name `0xe71d60`), handler `0x4ab2a0`. The unit comes
+from `0x483940`; a null or removed unit returns. A nonzero flag ORs `0x4` into the dword
+at unit `+0x168`, zero clears it (`and 0xfffffffb`). Bit `0x4` is read by six tests in ability
+code (`0xb18e78`, `0xb200f6`, `0xb2227b`, `0xb2392d`, `0xb24fb3`, `0xb250bd`), which are not
+decoded. Recreation: `ExecutedUnit::creep_guard` (`unit_creep_guard_host.rs`) keeps the
+flag; nothing reads it, and the unit cache does not store it. HumanX03 calls it
+during unit creation.
+
 ## RecycleGuardPosition
 
 Registration push at `0x4a101e` (name `0xe77690`), handler `0x4a4e30`. A null or
