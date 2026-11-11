@@ -2047,10 +2047,6 @@ impl ObjectHost {
     }
 
     fn set_unit_state(&mut self, args: &[Value]) -> Result<Value, Error> {
-        // Handler `0x4abba0` resolves the unit first and returns when it is null.
-        if matches!(args, [Value::Null, Value::Handle(_), Value::Real(_)]) {
-            return Ok(Value::Null);
-        }
         let (unit, state, value, enumerand) = {
             let fail = |reason| self.inner.error(SET_STATE, reason);
             // `0x4abba0` resolves the unit through `0x483940`, which answers a zero handle with
