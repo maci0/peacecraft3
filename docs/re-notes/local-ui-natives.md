@@ -44,3 +44,28 @@ The recreation stores the state each native writes. It renders none of it.
   failure path are not modeled. Source: `alt_minimap_icon_host.rs`.
 - Chapters that call it: TFT `HumanX01` (`war3map.j:7476`) and `UndeadX08`
   (`war3map.j:8396`), both with a literal `UI\Minimap\Minimap-Tower` path.
+
+## SetCameraTargetController
+
+- Registration push at `0x4a0311` (name `0xe762cc`), handler `0x4a7370`.
+- The handler gets the game object (`0x5ec5e0`) and its camera at game `+0x294`
+  (`0x5ead20`). A null camera sets last-error `0x57` and returns.
+- The unit comes from `0x483940`. A null or removed unit returns with no write.
+  `0x4a7370` never reaches the clearing branch of `0x5e3740`.
+- Otherwise it calls `0x5e3740(unit, xoffset, yoffset, inherit, 0)` on the camera.
+  That routine type-checks the unit object, takes a reference on it and stores it at
+  camera `+0x44` (releasing the previous one), stores the two offsets at
+  `+0x50`/`+0x54` and zero at `+0x58`, the orientation flag at `+0x48` and the
+  last argument at `+0x4c`. This native always passes `0` for `+0x4c`.
+- The second caller of `0x5e3740` (`0x4a724e`) passes `1` there. It is another
+  native and is not decoded here.
+- Several routines in `0x5e1a4e`..`0x5e3e47` write zero to camera `+0x44`. Which
+  script camera calls release the controller, and the per-frame follow rule, are
+  not decoded.
+- Recreation: `ObjectHost::camera_target_controller` returns the last accepted
+  unit, offsets and orientation flag. The camera does not follow the unit yet.
+  While a controller is set, `GetCameraTargetPosition*`, `PanCameraToTimed` and
+  `SetCameraQuickPosition` refuse, because their interaction with the controller
+  is open. Source: `camera_view_host.rs`.
+- Chapter that calls it: RoC `Orc03`, through `SetCameraTargetControllerNoZForPlayer`
+  (`Scripts\Blizzard.j:1321`) with offsets `0.0`, `0.0` and orientation `false`.

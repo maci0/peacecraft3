@@ -7,7 +7,7 @@ use pcx_objects::editor::camera::GameCamera;
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
-const NATIVES: [(&str, &[&str], &str, bool); 10] = [
+const NATIVES: [(&str, &[&str], &str, bool); 11] = [
     (
         "PanCameraToTimed",
         &["real", "real", "real"],
@@ -28,7 +28,16 @@ const NATIVES: [(&str, &[&str], &str, bool); 10] = [
     ("GetCameraField", &["camerafield"], "real", true),
     ("CameraSetSourceNoise", &["real", "real"], "nothing", false),
     ("CameraSetTargetNoise", &["real", "real"], "nothing", false),
+    (
+        TARGET_CONTROLLER,
+        &["unit", "real", "real", "boolean"],
+        "nothing",
+        false,
+    ),
 ];
+
+const TARGET_CONTROLLER: &str = "SetCameraTargetController";
+const CONTROLLER_SET: &str = "a target controller unit is set; how the camera follows it and when a pan releases it are not decoded";
 
 /// Fields whose `GetCameraField` result is in radians. The selected `Blizzard.j`
 /// `GetCurrentCameraSetup` scales exactly these by `bj_RADTODEG` before
@@ -87,6 +96,16 @@ fn seed_target(fallback: Option<[f32; 2]>, to: [f32; 2], now: f64, duration: f32
     ramp
 }
 
+/// State `SetCameraTargetController` writes into the camera object (`0x5e3740`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TargetController {
+    pub unit: HandleId,
+    /// Offset stored at camera `+0x50` and `+0x54`; `+0x58` is zeroed.
+    pub offset: [f32; 2],
+    /// Stored at camera `+0x48`. `+0x4c` is zero for this native.
+    pub inherit_orientation: bool,
+}
+
 pub(super) struct CameraView {
     target: Option<Ramp<2>>,
     fields: BTreeMap<i32, Ramp<1>>,
@@ -98,6 +117,8 @@ pub(super) struct CameraView {
     source_noise: Option<[f32; 2]>,
     /// Last `CameraSetTargetNoise` magnitude and velocity. No shake samples.
     target_noise: Option<[f32; 2]>,
+    /// Last `SetCameraTargetController` call. The camera does not follow it yet.
+    controller: Option<TargetController>,
 }
 
 /// Script camera fields named by the selected common, paired with the game camera.
@@ -150,6 +171,7 @@ impl ObjectHost {
             scroll_rates: [camera.forward_rate, camera.strafe_rate],
             source_noise: None,
             target_noise: None,
+            controller: None,
         });
         Ok(())
     }
@@ -234,6 +256,49 @@ impl ObjectHost {
     /// Last executed source-noise magnitude and velocity, if any call stored one.
     pub fn camera_source_noise(&self) -> Option<[f32; 2]> {
         self.camera_view.as_ref()?.source_noise
+    }
+
+    /// Last accepted `SetCameraTargetController` call, if any.
+    pub fn camera_target_controller(&self) -> Option<TargetController> {
+        self.camera_view.as_ref()?.controller
+    }
+
+    /// `SetCameraTargetController` (`0x4a7370`). A null or removed unit ends the call
+    /// with no write (`0x483940` gives no object). Otherwise `0x5e3740` stores the
+    /// unit, the offset and the orientation flag in the camera object.
+    fn set_target_controller(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = TARGET_CONTROLLER;
+        let [
+            unit,
+            Value::Real(x),
+            Value::Real(y),
+            Value::Bool(inherit_orientation),
+        ] = args
+        else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        if !x.is_finite() || !y.is_finite() {
+            return Err(self
+                .inner
+                .error(name, Failure::CameraSetupObject("finite offsets required")));
+        }
+        let unit = match unit {
+            Value::Null => return Ok(Value::Null),
+            Value::Handle(unit) => *unit,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        match self.inner.entry(unit)? {
+            Entry::Unit { .. } => {}
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        }
+        let view = self.camera_view.as_mut().expect("admitted camera view");
+        view.controller = Some(TargetController {
+            unit,
+            offset: [*x, *y],
+            inherit_orientation: *inherit_orientation,
+        });
+        Ok(Value::Null)
     }
 
     /// Last executed target-noise magnitude and velocity, if any call stored one.
@@ -350,6 +415,9 @@ impl ObjectHost {
                 }
                 return Ok(Value::Real(value));
             }
+            if name == TARGET_CONTROLLER {
+                return self.set_target_controller(args);
+            }
             let reals = args
                 .iter()
                 .map(|v| v.as_real().filter(|r| r.is_finite()))
@@ -358,6 +426,14 @@ impl ObjectHost {
             let fallback = self.initial_camera_target();
             let view = self.camera_view.as_mut().expect("admitted");
             match (name, reals.as_slice()) {
+                (
+                    "PanCameraToTimed"
+                    | "SetCameraQuickPosition"
+                    | "GetCameraTargetPositionX"
+                    | "GetCameraTargetPositionY"
+                    | "GetCameraTargetPositionLoc",
+                    _,
+                ) if view.controller.is_some() => return Err(fail(CONTROLLER_SET)),
                 ("PanCameraToTimed", &[x, y, duration]) => match &mut view.target {
                     Some(ramp) => ramp.retarget([x, y], now, duration),
                     None => {
