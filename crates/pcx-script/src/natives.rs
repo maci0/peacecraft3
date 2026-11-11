@@ -9,8 +9,8 @@
 //!
 //! # What is implemented
 //!
-//! Two natives, both proved from the shipped scripts rather than from their
-//! names:
+//! Three natives. `I2R` and `R2I` are proved from the shipped scripts rather
+//! than from their names:
 //!
 //! - `I2R`: integer to real. `Blizzard.j`'s `ModuloReal` computes
 //!   `dividend - I2R(R2I(dividend / divisor)) * divisor`, which only
@@ -20,12 +20,17 @@
 //!   its comment ("the result is negative, but within (-divisor..0]" when the
 //!   dividend is negative) rules out a floor.
 //!
+//! - `I2S`: integer to string. Decoded from `Warcraft III.exe` 1.29.2.9231:
+//!   the handler at `0x498ab0` formats its argument with the `%d` string at
+//!   `0xe6ddd8` into a 256-byte buffer, then makes a script string of it, so
+//!   the result is the signed decimal text (`-5`, not `-005`).
+//!
 //! Everything else is refused with its name and the span of the call, which
-//! is what `PLAN.md` requires of a missing native. The formatting natives
-//! (`I2S`, `R2S`, `R2SW`) and the string natives (`SubString`, `StringLength`,
+//! is what `PLAN.md` requires of a missing native. The other formatting natives
+//! (`R2S`, `R2SW`) and the string natives (`SubString`, `StringLength`,
 //! `StringCase`, `StringHash`) are refused because their exact output is not
-//! derivable from anything on this machine, and a slightly-wrong substring or
-//! number format is exactly the failure a loud error prevents.
+//! derived yet, and a slightly-wrong substring or number format is exactly the
+//! failure a loud error prevents.
 
 use crate::ast::{NativeDecl, Param, TypeKind, TypeRef};
 use crate::span::Span;
@@ -57,10 +62,12 @@ pub enum NativeImpl {
     IntToReal,
     /// `R2I`, real to integer, truncating toward zero.
     RealToInt,
+    /// `I2S`, integer to its signed decimal text.
+    IntToString,
 }
 
 impl NativeImpl {
-    // The existing conversion bodies each consume one scalar and return its converted scalar.
+    // The conversion bodies each consume one scalar and return its converted scalar.
     fn accepts_signature(self, declaration: &Native) -> bool {
         let [parameter] = declaration.params.as_slice() else {
             return false;
@@ -68,6 +75,7 @@ impl NativeImpl {
         let (input, output) = match self {
             Self::IntToReal => (TypeKind::Integer, TypeKind::Real),
             Self::RealToInt => (TypeKind::Real, TypeKind::Integer),
+            Self::IntToString => (TypeKind::Integer, TypeKind::String),
         };
         !parameter.ty.array
             && !declaration.ret.array
@@ -229,6 +237,7 @@ pub fn implemented(name: &str) -> Option<NativeImpl> {
     match name {
         "I2R" => Some(NativeImpl::IntToReal),
         "R2I" => Some(NativeImpl::RealToInt),
+        "I2S" => Some(NativeImpl::IntToString),
         _ => None,
     }
 }

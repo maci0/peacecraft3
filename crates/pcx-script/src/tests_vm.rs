@@ -638,7 +638,11 @@ fn an_unimplemented_native_carries_its_name_the_declaration_and_the_call_span() 
 }
 
 #[test]
-fn i2r_and_r2i_are_the_only_natives_the_table_runs() {
+fn i2r_r2i_and_i2s_are_the_only_natives_the_table_runs() {
+    assert_eq!(
+        crate::natives::implemented("I2S"),
+        Some(crate::natives::NativeImpl::IntToString)
+    );
     assert_eq!(
         crate::natives::implemented("I2R"),
         Some(crate::natives::NativeImpl::IntToReal)
@@ -648,7 +652,7 @@ fn i2r_and_r2i_are_the_only_natives_the_table_runs() {
         Some(crate::natives::NativeImpl::RealToInt)
     );
     assert_eq!(crate::natives::implemented("i2r"), None);
-    assert_eq!(crate::natives::implemented("I2S"), None);
+    assert_eq!(crate::natives::implemented("R2S"), None);
     assert_eq!(crate::natives::implemented("SubString"), None);
 }
 
@@ -671,6 +675,30 @@ fn the_host_takes_the_natives_the_table_refuses() {
 fn i2r_and_r2i_run_from_a_real_declaration() {
     let src = "native I2R takes integer i returns real\nnative R2I takes real r returns integer\nfunction f takes nothing returns integer\n    return R2I(I2R(3))\nendfunction\n";
     assert_eq!(call(src, "f", &[]).expect("call"), Value::Int(3));
+}
+
+#[test]
+fn i2s_prints_signed_decimal_without_padding() {
+    let src = "native I2S takes integer i returns string\nfunction f takes integer i returns string\n    return \"ZoneSave\" + I2S(i)\nendfunction\n";
+    for (value, text) in [
+        (0, "ZoneSave0"),
+        (7, "ZoneSave7"),
+        (-5, "ZoneSave-5"),
+        (i32::MAX, "ZoneSave2147483647"),
+        (i32::MIN, "ZoneSave-2147483648"),
+    ] {
+        assert_eq!(
+            call(src, "f", &[Value::Int(value)]).expect("call"),
+            Value::Str(text.into())
+        );
+    }
+}
+
+#[test]
+fn i2s_with_a_foreign_signature_is_refused_not_run() {
+    let src = "native I2S takes real r returns string\nfunction f takes nothing returns string\n    return I2S(1.5)\nendfunction\n";
+    let error = call(src, "f", &[]).expect_err("a real parameter is not the shipped I2S");
+    assert!(error.message.contains("I2S"), "{}", error.message);
 }
 
 // ----- the text seam -----------------------------------------------------

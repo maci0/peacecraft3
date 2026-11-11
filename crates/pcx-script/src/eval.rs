@@ -2367,6 +2367,14 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     format!("R2I takes a real, got {}", v.type_name()),
                 )),
             },
+            NativeImpl::IntToString => match args[0] {
+                // The original formats with `%d`: signed decimal, no padding.
+                Value::Int(i) => Ok(Value::Str(i.to_string())),
+                ref v => Err(crate::Error::run(
+                    span,
+                    format!("I2S takes an integer, got {}", v.type_name()),
+                )),
+            },
         }
     }
 

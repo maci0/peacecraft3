@@ -45,7 +45,8 @@ archive provenance remains independent of the executable identity.
 
 The recreation executes the generated code in the actual VM and selected-policy
 `ObjectHost`, including the numeric policy. Only fixture export and integer-to-
-decimal reporting are adapted. This admits no production `I2S` implementation.
+decimal reporting are adapted. The VM now runs `I2S` itself
+([chapter-startup-refusals.md](chapter-startup-refusals.md), route section).
 The extractor additionally checks signed zero and the smallest normal value in
 the recreation. The original experiment changes only `war3map.j`, with reversible
 insertion after `InitBlizzard`; all 17 retained members are independently checked.
