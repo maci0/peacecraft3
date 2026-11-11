@@ -61,6 +61,21 @@ not established, so no default is used.
 Test (pcx-play `combat_tests`): `weapon_without_shipped_damage_point_refuses_only_at_swing`.
 It failed before the fix at creation with `unit field dmgpt1 is empty`.
 
+### Integer death type override
+
+TFT UndeadX02 `war3map.j:2431` creates `n000`, a custom `nzom` whose
+`war3map.w3u` entry sets `udea` (`UnitData/deathType`) to the integer word 3.
+The base cell is the text `2`. The map writes the mask as type 0 (`int`), but
+`unit_decay_host` read deathType through the token-text helper, which refuses a
+non-string override. `CreateUnit` refused with `unit animation: text placement field required`.
+
+Fix: deathType reads a text cell or string override as before, and an integer
+override as the mask word. The mask check is unchanged: a bit outside the
+admitted raise and decay bits still refuses with `unsupported UnitData/deathType mask`.
+
+Test (pcx-play `unit_corpse_tests`): `map_integer_death_type_override_is_the_decay_mask`.
+It failed before the fix with `text placement field required`.
+
 ## Open
 
 ### Odd-dimension pathing texture
@@ -129,6 +144,7 @@ on the selected install, before and after this batch.
 | TFT NightElfX08Finale | `Blizzard.j:6913` `SetCampaignAvailable` unsupported | passes `SetCampaignAvailable`; `Blizzard.j:6915` `ForceCampaignSelectScreen` unsupported |
 | TFT UndeadX07c | `Blizzard.j:2128` `SetDoodadAnimationRect`: `ZZcd` unsupported `vertR` selector | passes the doodad; `Blizzard.j:4841` `SetPlayerAlliance` refused: arguments do not match the declaration |
 | RoC Undead03 | `CreateUnit` (`war3map.j:1016`): `unit field dmgpt1 is empty` | passes `CreateUnit`; `IssueImmediateOrder` `repairoff` (`war3map.j:1019`) unsupported by this host |
+| TFT UndeadX02 | `CreateUnit` (`war3map.j:2431`): `unit decay: unit animation: text placement field required` | passes `CreateUnit`; `UnitAddItemToSlotById` (`war3map.j:2470`) refused: unsupported passive ability `AIfb` on `ofir` (orb refusal, see passive-held-items.md) |
 
 `HeroFarSeer.mdx` (War3.mpq, 133,824 bytes) SEQS record 0 is named `nothing`,
 with interval start `0xFFFFFF59` (signed -167) and end `0`. Every other record

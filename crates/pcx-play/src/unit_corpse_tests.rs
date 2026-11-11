@@ -7,7 +7,7 @@ const DECLARATION: &str =
 fn fixture() -> pcx_script::OwnedVm<ObjectHost> {
     fixture_with_decay(None)
 }
-fn fixture_with_decay(decay: Option<(&str, &str, &str)>) -> pcx_script::OwnedVm<ObjectHost> {
+fn fixture_with_decay(decay: Option<(&str, FieldValue, &str)>) -> pcx_script::OwnedVm<ObjectHost> {
     let mut fields = if decay.is_some() {
         combat::hero_fields("STR")
     } else {
@@ -25,16 +25,13 @@ fn fixture_with_decay(decay: Option<(&str, &str, &str)>) -> pcx_script::OwnedVm<
         combat::column(b"F001", SlkId::UnitBalance, "fused", FieldKind::Int, "7"),
         combat::column(b"F002", SlkId::UnitBalance, "fmade", FieldKind::Int, "13"),
     ]);
-    if let Some((death, flags, structure)) = decay {
+    if let Some((death, flags, structure)) = &decay {
+        let mut death_type =
+            combat::column(b"D002", SlkId::UnitData, "deathType", FieldKind::Token, "0");
+        death_type.1.value = Ok(flags.clone());
         fields.extend([
             combat::column(b"D001", SlkId::UnitData, "death", FieldKind::Unreal, death),
-            combat::column(
-                b"D002",
-                SlkId::UnitData,
-                "deathType",
-                FieldKind::Token,
-                flags,
-            ),
+            death_type,
             combat::column(
                 b"D003",
                 SlkId::UnitBalance,
@@ -350,7 +347,7 @@ fn phase(h: &ObjectHost, unit: &Value) -> crate::unit_decay::Phase {
 #[test]
 fn suspension_changes_the_shared_decay_clock_but_not_the_animation_or_other_corpses() {
     use crate::unit_decay::Phase::*;
-    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("12".into()), "0")));
     let h = vm.host();
     let owner = h.native("Player", &[Value::Int(4)]).unwrap();
     let a = h
@@ -440,7 +437,7 @@ fn suspension_changes_the_shared_decay_clock_but_not_the_animation_or_other_corp
 fn ordinary_death_uses_the_same_decay_and_large_steps_preserve_authored_boundaries() {
     use crate::unit_decay::Phase::*;
     let run = |split: bool| {
-        let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+        let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("12".into()), "0")));
         let h = vm.host();
         let owner = h.native("Player", &[Value::Int(4)]).unwrap();
         let unit = h.native("CreateUnit", &args(owner, b"u001")).unwrap();
@@ -468,7 +465,7 @@ fn ordinary_death_uses_the_same_decay_and_large_steps_preserve_authored_boundari
 #[test]
 fn structure_and_hero_decay_use_their_source_durations_and_hero_identity_survives() {
     use crate::unit_decay::Phase::*;
-    let mut vm = fixture_with_decay(Some(("0.5", "8", "1")));
+    let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("8".into()), "1")));
     let h = vm.host();
     let owner = h.native("Player", &[Value::Int(4)]).unwrap();
     let building = h
@@ -496,7 +493,7 @@ fn structure_and_hero_decay_use_their_source_durations_and_hero_identity_survive
 }
 #[test]
 fn decay_refusals_and_work_exhaustion_preserve_unit_state_and_removal_retires_it() {
-    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("12".into()), "0")));
     let h = vm.host();
     let owner = h.native("Player", &[Value::Int(4)]).unwrap();
     let unit = h.native("CreateCorpse", &args(owner, b"u001")).unwrap();
@@ -517,7 +514,7 @@ fn decay_refusals_and_work_exhaustion_preserve_unit_state_and_removal_retires_it
     decay_step(h, 10.);
     assert!(h.executed_unit(id(&unit)).is_err());
     for (death, flags) in [("NaN", "12"), ("-1", "12"), ("0.5", "1")] {
-        let mut vm = fixture_with_decay(Some((death, flags, "0")));
+        let mut vm = fixture_with_decay(Some((death, FieldValue::Cell(flags.into()), "0")));
         let h = vm.host();
         let owner = h.native("Player", &[Value::Int(4)]).unwrap();
         let count = h.inner().handles();
@@ -527,9 +524,37 @@ fn decay_refusals_and_work_exhaustion_preserve_unit_state_and_removal_retires_it
 }
 
 #[test]
+fn map_integer_death_type_override_is_the_decay_mask() {
+    use crate::unit_decay::Phase::*;
+    // A war3map.w3u `udea` entry is an integer word, not a text cell. Mask 12 is raise (4)
+    // plus decay (8) in the synthetic rules; a bit outside them still refuses.
+    let flags = FieldValue::Override(pcx_objects::Value::Int(12));
+    let mut vm = fixture_with_decay(Some(("0.5", flags, "0")));
+    let h = vm.host();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let corpse = h
+        .native("CreateCorpse", &args(owner.clone(), b"u001"))
+        .unwrap();
+    assert_eq!(phase(h, &corpse), Dying);
+
+    let flags = FieldValue::Override(pcx_objects::Value::Int(16));
+    let mut vm = fixture_with_decay(Some(("0.5", flags, "0")));
+    let h = vm.host();
+    let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+    let error = h
+        .native("CreateCorpse", &args(owner, b"u001"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unsupported UnitData/deathType mask"),
+        "{error}"
+    );
+}
+
+#[test]
 fn bone_deadline_drives_removal_on_the_authored_boundary() {
     use crate::unit_decay::Phase::*;
-    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("12".into()), "0")));
     let h = vm.host();
     let owner = h.native("Player", &[Value::Int(4)]).unwrap();
     let corpse = h.native("CreateCorpse", &args(owner, b"u001")).unwrap();
@@ -551,7 +576,7 @@ fn bone_deadline_drives_removal_on_the_authored_boundary() {
 #[test]
 fn suspend_freezes_the_remaining_lifetime_and_resume_shifts_the_deadline() {
     use crate::unit_decay::Phase::*;
-    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("12".into()), "0")));
     let h = vm.host();
     let owner = h.native("Player", &[Value::Int(4)]).unwrap();
     let corpse = h.native("CreateCorpse", &args(owner, b"u001")).unwrap();
@@ -587,7 +612,7 @@ fn suspend_freezes_the_remaining_lifetime_and_resume_shifts_the_deadline() {
 #[test]
 fn suspended_bone_corpses_are_retained_as_permanent_corpses() {
     use crate::unit_decay::Phase::*;
-    let mut vm = fixture_with_decay(Some(("0.5", "12", "0")));
+    let mut vm = fixture_with_decay(Some(("0.5", FieldValue::Cell("12".into()), "0")));
     let h = vm.host();
     let owner = h.native("Player", &[Value::Int(4)]).unwrap();
     let permanent = h

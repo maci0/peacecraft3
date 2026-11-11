@@ -101,10 +101,23 @@ impl ObjectHost {
             if !death.is_finite() || death < 0. {
                 return Err("UnitData/death must be finite and nonnegative".into());
             }
-            let flags = super::unit_positions::text(d, SlkId::UnitData, "deathType")
-                .map_err(str::to_owned)?
-                .parse::<u32>()
-                .map_err(|_| "UnitData/deathType is not a mask")?;
+            // A war3map.w3u override is the integer mask word itself.
+            let mask: Option<u32> = match super::unit_positions::field(
+                d,
+                SlkId::UnitData,
+                "deathType",
+                &[FieldKind::Token],
+            )
+            .map_err(str::to_owned)?
+            {
+                FieldValue::Cell(text) => text.trim().parse().ok(),
+                FieldValue::Override(pcx_objects::Value::Int(mask)) => Some(*mask),
+                FieldValue::Override(pcx_objects::Value::Str(bytes)) => std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|text| text.trim().parse().ok()),
+                _ => return Err("UnitData/deathType wire type".into()),
+            };
+            let flags = mask.ok_or("UnitData/deathType is not a mask")?;
             if flags & !(rules.raise_mask | rules.decay_mask) != 0 {
                 return Err("unsupported UnitData/deathType mask".into());
             }
