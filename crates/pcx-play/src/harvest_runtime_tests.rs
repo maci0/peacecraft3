@@ -128,6 +128,9 @@ fn read_tables(members: Vec<(String, Vec<u8>)>) -> DefaultTables {
     .unwrap()
 }
 
+#[path = "wisp_harvest_tests.rs"]
+mod wisp;
+
 fn harvest_tables() -> Arc<DefaultTables> {
     harvest_tables_for("9", "20", "4")
 }
@@ -165,8 +168,52 @@ fn harvest_tables_for_search_range(
         ],
         &["Argl", "Artn", "1", "0", "0", "1", "1", "-", "-", "-", "-"],
         &["Arlm", "Artn", "1", "0", "0", "0", "1", "-", "-", "-", "-"],
+        // Wisp Harvest: 4.75 lumber (truncated to 4) every 3 seconds within reach 30; DataB and
+        // DataC are not read by the client class.
+        &[
+            "Awha", "Awha", "1", "0", "0", "4.75", "5", "150", "30", "-", "3",
+        ],
     ];
     let metadata_rows: &[&[&str]] = &[
+        &[
+            "Wha1",
+            "Data",
+            "AbilityData",
+            "-1",
+            "4",
+            "1",
+            "0",
+            "Awha",
+            "-",
+            "unreal",
+            "stats",
+        ],
+        &[
+            "wdur",
+            "Dur",
+            "AbilityData",
+            "-1",
+            "4",
+            "0",
+            "0",
+            "Awha",
+            "-",
+            "unreal",
+            "stats",
+        ],
+        &[
+            "wran",
+            "Rng",
+            "AbilityData",
+            "-1",
+            "4",
+            "0",
+            "0",
+            "Awha",
+            "-",
+            "unreal",
+            "stats",
+        ],
         &[
             "Gld2",
             "Data",
@@ -616,7 +663,14 @@ fn open_harvest_configured(
     configure: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> (Vm, HandleId) {
     open_harvest_model(
-        tables, catalog, tree, fields, budget, sources, configure, true,
+        tables,
+        catalog,
+        vec![tree],
+        fields,
+        budget,
+        sources,
+        configure,
+        true,
     )
 }
 
@@ -625,7 +679,7 @@ fn open_harvest_configured(
 fn open_harvest_model(
     tables: Arc<DefaultTables>,
     catalog: DestructableCatalog,
-    tree: crate::playercolor_host::PlacedDestructable,
+    trees: Vec<crate::playercolor_host::PlacedDestructable>,
     fields: Vec<([u8; 4], ObjectField)>,
     budget: crate::playercolor_host::harvest_runtime::Budget,
     sources: (&str, &str),
@@ -635,7 +689,7 @@ fn open_harvest_model(
     let mut h = host_fields_with_placed_source(
         65536,
         &fields,
-        &[tree],
+        &trees,
         harvest_rules(),
         &format!("{}\n{DEPOSIT_OBSERVER}\n{GOLD_DEPOSIT_OBSERVER}", sources.1),
         &format!("{STATE_EVENTS}\n{}", sources.0),
@@ -3237,7 +3291,7 @@ fn a_worker_model_without_an_attack_sequence_harvests_and_keeps_its_animation() 
     let (mut vm, tree) = open_harvest_model(
         harvest_tables_for_range("9", "18", "4", "8"),
         tree_catalog(),
-        placed_tree_at(52.0, 32.0),
+        vec![placed_tree_at(52.0, 32.0)],
         harvest_fields(),
         crate::playercolor_host::harvest_runtime::Budget::new(4, 64),
         ("", MAP),

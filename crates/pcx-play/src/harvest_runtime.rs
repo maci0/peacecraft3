@@ -110,11 +110,15 @@ pub(super) struct State {
     budget: Budget,
     workers: Vec<Worker>,
     cargo: BTreeMap<HandleId, Cargo>,
+    wisps: Vec<wisp::Wisp>,
     depot_cache: BTreeMap<[u8; 4], DepotReturn>,
 }
 
 #[path = "gold_harvest_runtime.rs"]
 mod gold;
+
+#[path = "wisp_harvest_runtime.rs"]
+mod wisp;
 
 impl Worker {
     fn carrying_any(&self) -> bool {
@@ -168,6 +172,7 @@ impl ObjectHost {
             budget,
             workers: Vec::new(),
             cargo: BTreeMap::new(),
+            wisps: Vec::new(),
             depot_cache: BTreeMap::new(),
         });
         Ok(self)
@@ -187,6 +192,9 @@ impl ObjectHost {
                 return None;
             };
             let state = self.harvest.as_ref()?;
+            if state.wisps.iter().any(|wisp| wisp.unit == *unit) {
+                return Some(Ok(Value::Int(state.harvest_order)));
+            }
             let worker = state.workers.iter().find(|worker| worker.unit == *unit)?;
             let order = if worker.manual_return {
                 state.return_order
@@ -389,6 +397,7 @@ impl ObjectHost {
     /// Forget a worker without changing its current motion. Partial lumber
     /// stays attached to the unit and survives stop, move and nearby reissue.
     pub(super) fn cancel_harvest(&mut self, unit: HandleId) {
+        self.cancel_wisp(unit);
         if let Some(state) = &mut self.harvest {
             let Some(index) = state.workers.iter().position(|worker| worker.unit == unit) else {
                 return;
@@ -414,9 +423,7 @@ impl ObjectHost {
 
     /// Whether the harvest controller currently runs `unit`, in any phase.
     pub(crate) fn harvest_runs(&self, unit: HandleId) -> bool {
-        self.harvest
-            .as_ref()
-            .is_some_and(|state| state.workers.iter().any(|worker| worker.unit == unit))
+        self.harvest_owns_unit(unit)
     }
 
     /// Admitted worker race (`UnitData/race`) for `unit`'s live definition.
@@ -466,9 +473,10 @@ impl ObjectHost {
     }
 
     pub(super) fn harvest_owns_unit(&self, unit: HandleId) -> bool {
-        self.harvest
-            .as_ref()
-            .is_some_and(|state| state.workers.iter().any(|worker| worker.unit == unit))
+        self.harvest.as_ref().is_some_and(|state| {
+            state.workers.iter().any(|worker| worker.unit == unit)
+                || state.wisps.iter().any(|wisp| wisp.unit == unit)
+        })
     }
 
     pub(super) fn purge_harvest_cargo(&mut self, unit: HandleId) {
@@ -478,6 +486,9 @@ impl ObjectHost {
     }
 
     fn start_harvest(&mut self, unit: HandleId, tree: Option<HandleId>) -> Result<Value, Error> {
+        if let Some(started) = self.start_wisp_harvest(unit, tree)? {
+            return Ok(started);
+        }
         let Some(prepared) = self.prepare_lumber_harvest(unit, tree)? else {
             return Ok(Value::Bool(false));
         };
@@ -633,10 +644,8 @@ impl ObjectHost {
         let Some(state) = &self.harvest else {
             return Ok(());
         };
-        if state.workers.is_empty() {
-            return Ok(());
-        }
         let units: Vec<_> = state.workers.iter().map(|worker| worker.unit).collect();
+        self.advance_wisps(now, work)?;
         for unit in units {
             *work = work
                 .checked_sub(1)
@@ -1087,9 +1096,17 @@ impl ObjectHost {
         from: [f32; 2],
         rules: &HarvestRules,
     ) -> Result<Option<HandleId>, Error> {
+        self.select_tree_within(from, rules.search_radius)
+    }
+
+    /// The nearest harvestable tree within `radius` of `from`, ties by handle.
+    fn select_tree_within(
+        &mut self,
+        from: [f32; 2],
+        radius: f32,
+    ) -> Result<Option<HandleId>, Error> {
         let budget = self.harvest.as_ref().expect("admitted").budget.scan_work;
         let mut work = budget;
-        let radius = rules.search_radius;
         let mut best: Option<(f32, HandleId)> = None;
         let mut candidates = Vec::new();
         candidates

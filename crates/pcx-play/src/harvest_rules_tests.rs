@@ -197,6 +197,45 @@ fn tables_with_upgrade_metadata(
                         "stats",
                     ],
                     vec![
+                        "Wha1",
+                        "Data",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "1",
+                        "0",
+                        "Awha,Awh2",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "wdur",
+                        "Dur",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Awha,Awh2",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
+                        "wran",
+                        "Rng",
+                        "AbilityData",
+                        "-1",
+                        "4",
+                        "0",
+                        "0",
+                        "Awha,Awh2",
+                        "-",
+                        "unreal",
+                        "stats",
+                    ],
+                    vec![
                         "adur",
                         "Dur",
                         "AbilityData",
@@ -660,6 +699,88 @@ fn selected_unit(rawcode: [u8; 4], fields: &[([u8; 4], SlkId, &str, &str)]) -> D
         kind: pcx_objects::editor::ObjectKind::Unit,
         fields: map,
         modifications: Vec::new(),
+    }
+}
+
+#[test]
+fn wisp_rules_follow_dur_rng_and_truncated_dataa_with_map_overrides() {
+    let tables = tables_with(
+        &[
+            vec![
+                "Awha", "Awha", "1", "0", "0", "5.9", "5", "150", "700", "-", "8",
+            ],
+            vec![
+                "Awh2", "Awha", "1", "0", "0", "5.9", "5", "150", "700", "-", "8",
+            ],
+            vec!["Zzzz", "Zzzz", "1", "0", "0", "-", "-", "-", "-", "-", "0"],
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    let definition = |list| {
+        selected_unit(
+            *b"wisp",
+            &[(*b"uabi", SlkId::UnitAbilities, "abilList", list)],
+        )
+    };
+    let rules = WispRules::from_definition(&tables, &Overlay::default(), &definition("Awha"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(rules.interval, 8.0);
+    assert_eq!(rules.range, 700.0);
+    assert_eq!(rules.lumber_per_interval, 5, "5.9 truncates toward zero");
+    assert_eq!(rules.ability_alias, "Awha");
+    // The invulnerable variant shares the class code.
+    let rules = WispRules::from_definition(&tables, &Overlay::default(), &definition("Awh2"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(rules.ability_alias, "Awh2");
+    let overlay = edit(
+        "Awha",
+        *b"Wha1",
+        ValueType::Unreal,
+        ObjectValue::Unreal(6.5),
+    );
+    let rules = WispRules::from_definition(&tables, &overlay, &definition("Awha"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(rules.lumber_per_interval, 6);
+    assert!(
+        WispRules::from_definition(&tables, &Overlay::default(), &definition("Zzzz"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        WispRules::from_definition(&tables, &Overlay::default(), &definition("Awha,Awh2")).is_err(),
+        "two wisp-harvest abilities are ambiguous"
+    );
+}
+
+#[test]
+fn wisp_rules_refuse_malformed_cells_instead_of_defaulting() {
+    for (data, range, interval, column) in [
+        ("5", "900", "0", "Dur1"),
+        ("5", "-1", "8", "Rng1"),
+        ("-1", "900", "8", "DataA1"),
+        ("nope", "900", "8", "DataA1"),
+    ] {
+        let tables = tables_with(
+            &[vec![
+                "Awha", "Awha", "1", "0", "0", data, "5", "150", range, "-", interval,
+            ]],
+            &[],
+            &[],
+            &[],
+        );
+        let definition = selected_unit(
+            *b"wisp",
+            &[(*b"uabi", SlkId::UnitAbilities, "abilList", "Awha")],
+        );
+        let error = WispRules::from_definition(&tables, &Overlay::default(), &definition)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(column), "{column}: {error}");
     }
 }
 

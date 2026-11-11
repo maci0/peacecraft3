@@ -15,6 +15,7 @@ use pcx_objects::editor::{FieldKind, FieldSource, Overlay, SlkId};
 use pcx_sim::world::{Definition, FieldValue};
 
 const AHAR: &str = "Ahar";
+const AWHA: &str = "Awha";
 const ARTN: &str = "Artn";
 const SENTINEL: &str = "-";
 
@@ -116,6 +117,79 @@ impl GoldMineRules {
             });
         }
         Ok(result)
+    }
+}
+
+/// Wisp Harvest (`Awha`, `CAbilityWispHarvest`): lumber credited straight to the owner every
+/// `interval` seconds, with no carrying and no depot. Decoded in
+/// `docs/re-notes/wisp-harvest.md`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WispRules {
+    pub source: String,
+    pub ability_alias: String,
+    /// `Dur1`: seconds between credits (`0xbbd000` reads it into the ability, `0xbbe710` re-arms
+    /// the timer with it).
+    pub interval: f32,
+    /// `DataA1`, truncated to an integer by the client (`0x9a07b0`): lumber per interval.
+    pub lumber_per_interval: i32,
+    /// `Rng1`: the radius `0xbbdda0` searches around the wisp for the next tree, and the reach
+    /// at which the target order is in range (the same reading as `Ahar` `Rng1`).
+    pub range: f32,
+}
+
+impl WispRules {
+    /// Rules of the unit's `Awha` ability with map overrides, `Ok(None)` without one.
+    pub fn from_definition(
+        tables: &DefaultTables,
+        abilities: &Overlay,
+        definition: &Definition,
+    ) -> Result<Option<Self>, HarvestError> {
+        let aliases = definition_abil_codes(definition)?;
+        let Some(alias) = find_alias_with_code(tables, Some(abilities), &aliases, AWHA)? else {
+            return Ok(None);
+        };
+        let read = |value: AbilityValue<'_>, column: &str| -> Result<f32, HarvestError> {
+            let text = overlay_ability_cell(
+                tables,
+                abilities,
+                &alias,
+                value,
+                1,
+                pcx_objects::editor::FieldKind::Unreal,
+            )?;
+            parse_f32(&alias, &text, column)
+        };
+        let interval = read(AbilityValue::Scalar("Dur"), "Dur1")?;
+        let range = read(AbilityValue::Scalar("Rng"), "Rng1")?;
+        let lumber = read(AbilityValue::Data(1), "DataA1")?;
+        if !(interval.is_finite() && interval > 0.0) {
+            return Err(HarvestError::Malformed {
+                rawcode: alias,
+                column: "Dur1".into(),
+                detail: "a positive harvest interval is required".into(),
+            });
+        }
+        if !(range.is_finite() && range >= 0.0) {
+            return Err(HarvestError::Malformed {
+                rawcode: alias,
+                column: "Rng1".into(),
+                detail: "a finite nonnegative range is required".into(),
+            });
+        }
+        if !(lumber.is_finite() && (0.0..=i32::MAX as f32).contains(&lumber)) {
+            return Err(HarvestError::Malformed {
+                rawcode: alias,
+                column: "DataA1".into(),
+                detail: "lumber per interval must be finite, nonnegative and fit an integer".into(),
+            });
+        }
+        Ok(Some(Self {
+            source: source_of(tables),
+            ability_alias: alias,
+            interval,
+            lumber_per_interval: lumber.trunc() as i32,
+            range,
+        }))
     }
 }
 
@@ -961,25 +1035,26 @@ pub(crate) fn resolve_ability_code(
     Ok(Some(code))
 }
 
-/// The sole alias whose resolved code equals `Ahar`, if any.
-fn find_ahar_alias(
+/// The sole alias whose resolved code equals `wanted`, if any.
+fn find_alias_with_code(
     tables: &DefaultTables,
     abilities: Option<&Overlay>,
     aliases: &[String],
+    wanted: &str,
 ) -> Result<Option<String>, HarvestError> {
     let mut found: Option<String> = None;
     for alias in aliases {
         let Some(code) = resolve_ability_code(tables, abilities, alias)? else {
             continue;
         };
-        if code != AHAR {
+        if code != wanted {
             continue;
         }
         if found.is_some() {
             return Err(HarvestError::Ambiguous {
                 rawcode: alias.clone(),
                 column: "abilList".to_string(),
-                detail: "multiple abilities resolve to Ahar".to_string(),
+                detail: format!("multiple abilities resolve to {wanted}"),
             });
         }
         found = Some(alias.clone());
@@ -1224,7 +1299,7 @@ impl HarvestRules {
         aliases: &[String],
         work_weapon: Option<WorkWeapon>,
     ) -> Result<Option<Self>, HarvestError> {
-        let Some(ahar_alias) = find_ahar_alias(tables, abilities, aliases)? else {
+        let Some(ahar_alias) = find_alias_with_code(tables, abilities, aliases, AHAR)? else {
             return Ok(None);
         };
         let cell = |value: AbilityValue<'_>, kind: pcx_objects::editor::FieldKind, column: &str| {

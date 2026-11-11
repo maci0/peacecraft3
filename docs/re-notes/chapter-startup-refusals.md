@@ -491,3 +491,15 @@ Open after this lane:
 - `fatLOS` (wide) occluders with a height above zero: creation sets unit flag `0x400` and registers
   through `0x6faea0` (`0x6ce2fc`..`0x6ce324`); the footprint it fills is not decoded.
 - Both attacks enabled at once (`weapsOn=3` or a `DataA` of 3): the combat model holds one weapon.
+
+## Probe results (2026-11-11, wisp harvest, UnitId, null SetUnitState)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is `main`
+at `87bf80be`, "after" is this lane. Decodes: [wisp-harvest.md](wisp-harvest.md),
+[unit-id-native.md](unit-id-native.md), "Null unit handle" in [unit-state-maxima.md](unit-state-maxima.md).
+
+| Chapter | Before | After |
+|---|---|---|
+| RoC NightElf02 | `UnitId` unsupported (`Blizzard.j:2998`) | probe passes (exit 0, `executed_units=135`) |
+| TFT NightElfX06 | `harvest` target order on a wisp: unit has no `Ahar` harvest capability (`Blizzard.j:7808`) | probe passes (exit 0, `executed_units=188`) |
+| RoC Undead03 | `SetUnitState`: arguments do not match the unit native declaration (`Blizzard.j:3315`, `SetUnitManaBJ` of a null `udg_Arthas`) | `GetPlayerUnitCount` unsupported (`war3map.j:5454`), not started |
