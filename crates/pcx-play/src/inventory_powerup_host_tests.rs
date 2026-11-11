@@ -2240,22 +2240,17 @@ fn death_drops_held_flat_damage() {
 }
 
 #[test]
-fn damage_row_outside_admission_and_overflow_refuse_atomically() {
+fn damage_row_missing_from_the_iatt_list_is_held_and_overflow_refuses_atomically() {
     let Fixture { mut h, hero, .. } = open();
-    let refused = item(&mut h, b"pdmx", 0.0);
-    let err = add(&mut h, hero, refused).unwrap_err();
-    assert!(
-        err.contains("damage metadata does not admit ability AItz"),
-        "{err}"
-    );
+    let unlisted = item(&mut h, b"pdmx", 0.0);
+    assert_eq!(add(&mut h, hero, unlisted), Ok(Value::Bool(true)));
+    assert_eq!(held_damage(&h, hero), 3);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(unlisted)],
+    )
+    .unwrap();
     assert_eq!(held_damage(&h, hero), 0);
-    assert_eq!(
-        h.native(
-            "UnitHasItem",
-            &[Value::Handle(hero), Value::Handle(refused)]
-        ),
-        Ok(Value::Bool(false))
-    );
     let overflow = item(&mut h, b"pdmv", 0.0);
     let err = add(&mut h, hero, overflow).unwrap_err();
     assert!(err.contains("passive damage overflows"), "{err}");

@@ -1077,9 +1077,8 @@ impl Rules {
                 continue;
             }
             if code == self.damage_class {
-                if !self.damage.aliases.iter().any(|a| a == alias) {
-                    return Err(format!("damage metadata does not admit ability {alias}"));
-                }
+                // The `AIat` attach (0xbc2a20) reads `DataA1` of any row with this class code and
+                // never consults the metadata `useSpecific` list, which omits the shipped `AItx`.
                 let points = self.amount(alias, &self.damage)?;
                 if points < 0 {
                     return Err(format!("negative damage on {}", item.rawcode()));

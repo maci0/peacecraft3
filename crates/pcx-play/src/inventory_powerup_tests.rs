@@ -1460,8 +1460,8 @@ fn w3a_override_on_the_iatt_field_wins_at_effect_level() {
 }
 
 #[test]
-fn damage_row_outside_the_iatt_admission_refuses() {
-    let err = rules(
+fn damage_row_missing_from_the_iatt_list_is_admitted_by_its_class_code() {
+    let held = rules(
         &Tome {
             use_specific: "AIat,AIxm",
             ..damage_tome("3")
@@ -1471,11 +1471,9 @@ fn damage_row_outside_the_iatt_admission_refuses() {
     )
     .unwrap()
     .held_attributes(&catalog_item("tstr"))
-    .unwrap_err();
-    assert!(
-        err.contains("damage metadata does not admit ability AItf"),
-        "{err}"
-    );
+    .unwrap()
+    .unwrap();
+    assert_eq!(held.damage, 3);
 }
 
 #[test]

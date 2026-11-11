@@ -1094,3 +1094,10 @@ Not decoded, so `AUau` stays refused (`UNMODELED_PASSIVE_CLASSES`):
 
 Recreation consequence: an aura host needs the removal and lifetime rule; none is built, because the rule
 is not decoded.
+
+### Damage admission by class code
+
+The `AIat` attach `0xbc2a20` reads `DataA1` of any ability whose class code is `AIat` and does not
+consult `Iatt.useSpecific`. That list omits the shipped `AItx` (`AttackBonus +20`, `DataA1` 20), so
+the damage branch admits by class code alone; the column and the W3A override pointer still come
+from `Iatt`.
