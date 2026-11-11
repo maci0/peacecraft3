@@ -140,3 +140,21 @@ client sends `smart`. The acknowledgement voice treats `harvest` and `repair` as
 - Shift on training buttons (the client trains a batch with Shift; it is not an order queue).
 - Live checks: right click on a gold mine, a damaged building and a transport; Shift-queued
   orders behind attack, harvest and construction.
+
+## Entangle order class (native decode, refusal kept)
+
+Reviewed exe 1.29.2.9231. `entangleinstant` is order `0xd00b4`, `entangle` is `0xd00b3`, class
+`CAbilityEntangle` (name at `0xf37fcc`). Registration `0xb937f2`/`0xb9381c`.
+
+Observed:
+
+- Both orders are unit-target orders. The target validator `0xb93be0` and point validator `0xb93c30`
+  allow both IDs, and dispatch `0xb93ca0` sends `0xd00b4` to `0xb95030(event, 1)`.
+- The target must carry ability `Agmb` (gold mine class `0x41676d62`), tested at `0xb94700`. A missing
+  target or missing ability returns error `0x2c`.
+- The caster moves toward the mine through `0xb94b70`, `0xb945e0`, `0xb94de0`, `0xb955d0`. The handler
+  `0xb95a21` sets caster flag `+0x164 |= 2` and emits event `0xd018b` (or `0xd018c` for the instant form).
+
+Not decoded: the step that converts the mine (entangled state, any consumption), the mana and cooldown
+rules, and the approach range. The repo keeps the refusal for `entangleinstant` and states that the
+conversion is the undecoded part.

@@ -1345,10 +1345,16 @@ impl ObjectHost {
                 if aimless {
                     return Ok(Value::Bool(false));
                 }
+                let detail = match &args[1] {
+                    Value::Str(text) if text == "entangle" || text == "entangleinstant" => {
+                        "entangle conversion of a gold mine is not decoded (approach and flag are, input-smart-order.md)"
+                    }
+                    _ => "only the attack target order is supported",
+                };
                 return Err(self.inner.error(
                     name,
                     Failure::UnitActivity(format!(
-                        "only the attack target order is supported: unit={unit:?} order={:?} target={target:?}",
+                        "{detail}: unit={unit:?} order={:?} target={target:?}",
                         args[1]
                     )),
                 ));

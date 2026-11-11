@@ -5866,6 +5866,27 @@ fn unsupported_immediate_order_retains_error_and_reports_bounded_actual_context_
 }
 
 #[test]
+fn entangle_target_order_names_the_undecoded_gold_mine_conversion() {
+    let (mut vm, a, b) = open(&armed("64", "normal"));
+    let h = &mut vm.host().inner;
+    let error = h
+        .native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("entangleinstant".into()),
+                Value::Handle(b),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("entangle conversion of a gold mine is not decoded"),
+        "{error}"
+    );
+    assert!(!error.contains("only the attack target order"), "{error}");
+}
+
+#[test]
 fn a_non_attack_target_order_at_nothing_or_a_removed_unit_issues_nothing() {
     let mut fields = armed("64", "normal");
     fields.push(column(
