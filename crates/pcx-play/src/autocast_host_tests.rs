@@ -373,18 +373,17 @@ fn toggle_keys_fall_back_to_order_unorder_when_no_orderoff_is_authored() {
 }
 
 #[test]
-fn enable_refuses_even_when_the_unit_lacks_the_ability() {
+fn enable_on_a_unit_without_the_ability_issues_nothing() {
+    // The unit lacks the class ability, so the order is not issued rather than
+    // refused as an unmodelled enable.
     let (mut vm, u) = open("_", false);
-    let error = vm
+    let issued = vm
         .host()
         .inner
         .native(
             "IssueImmediateOrder",
             &[Value::Handle(u), Value::Str("repair".into())],
         )
-        .unwrap_err();
-    assert!(
-        error.contains("enabling/effects not implemented"),
-        "{error}"
-    );
+        .unwrap();
+    assert_eq!(issued, Value::Bool(false));
 }

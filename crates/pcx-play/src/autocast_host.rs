@@ -115,12 +115,6 @@ impl ObjectHost {
         {
             return Err(fail("autocast/order source differs".into()));
         }
-        if order == class.on {
-            return Err(fail(format!(
-                "autocast enabling/effects not implemented for class {}",
-                String::from_utf8_lossy(&class.code)
-            )));
-        }
         let record = self.executed_unit(unit)?;
         let Some(abilities) = &record.abilities else {
             return Err(fail("autocast unit abilities not admitted".into()));
@@ -163,6 +157,11 @@ impl ObjectHost {
         let Some(alias) = selected else {
             return Ok(None);
         };
+        if order == class.on {
+            return Err(fail(format!(
+                "autocast enabling/effects not implemented for {alias:?}"
+            )));
+        }
         if self.unit_autocast_enabled(unit, alias)? != Some(true) {
             return Ok(None);
         }
