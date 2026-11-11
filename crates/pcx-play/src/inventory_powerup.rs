@@ -73,18 +73,13 @@ const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 /// Held-item classes whose class was decoded from the reviewed client but whose effect is not
 /// modeled, with the reason the pickup stays refused. See `passive-held-items.md`, "Open held
 /// classes".
-const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 4] = [
+const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 3] = [
     (
         "AUau",
         "the unholy aura applies buff BUau to units within Area1 of the holder; the buff adds \
          DataA1 to the speed multiplier and DataB1 as a permanent life regeneration rate, but \
          when the client fires the range events, how the buff ends after a unit leaves the \
          area, and the stacking test against the hero aura are not decoded",
-    ),
-    (
-        "AIsb",
-        "the orb creates the ability named by its UnitID1 and casts it on each armed hit; \
-         that wrapped ability (slow, purge or black arrow) is not modeled",
     ),
     (
         "AIlb",
@@ -175,6 +170,8 @@ pub enum OrbKind {
         first_tick_delay: f32,
         buff: [u8; 4],
     },
+    /// The spell orb: a proc that casts the ability named by `UnitID1` on an armed hit.
+    Spell(SpellOrb),
 }
 
 /// The orb classes a row can belong to.
@@ -184,6 +181,7 @@ enum OrbFamily {
     Corruption,
     Frost,
     Venom,
+    Spell,
 }
 
 /// A held orb: `damage` is `DataA1`, already counted in [`AttributeBonus::damage`].
@@ -302,6 +300,8 @@ struct OrbClasses {
     frost: Option<FrostClass>,
     /// `AIpb` (Orb of Venom) and its poison class, attached by `with_venom_orb`.
     venom: Option<VenomClasses>,
+    /// `AIsb` (spell orbs), attached by `with_spell_orb`.
+    spell: Option<SpellClass>,
 }
 
 /// The registered Orb of Venom class, the poison class its item lists beside it, and the first
@@ -422,6 +422,7 @@ impl Rules {
         let spell_resistance = window(SPELL_RESISTANCE_WINDOW)?;
         let attack_speed = window(ATTACK_SPEED_WINDOW)?;
         let move_speed_bonus = window(MOVE_SPEED_BONUS_WINDOW)?;
+        let spell_orb = SpellOrbImage::read(&pe).map_err(|e| fail(&e))?;
         Self::decode(
             tables,
             overlay,
@@ -437,6 +438,7 @@ impl Rules {
         .and_then(|rules| rules.with_orbs(&orb_base, &orb_base_code, &fire_orb, &corruption_orb))
         .and_then(|rules| rules.with_frost_orb(&frost_orb))
         .and_then(|rules| rules.with_venom_orb(&venom_orb, &poison, &poison_base_code, first_tick))
+        .and_then(|rules| rules.with_spell_orb(&spell_orb))
         .and_then(|rules| rules.with_spell_resistance(&spell_resistance))
         .and_then(|rules| rules.with_attack_speed(&attack_speed))
         .and_then(|rules| rules.with_move_speed_bonus(&move_speed_bonus))
@@ -490,6 +492,7 @@ impl Rules {
             corruption,
             frost: None,
             venom: None,
+            spell: None,
         });
         Ok(self)
     }
@@ -534,6 +537,10 @@ impl Rules {
                         .venom
                         .as_ref()
                         .is_some_and(|venom| venom.orb == class || venom.poison == class)
+                    || orbs
+                        .spell
+                        .as_ref()
+                        .is_some_and(|spell| spell.class == class || spell.black_arrow == class)
             })
     }
 
@@ -1161,6 +1168,8 @@ impl Rules {
                     Some(OrbFamily::Frost)
                 } else if orbs.venom.as_ref().is_some_and(|venom| venom.orb == code) {
                     Some(OrbFamily::Venom)
+                } else if orbs.spell.as_ref().is_some_and(|spell| spell.class == code) {
+                    Some(OrbFamily::Spell)
                 } else {
                     None
                 };
@@ -1442,6 +1451,7 @@ impl Rules {
                     buff,
                 }
             }
+            OrbFamily::Spell => OrbKind::Spell(self.spell_orb(alias)?),
             OrbFamily::Fire => {
                 let area = real("Area1")?;
                 if area <= 0.0 {
@@ -1876,6 +1886,13 @@ fn fraction_column(
         label,
     })
 }
+
+#[path = "inventory_spell_orb.rs"]
+pub(crate) mod spell_orb;
+use spell_orb::SpellClass;
+pub(crate) use spell_orb::SpellOrbImage;
+pub use spell_orb::{BlackArrow, SpellOrb, WrappedAbility, WrappedTargets};
+pub(crate) use spell_orb::{ProcCounters, ProcKind};
 
 #[cfg(test)]
 #[path = "inventory_powerup_tests.rs"]

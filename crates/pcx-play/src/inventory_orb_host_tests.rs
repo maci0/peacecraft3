@@ -476,3 +476,187 @@ fn an_orb_on_a_unit_with_no_second_weapon_keeps_weapon_one() {
 
 #[path = "inventory_venom_host_tests.rs"]
 mod venom;
+
+// Spell orbs (`AIsb`): the proc roll at each swing and the wrapped ability on an armed hit.
+
+/// Hero attack of the fixture weapon with the spell orb's flat damage against an ordinary unit.
+fn spell_orb_hit() -> f32 {
+    attack_damage(WEAPON_ROLL, KILJAEDEN_DAMAGE, BASE_ARMOR)
+}
+
+fn mark_codes(h: &ObjectHost, unit: HandleId) -> Vec<[u8; 4]> {
+    h.unit_buffs(unit)
+        .unwrap()
+        .iter()
+        .map(|buff| buff.rawcode())
+        .collect()
+}
+
+fn marked(h: &ObjectHost, unit: HandleId) -> bool {
+    mark_codes(h, unit).contains(b"BNba")
+}
+
+/// Rolls recorded on the fixture's spell orb stream.
+fn spell_rolls(h: &ObjectHost) -> usize {
+    use crate::script_random::order::CallSite;
+    h.script_random_calls()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            record.site
+                == CallSite::SecondaryDie {
+                    channel: usize::from(SPELL_ORB_STREAM),
+                }
+        })
+        .count()
+}
+
+/// Runs to `until`, returning the first refusal instead of unwrapping it.
+fn run_to_refusal(h: &mut ObjectHost, until: f64) -> Option<String> {
+    let mut now = h.timer_game_time().unwrap_or(0.0);
+    while now < until {
+        now += STEP;
+        h.next_timer_expiry(now, &mut 1000).unwrap();
+        if let Err(error) = h.advance_unit_activity(now, &mut 65536) {
+            return Some(error.to_string());
+        }
+    }
+    None
+}
+
+#[test]
+fn black_arrow_orb_marks_the_target_for_its_duration_and_the_hit_keeps_the_flat_bonus() {
+    let (Fixture { mut h, hero, .. }, orb, target) = armed_hero(b"odef");
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert_life(
+        &h,
+        target,
+        spell_orb_hit(),
+        "the hit carries the orb's flat bonus",
+    );
+    assert!(marked(&h, target), "{:?}", mark_codes(&h, target));
+    // The orb leaves with the hero's next swing still to land: no later hit refreshes the mark.
+    h.native("UnitRemoveItem", &[Value::Handle(hero), Value::Handle(orb)])
+        .unwrap();
+    run(&mut h, 0.3 + f64::from(ARROW_DURATION) - 1.0);
+    assert!(marked(&h, target), "the mark outlasts the next swings");
+    run(&mut h, 0.3 + f64::from(ARROW_DURATION) + 1.0);
+    assert!(!marked(&h, target), "the mark ends with its duration");
+}
+
+#[test]
+fn a_later_hit_restarts_the_mark_timer() {
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"odef");
+    attack(&mut h, hero, target);
+    run(&mut h, f64::from(ARROW_DURATION) * 2.0);
+    assert!(
+        marked(&h, target),
+        "hits every second keep the {ARROW_DURATION} second mark alive"
+    );
+    assert!(
+        h.executed_unit(target)
+            .unwrap()
+            .combat
+            .as_ref()
+            .is_some_and(|c| !c.dead)
+    );
+}
+
+#[test]
+fn an_orb_without_chance_never_marks_and_rolls_once_per_swing_on_its_own_stream() {
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"odez");
+    let before = h.script_random_state().unwrap().clone();
+    attack(&mut h, hero, target);
+    run(&mut h, 4.5);
+    assert!(!marked(&h, target));
+    let hits = hit_count(&h, target, spell_orb_hit());
+    assert!(hits >= 3, "{hits} hits");
+    let rolls = spell_rolls(&h) as i32;
+    assert!(
+        rolls == hits || rolls == hits + 1,
+        "{rolls} rolls for {hits} hits"
+    );
+    let (old, new) = (
+        before.secondary_words().collect::<Vec<_>>(),
+        h.script_random_state()
+            .unwrap()
+            .secondary_words()
+            .collect::<Vec<_>>(),
+    );
+    let stream = usize::from(SPELL_ORB_STREAM);
+    for lane in 0..old.len() {
+        assert_eq!(old[lane] != new[lane], lane == stream, "lane {lane}");
+    }
+}
+
+#[test]
+fn heroes_roll_the_hero_chance_and_are_not_marked_with_a_zero_hero_duration() {
+    let (Fixture { mut h, hero, .. }, _, _) = armed_hero(b"odef");
+    let enemy = unit_for(&mut h, b"H001", 5, 30.0);
+    attack(&mut h, hero, enemy);
+    run(&mut h, 0.3);
+    assert!(spell_rolls(&h) >= 1);
+    assert!(!marked(&h, enemy), "HeroDur1 of the row is zero");
+}
+
+#[test]
+fn a_marked_unit_cannot_die_until_the_summon_is_decoded() {
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"odef");
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert!(marked(&h, target));
+    let error = h.native("KillUnit", &[Value::Handle(target)]).unwrap_err();
+    assert!(error.contains("marked by Black Arrow"), "{error}");
+    assert!(error.contains("ndr1"), "{error}");
+    assert!(
+        h.executed_unit(target)
+            .unwrap()
+            .combat
+            .as_ref()
+            .is_some_and(|combat| !combat.dead),
+        "the refused death changes nothing"
+    );
+    // An unmarked unit still dies.
+    let other = unit_for(&mut h, b"u001", 5, 60.0);
+    h.native("KillUnit", &[Value::Handle(other)]).unwrap();
+}
+
+#[test]
+fn a_purge_proc_refuses_at_the_hit_with_the_wrapped_class() {
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"oli2");
+    attack(&mut h, hero, target);
+    let refusal = run_to_refusal(&mut h, 1.0).expect("the proc reaches the undecoded cast");
+    assert!(
+        refusal.contains("AIpg") && refusal.contains("Aprg"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("not decoded"), "{refusal}");
+    assert_life(&h, target, 0.0, "the refused hit lands no damage");
+}
+
+#[test]
+fn a_swing_at_a_target_outside_the_orb_classes_rolls_nothing() {
+    let extra = [column(
+        b"B001",
+        SlkId::UnitBalance,
+        "isbldg",
+        FieldKind::Bool,
+        "1",
+    )];
+    let (Fixture { mut h, hero, .. }, _, target) = armed_hero_with(b"odef", &extra);
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert_eq!(spell_rolls(&h), 0);
+    assert!(!marked(&h, target));
+}
+
+#[test]
+fn a_hero_without_the_orb_rolls_nothing() {
+    let Fixture { mut h, hero, .. } = open_orb(&[]);
+    let target = unit_for(&mut h, b"u001", 5, 30.0);
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert_eq!(spell_rolls(&h), 0);
+    assert!(!marked(&h, target));
+}

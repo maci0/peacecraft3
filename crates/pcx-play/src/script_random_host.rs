@@ -113,6 +113,31 @@ impl ObjectHost {
         Ok(value)
     }
 
+    /// One real in `[0, 1)` from a retained secondary stream, as the gameplay draw at `0x69a030`
+    /// makes. It does not touch the primary stream and joins the caller sequence.
+    pub(super) fn draw_random_secondary_real(
+        &mut self,
+        channel: usize,
+        caller: &str,
+    ) -> Result<f32, Error> {
+        let random = self.random.as_mut().ok_or_else(|| {
+            self.inner
+                .error(caller, Failure::RandomSetup("not admitted"))
+        })?;
+        random
+            .order
+            .reserve()
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let value = state::secondary_real(&random.policy, &mut random.state, channel)
+            .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
+        let primary_word = random.state.as_ref().map(|state| state.primary_word());
+        random.order.push(DrawRecord {
+            site: CallSite::SecondaryDie { channel },
+            primary_word,
+        });
+        Ok(value)
+    }
+
     pub fn script_random_state(&self) -> Option<&State> {
         self.random.as_ref()?.state.as_ref()
     }

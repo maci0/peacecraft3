@@ -106,17 +106,83 @@ const SPELLS_VS_MEDIUM: f32 = 0.5;
 /// `DataA1` of the fixture boots, `AIms` row `AIms`.
 const SPEED_BONUS: &str = "60";
 
+/// Chance of the stock Orb of Darkness row and the fixture's never-procs row.
+const ALWAYS: &str = "100";
+const NEVER: &str = "0";
+/// Black Arrow range and mark duration of the fixture row; the hero duration is zero, as in the
+/// shipped row.
+const ARROW_DURATION: f32 = 4.0;
+const ARROW_RANGE: &str = "600";
+/// Secondary random stream the fixture spell orbs roll on (the fixture policy has three).
+const SPELL_ORB_STREAM: u8 = 1;
+
+/// Spell orb rows (`AIsb`) and the wrapped abilities they name. Columns follow
+/// [`ability_table`]: alias, code, levels, DataA1..DataE1, Rng1, Cool1, targs1, Area1, Dur1,
+/// HeroDur1, BuffID1, UnitID1, Cost1.
+fn spell_orb_rows(orb_targs: &'static str) -> Vec<Vec<&'static str>> {
+    let orb = |alias, chance, wrapped| {
+        vec![
+            alias, "AIsb", "1", "6", chance, chance, chance, "2", "-", "-", orb_targs, "-", "-",
+            "-", "-", wrapped, "-",
+        ]
+    };
+    vec![
+        orb("AIdf", ALWAYS, "ANbs"),
+        orb("AIdz", NEVER, "ANbs"),
+        orb("AIll", ALWAYS, "AIpg"),
+        vec![
+            "ANbs",
+            "ANbs",
+            "1",
+            "-",
+            "1",
+            "80",
+            "-",
+            "-",
+            ARROW_RANGE,
+            "-",
+            "air,ground,enemy,organic,neutral",
+            "-",
+            "4",
+            "0",
+            "BNba,BNdm",
+            "ndr1",
+            "-",
+        ],
+        vec![
+            "AIpg",
+            "Aprg",
+            "1",
+            "5",
+            "-",
+            "150",
+            "3",
+            "1",
+            "700",
+            "-",
+            "air,ground,ward",
+            "-",
+            "15",
+            "5",
+            "Bprg",
+            "-",
+            "-",
+        ],
+    ]
+}
+
 /// The ability table: the plain rows get empty orb columns, then the three source-shaped orb rows.
 fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
     let mut rows: Vec<Vec<&str>> = plain
         .iter()
         .map(|row| {
             let mut row = row.to_vec();
-            row.extend(["-", "-", "-", ""]);
+            row.extend(["-", "-", "-", "", "-", "-"]);
             row
         })
         .collect();
     let orb_targs = "ground,air,ward";
+    let plain_rows = rows.len();
     rows.extend([
         // Boots of Speed: `DataA1` is the flat bonus, the other data columns are unused.
         vec![
@@ -220,11 +286,15 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
             "",
         ],
     ]);
+    for row in rows.iter_mut().skip(plain_rows) {
+        row.extend(["-", "-"]);
+    }
+    rows.extend(spell_orb_rows(orb_targs));
     let refs: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
     sylk(
         &[
             "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
-            "Cool1", "targs1", "Area1", "Dur1", "HeroDur1", "BuffID1",
+            "Cool1", "targs1", "Area1", "Dur1", "HeroDur1", "BuffID1", "UnitID1", "Cost1",
         ],
         &refs,
     )
@@ -281,6 +351,9 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["bsp2", "AIm2", "0", "0", "0", "-"],
             &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
             &["oven", "AIpb,Apo2", "0", "0", "0", "-"],
+            &["odef", "AIdf", "0", "0", "0", "-"],
+            &["odez", "AIdz", "0", "0", "0", "-"],
+            &["oli2", "AIll", "0", "0", "0", "-"],
         ],
     );
     let plain_ability_rows: &[&[&str]] = &[
@@ -881,6 +954,14 @@ fn open_fixture(
         FieldKind::Bool,
         "0",
     ));
+    // The unit classes a spell orb's wrapped ability tests (`organic`) come from `type`.
+    fields.push(column(
+        b"B002",
+        SlkId::UnitBalance,
+        "type",
+        FieldKind::Token,
+        "_",
+    ));
     fields.extend(extra.iter().cloned());
     let declarations = format!(
         "{}\n{}{DECLARATIONS}{POWERUP_DECLARATIONS}",
@@ -955,6 +1036,10 @@ fn open_fixture(
         &poison_base_code(),
         POISON_FIRST_TICK.to_le_bytes(),
     )
+    .unwrap()
+    .with_spell_orb(&crate::inventory_powerup::spell_orb::fixture::image(
+        SPELL_ORB_STREAM,
+    ))
     .unwrap()
     .with_spell_resistance(&registration("AIsr", "AIat"))
     .unwrap()

@@ -568,3 +568,25 @@ First refusal of `selected_install_locked_chapter_startup_probe` (one run each, 
 | RoC Undead02 | `UnitAddItemToSlotById` refused: `AIms` on `bspd`, `Misc/MoveSpeedBonusesStack` is set | startup passes: `executed_units=123`, `published=true` (first refusal moves past this chapter's startup) |
 | TFT OrcX03a | `UnitAddItemToSlotById` refused: `AIms` on `bspd`, `Misc/MoveSpeedBonusesStack` is set | `UnitAddItemToSlotById` refused: `AIva` on `modt` (unsupported passive ability) |
 | TFT HumanX06 | `UnitAddItem` refused: `AIau` (code `AUau`) on `lgdh` | same item, new message: the buff halves are decoded; the range event timing, buff end after leaving the area and the stacking test against the hero aura are not |
+
+## 2026-11-11 spell orbs (`AIsb`)
+
+First refusal of `selected_install_locked_chapter_startup_probe`. "Before" is the `AIsb` pickup
+refusal at `b496c8f5` named for these chapters (the 2026-11-10 rows above record the same refusal;
+not re-run), "after" is this branch. Decode: [passive-held-items.md](passive-held-items.md),
+"Spell orbs".
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT UndeadX01 | `UnitAddItem`: `AIdf` (code `AIsb`) on `odef` | passes the pickup; next `UnitAddItem`: `AIpb` on `oven` (Orb of Venom, poison undecoded) |
+| TFT UndeadX01Interlude | `UnitAddItemToSlotById`: `AIdf` on `odef` | passes the pickup; next `UnitAddItemToSlotById`: `AIpb` on `oven` |
+| TFT UndeadX06 | `UnitAddItem`: `AIdf` on `odef` | passes the pickup; next `UnitAddItem`: `AIsx` (code `AIas`) on `gcel` (attack-speed bonus, undecoded) |
+| TFT HumanX05 | `UnitAddItem`: `AIll` on `oli2` | passes the pickup; next `MultiboardSuppressDisplay` unsupported by this host (`Blizzard.j`) |
+
+The probes stop at startup, so no swing happens. Once a hero with the orb swings: the proc roll
+needs a seeded random state; Black Arrow marks and a marked unit's death refuses (summon
+placement undecoded); a Purge proc (`oli2`) refuses at the hit. The movement-speed code is not
+touched, because the Purge slow stays refused.
+
+The "next" refusals above were recorded before `AIpb` (Orb of Venom) and `AIsx` (Gloves of Haste)
+landed on main; both are implemented there now, and these chapters were not re-probed after the merge.

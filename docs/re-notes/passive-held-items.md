@@ -26,8 +26,9 @@ derived on demand from the held slots, so no add/remove state exists.
   reprices life, maximum life and mana. A held item that is not dropped retains its
   maximum-life and mana contributions. Death itself does not clear current mana, and removal
   while dead still reprices mana by the rounded ratio instead of forcing zero.
-- Orbs (`AIfb`, `AIgd`, `AIcb`, `AIob`, `AIpb`) add their flat damage and run their on-hit effect; see "Orb
-  families" below. A holder takes at most one orb.
+- Orbs (`AIfb`, `AIgd`, `AIcb`, `AIob`, `AIpb`) add their flat damage and run their on-hit effect; see
+  "Orb families" below. The spell orbs (`AIsb`) roll a proc per swing and cast Black Arrow; see
+  "Spell orbs" below. A holder takes at most one orb.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
 - Passive rows whose abilities are outside the admitted classes refuse the pickup atomically
@@ -649,36 +650,169 @@ the recreation does not need because the shipped key is 1 and an illusion keeps 
 that `[unit+0x164]` bit `0x40000000` is the illusion flag is inferred from the key name; and any
 cap or floor the cooldown consumer applies to the multiplier.
 
+## Spell orbs (`AIsb`: Orb of Darkness `AIdf`, Orb of Lightning `AIll`, Orb of Slow `AIsb`): proc and Black Arrow implemented, Purge and Slow refused on a proc
+
+All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objdump` and `rizin`.
+"Observed" is read from the machine code; "inferred" is named as such.
+
+### Class and attach
+
+- Registration (observed): window `0xca6e20` (`push 0x11b98a4`, `push "AIDB"`, `push "AIsb"`), base
+  `AIDB`. Descriptor `0xfbf6b4`, factory `0xc9dff0`, constructor `0xca3e70`, vtable `0xfc026c`. It
+  overrides slots 1, 7 (`0xc9edf0`), 10, 17, 18, 19, 22, 32, 34, 35, 41, 44, 46, 73, 74, 83, 84, 85,
+  185, 186, 203, 204 of the `AIDB` vtable; the arming slot 77 (`0xc9e4a0`) is the shared orb one.
+- Attach (slot 32, `0xc9ee50`, observed): the `AIat` attach, flag `0x200`, the `DataE1` air switch
+  (as every orb), then `0xca70c0`, which creates the ability whose raw code is the row's `UnitID1`
+  (`0x46fb50`, factory `0xaf3ba0` by class code), adds it to the owner (`0x6dd220`), stores its
+  handle at `+0xc8` and ORs `0x6000000` into its flag word. Last, the three proc counters
+  `+0xd4`, `+0xd8`, `+0xdc` are set to 1. Slot 34 (`0xc9eee0`) and 35 (`0xc9ef30`) forward to the
+  wrapped ability, detach (slot 41, `0xc9ee00`) releases it.
+- Row fields (observed in the handlers below, labels from `WorldEditStrings.txt`
+  `WESTRING_AEVAL_IOB2..IOB4`): `DataB1` chance to hit units (%), `DataC1` chance to hit heroes
+  (%), `DataD1` chance to hit summons (%), `DataE1` enabled attack index, `UnitID1` the effect
+  ability. Shipped rows: `AIdf` 100/100/100 with `ANbs`; `AIll` 35/10/35 with `AIpg` (code
+  `Aprg`); `AIsb` 15/5/35 with `AIos` (code `Aslo`).
+
+### The proc roll (observed)
+
+- The attack function (call at `0xb1db59`) calls `0x697250(target, 0.0, 0.0)` as a swing starts. It
+  calls slot 73 (`+0x124`) of every ability of the attacker. AIsb slot 73 is `0xc9f2d0`.
+- Conditions: target handle set, `[this+0x3c] <= 0`, virtual `+0x268(0)` true, the target-class
+  test `0x682450` (the orb's own class word) without error, the target-side veto `0x682180` clear.
+  The roll does not happen for a target outside the orb's `targs1` (the arming test is the same).
+- Target kind (`0xca6aa0`): first character of the target's rawcode `A`..`Z` is 1 (hero); else bit
+  `0x4` of `[unit+0x454]` is 2; else 0. That bit is the summoned-unit marker is inferred (the
+  editor label "Chance To Hit Summons" and the Purge summoned-unit test read the same bit).
+- Chance (`0xca6710`): row value `x` by kind (`0x46ee20` `DataB`, `0x46eed0` `DataC`, `0x46ef80`
+  `DataD`); step `trunc(x * 0.2 + 0.5)` clamped to 0..20 (`0xcaec30`, reals `0x10db088`, `0x10db0a8`,
+  clamp immediate `0x14`, `0x9a07b0` truncates); the increment is entry `step` of a 21-entry
+  table the function builds at first use in `0x11b9b30..0x11b9b80`, each `numerator / 10000`
+  (divide `0x9a02d0` = multiply by the table reciprocal `0x9a1d00`, table at `0xed6cf0`). The
+  numerators are 0, 38, 147, 320, 547, 819, 1126, 1461, 1815, 2184, 2562, 2953, 3333, 3781, 4203,
+  4607, 5000, 5799, 6666, 7706, 10000. Chance = counter of the kind (`+0xd4` units, `+0xd8` heroes,
+  `+0xdc` summons) times the increment (`0x99ffe0`).
+- Draw (observed): `0x69a030(&out, 0x24)`, a real in `[0, 1)` from secondary stream `0x24` of the
+  engine generator (the same arithmetic as the primary `GetRandomReal` wrapper `0x494e80` on
+  lane `base + 4 + 8 * 0x24`, through `0x991460`). Success is `chance >= draw`: slot 73 sets
+  flag `0x400` on the orb (`0xc9f373`) and sets the kind's counter to 1 (`0xca7020`); a miss adds 1
+  (`0xca4ba0`) and leaves `0x400` as it was. The counters start at 1, so the first roll of a fresh
+  orb has chance `increment`.
+- Slot 74 (`0xc9f3a0`) clears `0x400`. `0x68e3a0` calls it on every ability from the attack-stop
+  routine (call at `0xb1fe92`).
+
+### The armed hit (observed)
+
+- The attack routine builds the attack record (`0x6a9940`), arms abilities through `0x697620`
+  (slot 77), then calls `0x68f950(attacker, target, record)`, which calls slot 85 (`+0x154`) of the
+  attacker's abilities in the order of their slot 78 value (`0x1b..0x29`) and stops at the first that
+  returns nonzero; only when none does the attack routine apply the record itself. AIsb slot 85
+  (`0xc9f3d0`) returns 1 only when it cast the wrapped ability.
+- Slot 85: when armed (`0x100`) it runs `0x4705f0(target)` (the wrapped ability's target art, a
+  presentation call, inferred), clears the armed bit and, with `0x400` set, asks the wrapped
+  ability whether it may act: virtual `+0x354` (flag word; bit `0x4` set for the generic spell
+  `0x100004` and for Purge `0x108004`), `+0x3e4(1, 0)` (`0xb4a530`: ability disabled count
+  `[+0x3c]`, owner flag `0x40000000`, mana available through `+0x378`, ability flag `0x200`; the
+  cooldown test is skipped by the first argument 1), `0xbebae0(target)` (target class test with the
+  wrapped class word) and `+0x3f4(target)` (`0xb28750`: in cast range through `0x7ff460`, error
+  `0x52`, then `0x682470`). On success it ORs `0x10000` into the wrapped ability, stores the target
+  handle in its `+0xe8`/`+0xec` (`0xca7060`), runs the generic spell cast start `0xb4a940`, applies
+  the attack record through the unit virtual `+0x120`, clears `0x400` and returns 1. On a failed
+  check it returns 0 and leaves `0x400`.
+- So the cast is free of cooldown and, for the shipped rows (no `Cost1`), of mana; the mana check
+  itself is not skipped. The level is the orb's own level `[this+0x50]`, every value comes from the
+  wrapped row.
+
+### Black Arrow (`ANbs`) (observed unless marked)
+
+- Class: registration window `0xc73ab0` (descriptor `0x11b8ef8`, base `AAsm` from `0xb2b1f0`), vtable
+  `0xfac378`. Against the `AAsm` vtable `0xf18508` it overrides only slots 1, 7 (`0xc72f20`), 22 and
+  196 (`+0x310`, `0xc72f30`, target mask `0xd0261`). Its apply routine `0xc72f40` is referenced from
+  a table at `0xfac7a4` beside the name `CBuffDarkMinion`; that the generic cast reaches it is
+  inferred from its target argument and the same shape of Purge's `0xb9e350`, the dispatch from
+  `0xb4a940` is not traced.
+- Apply (`0xc72f40`, target `t`): duration `HeroDur1` (`0x46f500`) when `0xcaf450(t)` says the
+  target counts as a hero, else `Dur1 + [this+0xa0]` (a tracked real initialized to 0 by the
+  constructor `0xb2ad50`; the recreation assumes it stays 0). A duration of exactly 0 stops here, so
+  the shipped row (`HeroDur1` unset) never marks a hero. `0xcaf450` is true for a rawcode
+  starting `A`..`Z`, for unit-type class `[+0x1c0] == 8` at level above 5, or when an ability of the
+  unit answers `+0x1a0`; the last two are not decoded and the recreation uses the first only. The
+  cast also stops when the target holds flag `0x1000` or already has the buff `BNdm`.
+  Otherwise it builds the buff descriptor (`0xb3abe0`) and, when `BNba` is on the target, calls
+  its refresh `+0x360` (timer restart `0x6f6c30`), else creates `BNba` (`0xc731f0`), calls
+  `+0x32c` and `+0x35c` and attaches it (`0x6d4880`). Arguments: caster, owner player
+  (`+0xec`), `UnitID1` (`0x46fb50`), count `DataB1` (`0x46ee20`, truncated), summon duration
+  `DataC1` (`0x46eed0`), and the second `BuffID1` entry (`0x46ea70(level, 1)`, `BNdm`).
+- `BNba` (vtable `0xfaba84`): apply `0xc71fe0` stores caster handle `+0xd0/+0xd4`, player
+  `+0xdc`, unit type `+0xe0`, count `+0xe4`, summon duration `+0xe8`, minion buff `+0xf0`. Slot
+  120 (`+0x1e0`, `0xc72130`) returns 1 (negative), slot 118 (`+0x1d8`, `0xc72140`) returns 0.
+  Slot 160 returns 3 and slot 161 (`+0x284`, `0xc72160`) is the death handler `0x6d8060` runs per
+  stage. For each of `count` units it creates a unit of the stored type for the stored player
+  (`0xcaf240` -> `0x687ca0`, mode 2 when the summon duration is not 0, else `0x502`), tells the
+  caster (`0xcaf230`, `0x68ab70`) and attaches `BNdm` for the summon duration; it then sets flag
+  `0x1000` on the dead unit and clears `0x200` (a re-entrancy guard in the other users).
+- Damage bonus: `DataA1` of the row is not read by the apply routine (it is 0 in the shipped row);
+  the orb's own `DataA1` is the flat bonus.
+
+### Purge (`Aprg`, wrapped as `AIpg`) (observed unless marked)
+
+- Class: registration window `0xba1310` (descriptor `0x11b5dc8`, base `AAsm`), vtable `0xf3c8ac`
+  overrides slots 1, 7 (`0xb9e2e0`), 22, 64 (`0xcb2660`, an autocast target test), 124, 196
+  (`0xd008f`) and 197 (`0x108004`).
+- Apply routine `0xb9e350` (inferred as the cast effect, as above): reads `DataF` (`0x46f0e0`) and
+  `DataC` (`0x46eed0`), calls `0xba0870` with them and the target, then, when target flag
+  `0x100` is clear and `0x696a90` is 0, applies buff `Bprg` through `0xba01b0` (it removes an
+  existing `Bprg` first) with duration `HeroDur1` for the hero-class test above, else `Dur1`
+  (`0xba0d70`), and `DataA`, `DataB`, `DataD`, `DataE`. Labels (`AEVAL_PRG1..6`): `DataA` movement
+  update frequency, `DataB` attack update frequency, `DataC` summoned unit damage, `DataD` unit
+  pause duration, `DataE` hero pause duration, `DataF` mana loss.
+- Not decoded: `0xba0870` (where the dispel by relation, the summoned damage and the mana loss
+  are expected), the `Bprg` classes (`0xf3c528`, `0xf3d130`, see `ai-construction.md`): the
+  dispel, the decaying slow, the pause and the summoned-unit damage.
+
+### Recreation
+
+- `crates/pcx-play/src/inventory_spell_orb.rs`: the registration windows, the stream (read from
+  the push before the `0x69a030` call), the increment table (the 21 stores of `0xcaec30` and the
+  reciprocal table of `0x9a1d00` read from the image), the step constants, and the row reader. The
+  numerators, the stream number and the table are never constants of the crate; the counter rules
+  (start 1, reset to 1 after a proc, +1 after a miss) are named constants citing the addresses
+  above. Rows: `DataB1`..`DataD1`, `UnitID1` and the wrapped row; a map-modified orb or wrapped
+  row refuses, and so does a wrapped `ANbs` row with `Cost1` or `Cool1`, because the generic cast
+  start (`0xb4a940`) spends mana and sets a cooldown that are not decoded.
+- Pickup admits the class for every wrapped row (the held effect is the flat damage and the air
+  switch, as for every orb). The roll runs at the start of each swing at a covered target, draws
+  one real from the secondary stream (`script_random`), updates the counters and keeps the proc
+  until a hit uses it or the attack stops (`clear_combat_target`). An unseeded or too small
+  random state refuses the roll.
+- A hit that finds a held proc casts the wrapped ability before the attack damage. Black
+  Arrow: the target must satisfy the wrapped `targs1` (class, relationship, `organic`); the buff
+  `BNba` (negative) is attached for `Dur1` (zero for a hero) unless the target already has the
+  minion buff; a second cast restarts the timer; expiry and `UnitRemoveBuffs` end it. The death of
+  a marked unit refuses before any change (`require_black_arrow_unmarked`), because the summon
+  placement `0xcaf240` -> `0x687ca0` is not decoded. A proc of any other wrapped class (Purge
+  `Aprg`, Slow `Aslo`) refuses at the hit with the class named.
+- Refused or open: the wrapped ability is not added to the holder's ability list (the original
+  adds it through `0x6dd220`), so `GetUnitAbilityLevel(holder, 'ANbs')` reads 0; the cast range
+  test (`+0x3f4`) is replaced by a refusal when the weapon range exceeds the wrapped `Rng1`;
+  `[this+0x3c]`, `+0x268`, the veto `0x682180` and flag `0x200` are not modelled (the roll and
+  cast assume they pass); the hero-class test is the rawcode rule only; summoned units use the
+  recreation's `summoned` record flag; `RemoveUnit` of a marked unit drops the mark (whether the
+  original runs the death handler is not traced). The first draw needs a seeded random state: the
+  original generator's initial state is open (`original-rng-control.md`).
+- Tests: `inventory_spell_orb_tests.rs` (rows, steps, stream, registration, image shapes, counters),
+  `inventory_orb_host_tests.rs` (roll per swing on its own stream, mark, refresh, expiry, hero,
+  death refusal, Purge refusal), `script_random/real.rs` (truncate, reciprocal, divide),
+  `script_random/state_tests.rs` (secondary real). The ignored
+  `local_original_image_supplies_the_stream_the_table_and_the_classes` reads the real image
+  (`PEACECRAFT3_INSTALL`): stream `0x24`, the numerators above, and the divide within 2e-6 of the
+  exact quotient.
+
 ## Open held classes (decoded in part, still refused at pickup; `AIpb` below is implemented)
 
 Each class below is registered in the reviewed image and its first-level structure is read. The
 effect is not fully decoded or its host mechanism is absent, so the pickup refuses with the reason
 in `UNMODELED_PASSIVE_CLASSES` (`crates/pcx-play/src/inventory_powerup.rs`), test
 `decoded_but_unmodeled_classes_refuse_with_their_reason`.
-
-### `AIsb` (Orb of Slow, Orb of Darkness `AIdf`, Orb of Lightning `AIll`)
-
-- Registration (observed): window `0xca6e20` (`push 0x11b98a4`, `push "AIDB"`, `push "AIsb"`),
-  base `AIDB` (the orb base). Descriptor `0xfbf6b4`, factory `0xc9dff0`, constructor `0xca3e70`
-  (calls the shared base constructor `0xbc7870`, adds a list at `+0xa8` and fields at `+0xbc..+0xdc`),
-  vtable `0xfc026c`. It overrides slots 1, 7 (`0xc9edf0`, `AIsb`), 10, 17, 18, 19, 22, 32, 34, 35,
-  41, 44, 46, 73, 74, 83, 84, 85, 185, 186, 203, 204 of the `AIDB` vtable.
-- Attach (slot 32, `0xc9ee50`, observed): runs the `AIat` attach `0xbc2a20`, sets flag `0x200`,
-  runs the same `DataE1` air switch as the other orbs, then `0xca70c0`, which builds the ability
-  whose raw code is `UnitID1` of the orb row (`0x46fb50`), stores its handle at `+0xc8` and sets
-  flag word `0x6000000` on it. Detach (slot 41, `0xc9ee00`) releases it.
-- Unit-target handler (slot 85, `0xc9f3d0`, observed): when the orb is armed (`0x100`) and flag
-  `0x400` is set, it asks the wrapped ability's virtuals `+0x354`, `+0x3e4`, `+0x3f4` and the
-  routine `0xbebae0` whether it may act on the target, ORs `0x10000` into the wrapped ability,
-  calls `0xca7060` and `0xb4a940` on it, then applies the attack record through the unit virtual
-  `+0x120`. Where flag `0x400` is set is not traced.
-- Shipped rows: `AIsb` `UnitID1` `AIos` (code `Aslo`), `AIdf` `ANbs` (Black Arrow, summon `ndr1`,
-  buffs `BNba`, `BNdm`), `AIll` `AIpg` (code `Aprg`, Purge). `DataA1` is the orb damage (6, 6, 5).
-  `DataB1`..`DataD1` (15/5/35, 100/100/100, 35/10/35) are read by the wrapper or the wrapped
-  ability; which is not decoded.
-- Why it stays refused: the effect is the wrapped ability (slow, Purge, Black Arrow with its
-  summon). The recreation has a slow buff but no Purge, no Black Arrow and no summon-on-kill, and
-  the roles of `DataB1`..`DataD1` are open.
 
 ### `AIpb` (Orb of Venom `oven`, with `Apo2`): implemented and tested
 

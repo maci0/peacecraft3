@@ -1115,6 +1115,7 @@ impl ObjectHost {
     /// Another order replaces the unit's attack target.
     pub(super) fn clear_combat_target(&mut self, unit: HandleId) {
         self.cancel_mirror_cast(unit);
+        self.orb_attack_stopped(unit);
         self.cancel_summon_cast(unit);
         self.forget_holy_cast(unit);
         self.forget_chain_cast(unit);
@@ -1540,6 +1541,7 @@ impl ObjectHost {
             return Ok(());
         };
         self.require_morph_interruption(unit, "unit death")?;
+        self.require_black_arrow_unmarked(unit)?;
         let mut decay = record.decay.clone();
         if let Some(state) = &mut decay {
             state
@@ -2186,6 +2188,7 @@ impl ObjectHost {
                             .inner
                             .error(name, Failure::UnitActivity(ABSENT_DAMAGE_POINT.into())));
                     };
+                    self.orb_swing_start(unit, weapon.range, target)?;
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.face = facing;
                         let combat = record.combat.as_mut().expect("combat");
@@ -2244,6 +2247,7 @@ impl ObjectHost {
                             .error(name, Failure::UnitActivity(ABSENT_MISSILE_SPEED.into())));
                     }
                     if self.weapon_target(swung).is_none() {
+                        self.orb_attack_stopped(unit);
                         if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                             record.combat.as_mut().expect("combat").swing = None;
                         }

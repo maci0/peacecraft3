@@ -25,7 +25,9 @@
 use super::combat::Weapon;
 use super::unit_buff::{ActiveBuff, BuffTraits};
 use super::{Error, Failure, ObjectHost};
-use crate::inventory_powerup::{Orb, OrbKind};
+use crate::inventory_powerup::{
+    BlackArrow, Orb, OrbKind, ProcCounters, ProcKind, SpellOrb, WrappedAbility, WrappedTargets,
+};
 use pcx_script::HandleId;
 use pcx_sim::world::Definition;
 use std::collections::BTreeMap;
@@ -75,11 +77,29 @@ struct ActivePoison {
     next_tick: f64,
 }
 
+/// The proc state of one holder's spell orb: the counters survive until the orb item changes.
+struct SpellProc {
+    item: HandleId,
+    counters: ProcCounters,
+    /// A swing rolled a proc and no hit has used it yet.
+    held: bool,
+}
+
+/// A target under Black Arrow: the mark buff and what its death would summon.
+struct BlackArrowMark {
+    buff: [u8; 4],
+    expires_at: f64,
+    summon: [u8; 4],
+    count: i32,
+}
+
 #[derive(Default)]
 pub(super) struct State {
     penalties: BTreeMap<HandleId, ActivePenalty>,
     frosts: BTreeMap<HandleId, ActiveFrost>,
     poisons: BTreeMap<HandleId, ActivePoison>,
+    procs: BTreeMap<HandleId, SpellProc>,
+    marks: BTreeMap<HandleId, BlackArrowMark>,
 }
 
 impl ObjectHost {
@@ -171,7 +191,8 @@ impl ObjectHost {
     }
 
     /// Applies or refreshes the corruption penalty, the frost decreases or the poison of
-    /// `source` on `target`. The fire orb does nothing here.
+    /// `source` on `target`, or casts the ability a held spell orb procced. The fire orb does
+    /// nothing here.
     pub(super) fn orb_debuff(
         &mut self,
         orb: &Orb,
@@ -197,6 +218,9 @@ impl ObjectHost {
                 expires_at,
             };
             return self.orb_poison(target, buff, stack, now + f64::from(first_tick_delay));
+        }
+        if let OrbKind::Spell(spell) = orb.kind {
+            return self.orb_spell_hit(&spell, source, target);
         }
         if let OrbKind::Frost {
             move_decrease,
@@ -504,6 +528,18 @@ impl ObjectHost {
         for unit in poisoned {
             self.advance_poison(unit, now)?;
         }
+        let marked: Vec<HandleId> = self
+            .orbs
+            .marks
+            .iter()
+            .filter(|(_, mark)| mark.expires_at <= now)
+            .map(|(unit, _)| *unit)
+            .collect();
+        for unit in marked {
+            if let Some(mark) = self.orbs.marks.remove(&unit) {
+                self.detach_unit_buff(unit, mark.buff);
+            }
+        }
         Ok(())
     }
 
@@ -543,6 +579,14 @@ impl ObjectHost {
         {
             self.orbs.poisons.remove(&unit);
         }
+        if self
+            .orbs
+            .marks
+            .get(&unit)
+            .is_some_and(|mark| mark.buff == rawcode)
+        {
+            self.orbs.marks.remove(&unit);
+        }
         Ok(())
     }
 
@@ -551,5 +595,215 @@ impl ObjectHost {
         self.orbs.poisons.remove(&unit);
         self.orbs.penalties.remove(&unit);
         self.orbs.frosts.remove(&unit);
+        self.orbs.procs.remove(&unit);
+        self.orbs.marks.remove(&unit);
+    }
+}
+
+/// Spell orbs (`AIsb`): the swing-start proc roll and the cast of the wrapped ability. The decode
+/// is in `docs/re-notes/passive-held-items.md`, "`AIsb`".
+impl ObjectHost {
+    /// The held spell orb of `unit`: its item, orb and spell data.
+    fn held_spell_orb(&self, unit: HandleId) -> Result<Option<(HandleId, Orb, SpellOrb)>, Error> {
+        for (item, record) in self.executed_items() {
+            if record.held_by.is_none_or(|(owner, _)| owner != unit) {
+                continue;
+            }
+            if let Some(orb) = self.held_attributes(item)?.orb
+                && let OrbKind::Spell(spell) = orb.kind
+            {
+                return Ok(Some((item, orb, spell)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Proc kind of a target: a hero by its rawcode, else a summoned unit.
+    fn proc_kind(&self, target: HandleId) -> Result<ProcKind, Error> {
+        let record = self.executed_unit(target)?;
+        Ok(if record.definition.rawcode[0].is_ascii_uppercase() {
+            ProcKind::Hero
+        } else if record.summoned {
+            ProcKind::Summon
+        } else {
+            ProcKind::Unit
+        })
+    }
+
+    /// A swing of `unit` at `target` starts: a held spell orb rolls its proc (`AIsb` slot 73,
+    /// `0xc9f2d0`). Nothing is rolled when the target is outside the orb's classes. A held proc
+    /// stays until a hit uses it or the attack stops.
+    pub(super) fn orb_swing_start(
+        &mut self,
+        unit: HandleId,
+        weapon_range: f32,
+        target: HandleId,
+    ) -> Result<(), Error> {
+        let Some((item, orb, spell)) = self.held_spell_orb(unit)? else {
+            self.orbs.procs.remove(&unit);
+            return Ok(());
+        };
+        if !self.orb_covers(&orb, &self.executed_unit(target)?.definition)? {
+            return Ok(());
+        }
+        let kind = self.proc_kind(target)?;
+        let (mut counters, held) = match self.orbs.procs.get(&unit) {
+            Some(proc) if proc.item == item => (proc.counters, proc.held),
+            _ => (ProcCounters::attached(), false),
+        };
+        let chance = counters
+            .chance(kind, spell.increments[kind as usize])
+            .map_err(|e| self.orb_error(e.to_string()))?;
+        let draw = self.draw_random_secondary_real(spell.channel, NAME)?;
+        let procced = chance >= draw;
+        counters.rolled(kind, procced);
+        self.orbs.procs.insert(
+            unit,
+            SpellProc {
+                item,
+                counters,
+                held: held || procced,
+            },
+        );
+        if procced
+            && let WrappedAbility::BlackArrow(arrow) = spell.wrapped
+            && weapon_range > arrow.range
+        {
+            return Err(self.orb_error(format!(
+                "a proc of the wrapped ability needs its Rng1 {} to cover the weapon range \
+                 {weapon_range}; the cast range test is not decoded",
+                arrow.range
+            )));
+        }
+        Ok(())
+    }
+
+    /// The attack of `unit` stopped: its held proc is cleared (`AIsb` slot 74, `0xc9f3a0`).
+    pub(super) fn orb_attack_stopped(&mut self, unit: HandleId) {
+        if let Some(proc) = self.orbs.procs.get_mut(&unit) {
+            proc.held = false;
+        }
+    }
+
+    /// An armed hit of a spell orb lands on `target`. With a proc held and the target valid for
+    /// the wrapped ability, the ability is cast before the attack damage (`AIsb` slot 85,
+    /// `0xc9f3d0`); the proc is used up. A target the wrapped ability cannot affect leaves the
+    /// proc held.
+    fn orb_spell_hit(
+        &mut self,
+        spell: &SpellOrb,
+        source: HandleId,
+        target: HandleId,
+    ) -> Result<(), Error> {
+        if !self.orbs.procs.get(&source).is_some_and(|proc| proc.held) {
+            return Ok(());
+        }
+        match spell.wrapped {
+            WrappedAbility::BlackArrow(arrow) => {
+                if !self.wrapped_target_valid(source, target, &arrow.targets)? {
+                    return Ok(());
+                }
+                self.orb_attack_stopped(source);
+                self.black_arrow_mark(&arrow, target)
+            }
+            WrappedAbility::Undecoded { alias, code } => Err(self.orb_error(format!(
+                "a spell orb proc casts {} (class {}), whose cast effect is not decoded: \
+                 see docs/re-notes/passive-held-items.md, \"AIsb\"",
+                String::from_utf8_lossy(&alias),
+                String::from_utf8_lossy(&code)
+            ))),
+        }
+    }
+
+    /// Whether the wrapped ability may be cast on `target`: its class, relationship and
+    /// organic tokens against the target and the holder.
+    fn wrapped_target_valid(
+        &self,
+        caster: HandleId,
+        target: HandleId,
+        targets: &WrappedTargets,
+    ) -> Result<bool, Error> {
+        let Some(unit) = self.live(target) else {
+            return Ok(false);
+        };
+        let definition = &unit.definition;
+        let flying = super::unit_types::flying(definition);
+        let structure = super::unit_types::structure(definition).map_err(|e| self.orb_error(e))?;
+        let mechanical = super::unit_types::class(definition, "UNIT_TYPE_MECHANICAL")
+            .map_err(|e| self.orb_error(e))?;
+        let enemy = self.is_enemy(caster, target);
+        let ally = self.is_ally(caster, target);
+        let related = (targets.enemy && enemy)
+            || (targets.neutral && !enemy && !ally)
+            || (targets.friend && ally);
+        Ok(caster != target
+            && related
+            && (if flying { targets.air } else { targets.ground })
+            && (targets.structure || !structure)
+            && !(targets.organic && mechanical))
+    }
+
+    /// The Black Arrow cast (`0xc72f40`): a target that is not already a summoned minion gets
+    /// the mark buff for `Dur1`, or `HeroDur1` for a hero; a duration of zero casts nothing. A
+    /// target that is already marked has its timer restarted.
+    fn black_arrow_mark(&mut self, arrow: &BlackArrow, target: HandleId) -> Result<(), Error> {
+        let hero = self.executed_unit(target)?.definition.rawcode[0].is_ascii_uppercase();
+        let duration = if hero {
+            arrow.hero_duration
+        } else {
+            arrow.duration
+        };
+        if duration == 0.0 {
+            return Ok(());
+        }
+        if self
+            .unit_buffs(target)?
+            .iter()
+            .any(|buff| buff.rawcode() == arrow.marker)
+        {
+            return Ok(());
+        }
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| self.orb_error("clock missing"))?;
+        let expires_at = now + f64::from(duration);
+        if let Some(mark) = self.orbs.marks.get_mut(&target) {
+            mark.expires_at = expires_at;
+            return Ok(());
+        }
+        self.attach_unit_buff(
+            target,
+            ActiveBuff::new(
+                arrow.buff,
+                BuffTraits {
+                    negative: true,
+                    ..BuffTraits::default()
+                },
+            ),
+        )?;
+        self.orbs.marks.insert(
+            target,
+            BlackArrowMark {
+                buff: arrow.buff,
+                expires_at,
+                summon: arrow.summon,
+                count: arrow.count,
+            },
+        );
+        Ok(())
+    }
+
+    /// A marked unit's death makes the summons the client creates through `0xcaf240`, whose
+    /// placement is not decoded, so the death refuses before it changes anything.
+    pub(super) fn require_black_arrow_unmarked(&self, unit: HandleId) -> Result<(), Error> {
+        let Some(mark) = self.orbs.marks.get(&unit) else {
+            return Ok(());
+        };
+        Err(self.orb_error(format!(
+            "a unit marked by Black Arrow died: creating {} {} units (placement through \
+             0xcaf240) is not decoded",
+            mark.count,
+            String::from_utf8_lossy(&mark.summon)
+        )))
     }
 }

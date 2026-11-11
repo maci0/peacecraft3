@@ -1181,7 +1181,6 @@ fn max_mana_registration_requires_the_passive_base_and_a_distinct_class() {
 #[test]
 fn decoded_but_unmodeled_classes_refuse_with_their_reason() {
     for (class, expected) in [
-        ("AIsb", "wrapped ability"),
         ("AIlb", "Bprg"),
         ("AIrc", "death handler"),
         ("AUau", "buff BUau"),
@@ -1781,3 +1780,6 @@ fn local_original_healing_registration_and_phea_row() {
 
 #[path = "inventory_orb_tests.rs"]
 mod orb;
+
+#[path = "inventory_spell_orb_tests.rs"]
+mod spell_orb;
