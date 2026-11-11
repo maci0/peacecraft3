@@ -705,7 +705,7 @@ pub struct PlacedDestructable {
 /// destructables keep zero (`0x6be8c0`, the mode-1 pool floor).
 const LIVING_LIFE_FLOOR: f32 = 1.0;
 
-const RUNTIME: [(&str, &[&str], &str); 14] = [
+const RUNTIME: [(&str, &[&str], &str); 16] = [
     (
         "SetDestructableInvulnerable",
         &["destructable", "boolean"],
@@ -738,6 +738,12 @@ const RUNTIME: [(&str, &[&str], &str); 14] = [
     (
         "QueueDestructableAnimation",
         &["destructable", "string"],
+        "nothing",
+    ),
+    ("GetDestructableOccluderHeight", &["destructable"], "real"),
+    (
+        "SetDestructableOccluderHeight",
+        &["destructable", "real"],
         "nothing",
     ),
 ];
@@ -1337,7 +1343,8 @@ impl ObjectHost {
                     "GetDestructableX"
                     | "GetDestructableY"
                     | "GetDestructableLife"
-                    | "GetDestructableMaxLife" => Value::Real(0.0),
+                    | "GetDestructableMaxLife"
+                    | "GetDestructableOccluderHeight" => Value::Real(0.0),
                     "GetDestructableTypeId" => Value::Int(0),
                     _ => Value::Null,
                 });
@@ -1358,6 +1365,16 @@ impl ObjectHost {
             };
             self.record_destructable_animation(id, name, clip)?;
             return Ok(Value::Null);
+        }
+        if name == "SetDestructableOccluderHeight" {
+            let [Value::Real(height)] = rest else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            self.destructable_occluder.insert(id, *height);
+            return Ok(Value::Null);
+        }
+        if name == "GetDestructableOccluderHeight" {
+            return self.destructable_occluder_height(id, name).map(Value::Real);
         }
         if name == "SetDestructableMaxLife" {
             let [Value::Real(value)] = rest else {
@@ -1424,6 +1441,34 @@ impl ObjectHost {
             self.sync_destructable_collision(id, !self.destructable_dead(id, name)?);
         }
         Ok(value)
+    }
+
+    /// The occluder height of a destructable (`0x491ca0` reads the field `0x4a7c10` writes): the
+    /// value `SetDestructableOccluderHeight` stored, else the catalog `occH` of its type.
+    pub(crate) fn destructable_occluder_height(
+        &self,
+        id: HandleId,
+        name: &str,
+    ) -> Result<f32, Error> {
+        if let Some(height) = self.destructable_occluder.get(&id) {
+            return Ok(*height);
+        }
+        let Ok(Entry::Destructable { creation, .. }) = self.inner.entry(id) else {
+            return Err(self.inner.error(name, Failure::WrongFamily));
+        };
+        let catalog = self.destructable_catalog.as_ref().ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::DestructableState("catalog occluder height not admitted"),
+            )
+        })?;
+        match catalog.sight_occlusion(creation.objectid) {
+            Ok(Some((height, _))) => Ok(height),
+            _ => Err(self.inner.error(
+                name,
+                Failure::DestructableState("catalog occluder height not resolved"),
+            )),
+        }
     }
 
     /// Appends a call to the destructable's animation log. `SetDestructableAnimation`
@@ -1582,8 +1627,9 @@ fn runtime_signature(name: &str, rest: &[Value]) -> bool {
         | "GetDestructableY"
         | "GetDestructableTypeId"
         | "GetDestructableLife"
-        | "GetDestructableMaxLife" => rest.is_empty(),
-        "SetDestructableLife" | "SetDestructableMaxLife" => {
+        | "GetDestructableMaxLife"
+        | "GetDestructableOccluderHeight" => rest.is_empty(),
+        "SetDestructableLife" | "SetDestructableMaxLife" | "SetDestructableOccluderHeight" => {
             matches!(rest, [Value::Real(value)] if value.is_finite())
         }
         "SetDestructableAnimation" | "QueueDestructableAnimation" => {

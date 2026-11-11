@@ -2162,3 +2162,67 @@ fn sight_occlusion_uses_authored_height_and_boolean_metadata() {
     assert_eq!(make("1").sight_occlusion(id).unwrap(), Some((37.5, true)));
     assert!(make("2").sight_occlusion(id).is_err());
 }
+
+#[test]
+fn occluder_height_reads_the_catalog_until_set() {
+    let mut metadata = tree_metadata();
+    metadata.push(&["Aocc", "occH", "DestructableData", "real", "0", "stats"]);
+    metadata.push(&["Afat", "fatLOS", "DestructableData", "bool", "0", "stats"]);
+    let catalog = catalog_from(
+        &[&["LTlt", "50", "tree,ground", "37.5", "0"]],
+        &metadata,
+        None,
+        pcx_objects::editor::Overlay::default(),
+        pcx_objects::editor::Overlay::default(),
+    );
+    let declarations = format!(
+        "{}native GetDestructableOccluderHeight takes destructable d returns real\nnative SetDestructableOccluderHeight takes destructable d, real height returns nothing\n",
+        life_declarations()
+    );
+    let mut host = host_from(&declarations, "", 8)
+        .with_destructables(DestructableBudget { max_records: 2 })
+        .unwrap();
+    host.admit_destructable_catalog(catalog).unwrap();
+    let objectid = i32::from_be_bytes(*b"LTlt");
+    let make = |host: &mut ObjectHost| {
+        let Value::Handle(id) = host
+            .native("CreateDestructable", &payload(objectid, 0))
+            .unwrap()
+        else {
+            panic!("destructable handle");
+        };
+        id
+    };
+    let (first, second) = (make(&mut host), make(&mut host));
+    let get = |host: &mut ObjectHost, id| {
+        host.native("GetDestructableOccluderHeight", &[Value::Handle(id)])
+            .unwrap()
+    };
+    assert_eq!(get(&mut host, first), Value::Real(37.5));
+    host.native(
+        "SetDestructableOccluderHeight",
+        &[Value::Handle(first), Value::Real(120.0)],
+    )
+    .unwrap();
+    assert_eq!(get(&mut host, first), Value::Real(120.0));
+    assert_eq!(
+        get(&mut host, second),
+        Value::Real(37.5),
+        "set is per destructable"
+    );
+    assert_eq!(
+        host.native("GetDestructableOccluderHeight", &[Value::Null])
+            .unwrap(),
+        Value::Real(0.0)
+    );
+    let error = host
+        .native(
+            "GetDestructableOccluderHeight",
+            &[Value::Handle(first), Value::Int(1)],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("incompatible native/type declaration"),
+        "{error}"
+    );
+}

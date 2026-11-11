@@ -135,7 +135,7 @@ impl ObjectHost {
             return Err("native sight map/placement extents differ".into());
         }
         let mut definitions = BTreeMap::new();
-        for (_, creation, state) in self.destructables_with_handles() {
+        for (handle, creation, state) in self.destructables_with_handles() {
             work.charge(1)?;
             if state.dead || state.hidden || !state.life.is_some_and(|v| v > 0.) {
                 continue;
@@ -151,7 +151,13 @@ impl ObjectHost {
                 definitions.insert(creation.objectid, value);
                 value
             };
-            if let Some((height, wide)) = value {
+            if let Some((catalog_height, wide)) = value {
+                // `SetDestructableOccluderHeight` replaces the catalog `occH` of one destructable.
+                let height = self
+                    .destructable_occluder
+                    .get(&handle)
+                    .copied()
+                    .unwrap_or(catalog_height);
                 if height > 0. && wide {
                     return Err(format!(
                         "native sight wide occluder unsupported: {:?}",

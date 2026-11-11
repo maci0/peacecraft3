@@ -94,6 +94,8 @@ pub struct ObjectHost {
     destructable_catalog: Option<destructables::DestructableCatalog>,
     destructable_restore: Option<destructables::RestoreLifePolicy>,
     placed_sources: std::collections::BTreeMap<HandleId, destructables::PlacedSource>,
+    /// Occluder heights set by `SetDestructableOccluderHeight`, over the catalog `occH`.
+    destructable_occluder: std::collections::BTreeMap<HandleId, f32>,
     destructable_animations:
         std::collections::BTreeMap<HandleId, destructables::DestructableAnimation>,
     map_music: Option<music::State>,
@@ -286,6 +288,7 @@ impl ObjectHost {
             destructable_catalog: None,
             destructable_restore: None,
             placed_sources: std::collections::BTreeMap::new(),
+            destructable_occluder: std::collections::BTreeMap::new(),
             destructable_animations: std::collections::BTreeMap::new(),
             map_music: None,
             play_music: None,
