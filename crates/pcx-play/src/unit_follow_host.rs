@@ -54,6 +54,16 @@ impl ObjectHost {
             {
                 return Ok(Value::Bool(false));
             }
+            // A move order onto an active waygate transfers the unit to the
+            // destination. That transfer is not decoded (docs/re-notes/waygate.md).
+            if self.waygate_active(name, *target)? {
+                return Err(self.inner.error(
+                    name,
+                    Failure::UnitActivity(
+                        "move onto an active waygate: destination transfer is not decoded".into(),
+                    ),
+                ));
+            }
             self.require_morph_interruption(*unit, name)?;
             let record = self.executed_unit(*unit)?;
             if record.paused_since.is_some()

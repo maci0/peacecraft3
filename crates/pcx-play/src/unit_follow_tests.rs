@@ -1,3 +1,4 @@
+use super::super::waygate::{WAYGATE_NATIVES, ability_list_field};
 use super::*;
 
 fn opened(structure: bool) -> Vm {
@@ -5,6 +6,10 @@ fn opened(structure: bool) -> Vm {
 }
 
 fn opened_value(value: FieldValue) -> Vm {
+    opened_declared(&[structure_field(value)], "")
+}
+
+fn structure_field(value: FieldValue) -> ([u8; 4], ObjectField) {
     let mut field = geometry_field(Ok(value));
     let meta = field.metadata.as_mut().unwrap();
     meta.fourcc = *b"F001";
@@ -15,7 +20,11 @@ fn opened_value(value: FieldValue) -> Vm {
         slk: SlkId::UnitBalance,
         column: "isbldg".into(),
     };
-    let mut vm = open_with_fields(&[(*b"F001", field)]);
+    (*b"F001", field)
+}
+
+fn opened_declared(fields: &[([u8; 4], ObjectField)], declarations: &str) -> Vm {
+    let mut vm = open_admitting_with(fields, rules(), declarations, |_| {});
     for name in ["A", "B"] {
         let id = unit(&vm, name);
         vm.host()
@@ -24,6 +33,46 @@ fn opened_value(value: FieldValue) -> Vm {
             .unwrap();
     }
     vm
+}
+
+#[test]
+fn move_onto_an_active_waygate_refuses_before_any_follow_and_an_inactive_one_follows() {
+    let fields = [
+        structure_field(FieldValue::Cell("0".into())),
+        (*b"uabi", ability_list_field("Awrp,Avul")),
+    ];
+    let mut vm = opened_declared(&fields, WAYGATE_NATIVES);
+    let a = unit(&vm, "A");
+    let b = unit(&vm, "B");
+    let host = &mut vm.host().inner;
+    host.native(
+        "WaygateSetDestination",
+        &[Value::Handle(b), Value::Real(64.), Value::Real(64.)],
+    )
+    .unwrap();
+    host.native("WaygateActivate", &[Value::Handle(b), Value::Bool(true)])
+        .unwrap();
+    let error = host
+        .native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(a),
+                Value::Str("gamma".into()),
+                Value::Handle(b),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("destination transfer is not decoded"),
+        "{error}"
+    );
+    assert_eq!(target(&mut vm, a), None);
+    vm.host()
+        .inner
+        .native("WaygateActivate", &[Value::Handle(b), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(follow(&mut vm, a, b, false), Value::Bool(true));
+    assert_eq!(target(&mut vm, a), Some(b));
 }
 
 fn current(vm: &mut Vm, actor: HandleId) -> Value {

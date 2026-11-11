@@ -1706,7 +1706,7 @@ fn shown_research_rank(rank: i32, maximum: i32) -> Result<i32, &'static str> {
     Ok(if next > maximum { maximum } else { next })
 }
 
-fn ability_list(
+pub(super) fn ability_list(
     definition: &Definition,
     column: &str,
     maximum: usize,

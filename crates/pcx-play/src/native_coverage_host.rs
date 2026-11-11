@@ -319,6 +319,12 @@ impl ObjectHost {
             "PauseUnit",
             // unit_alt_icon_host.rs
             "UnitSetUsesAltIcon",
+            // unit_waygate_host.rs
+            "WaygateActivate",
+            "WaygateGetDestinationX",
+            "WaygateGetDestinationY",
+            "WaygateIsActive",
+            "WaygateSetDestination",
             // unit_look_at_host.rs
             "ResetUnitLookAt",
             "SetUnitLookAt",
@@ -803,6 +809,7 @@ mod tests {
             "unit_visibility_native",
             "unit_look_at_native",
             "unit_pause_native",
+            "unit_waygate_native",
             "unit_revive_native",
             "unit_sleep_native",
         ] {

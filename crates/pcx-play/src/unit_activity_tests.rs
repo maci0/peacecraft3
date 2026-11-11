@@ -384,17 +384,20 @@ fn open_admitting(
         crate::unit_activity::Rules,
     ),
 ) -> Vm {
-    open_admitting_with(fields, rules, |_| {})
+    open_admitting_with(fields, rules, "", |_| {})
 }
+/// `declarations` adds JASS natives to the script common beyond the shared set.
 fn open_admitting_with(
     fields: &[([u8; 4], ObjectField)],
     (registry, rules): (
         Arc<crate::order_registry::Registry>,
         crate::unit_activity::Rules,
     ),
+    declarations: &str,
     before_setup: impl FnOnce(&mut ObjectHost),
 ) -> Vm {
-    let mut h = host_fields_with(65536, fields, (registry, rules));
+    let mut h =
+        host_fields_with_placed_source(65536, fields, &[], (registry, rules), MAP, declarations);
     before_setup(&mut h);
     let model = crate::unit_model::tests::model();
     let mut bytes = model.bytes.to_vec();
@@ -2733,7 +2736,7 @@ fn selected_removed_image_cleanup_wrapper_and_native_branches() {
 #[test]
 fn tracked_sessions_report_commanded_velocity_and_run_the_cleanup_clock() {
     use crate::spatial_pool::{live_pool, tests::pool};
-    let mut vm = open_admitting_with(&[], rules(), |h| {
+    let mut vm = open_admitting_with(&[], rules(), "", |h| {
         h.test_attach_spatial(pool());
     });
     let a = unit(&vm, "A");
