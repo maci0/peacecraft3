@@ -26,6 +26,8 @@ derived on demand from the held slots, so no add/remove state exists.
   reprices life, maximum life and mana. A held item that is not dropped retains its
   maximum-life and mana contributions. Death itself does not clear current mana, and removal
   while dead still reprices mana by the rounded ratio instead of forcing zero.
+- Orbs (`AIfb`, `AIgd`, `AIcb`) add their flat damage and run their on-hit effect; see "Orb
+  families" below. A holder takes at most one orb.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
 - Passive rows whose abilities are outside the admitted classes refuse the pickup atomically
@@ -318,99 +320,182 @@ attribute terms the percentage modifies. Exact records and limitations remain
 under `.scratch/passive-mana-probe/`; the implemented multiplicand is inferred,
 not native-qualified.
 
-## Orb families (`AIfb`, `AIcb`, `AIgd`): registration established, refused
+## Orb families (`AIfb`, `AIcb`, `AIgd`): implemented and tested
 
-Status: refused. The class registrations are established. The on-hit effects are not, and
-the passive design has no partial admission, so the pickup refuses atomically with the
-existing `unsupported passive ability` diagnostic.
+Status: admitted. The decode below comes from static disassembly of the reviewed image
+(SHA-256 `3f2ed012…`, `objdump`/`rizin`), the shipped rows (`Units\AbilityData.slk`,
+`AbilityMetaData.slk`, `ItemStrings.txt`, `ItemAbilityFunc.txt`, `UnitWeapons.slk`, all from
+`War3x.mpq`) and the repo's combat code. No runtime capture of an orb hit exists, so every
+behavior below is a reading of the machine code and the data, not an observed game. Each fact is
+marked **observed** (read from the image or a shipped row) or **inferred**.
 
-Registration, reviewed image (SHA-256 `3f2ed012…`), static disassembly with `objdump -d`:
+### Class structure
 
-- `AIfb` window at `0xca6d40`: `push 0x11b98ec`, `push "AIDB"` (`0x41494442`), `push "AIfb"`
-  (`0x41496662`), `call 0x7f6360`, `add esp,0xc`, `ret`.
-- `AIcb` window at `0xca6ce0`: the same shape with class `AIcb`.
-- `AIgd` has no registration. Its row's code is `AIfb`, so the code check resolves it to the
-  `AIfb` window.
-- Base `AIDB` is itself a registered class (window `0xca6d00`). Its base argument is the return
-  value of `0xbc92b0`, which is `mov eax, "AIat"; ret`. So `AIDB` derives from the flat attack-damage
-  class `AIat` (window `0xbc9c80`), not from `APbo`. The shipped `AbilityData.slk` has no `AIDB` row.
-- Further `AIDB`-based registrations with the same shape: `AIcb` (`0xca6ce0`), `AIDE` (`0xca6d20`),
-  `AIfb` (`0xca6d40`) and `AIzb` (`0xca6d60`). No shipped `AbilityData` row was checked for `AIDE` or `AIzb`.
+- Registration (observed): `AIDB` window `0xca6d00` (`push 0x11b9784`, `call 0xbc92b0` which is
+  `mov eax,"AIat"; ret`, `push eax`, `push "AIDB"`, `call 0x7f6360`); `AIcb` window `0xca6ce0`,
+  `AIfb` window `0xca6d40` (and `AIDE` `0xca6d20`, `AIzb` `0xca6d60`), each with base `AIDB`. `AIgd`
+  has no registration: its row's `code` is `AIfb`. `Rules::read` decodes the three windows
+  (`with_orbs`), requires the base chain `AIfb`/`AIcb` over `AIDB` over `AIat`, and requires all
+  classes to be distinct.
+- Object factories (observed): the class descriptors written by the static initializers at
+  `0x426da0`..`0x426e30` (`0x11b988c` = `AIcb`, `0x11b9784` = `AIDB`, `0x11b98d4` = `AIDE`,
+  `0x11b98ec` = `AIfb`) lead through descriptor slot 0 to the factories `0xca6150` (`AIcb`, vtable
+  `0xfbefe8`), `0xca6200` (`AIDB`, `0xfbf7bc`), `0xca62b0` (`AIDE`, `0xfbfbf4`) and `0xca6360`
+  (`AIfb`, `0xfbff38`). Each calls the shared base constructor `0xbc7870`, which is also the whole
+  `AIat` factory (`0xbc1ec0`), and then stores its own vtable. The base constructor's last vtable
+  store is `0xf50450`.
+- Slot 7 of each vtable is the class-code getter (`0xc9e2a0` `AIDB`, `0xc9d590` `AIcb`, `0xc9ef20`
+  `AIDE`, `0xc9f7b0` `AIfb`). `RTTI` names `CAbilityDamageBonusBase`, `CAbilityFireDamageBonus` and
+  `CAbilityCorruptionDamageBonus` exist in the image; their mapping to the vtables above is not
+  checked.
+- Overrides against the `0xf50450` vtable (observed, slot index = offset / 4): `AIDB` replaces 3, 10,
+  14, 15, 17, 18, 19, 32, 35, 36, 41, 76, 77, 78, 81, 82, 83, 84, 85 (event, serialization,
+  attach/detach, order handlers). `AIfb` and `AIcb` differ from `AIDB` only in slots 1 (destructor),
+  7, 22 (class descriptor), 83, 84, 85 (`+0x14c`, `+0x150`, `+0x154`) and 203 (`+0x32c`). All four
+  vtables are 205 slots long.
+- Ability instance fields (observed): `[this+0x8c]` is the value `AIat`, `AIde` and the orbs call
+  `DataA1` (`0xbc2eb0` returns it; the `AIde` apply at `0xbc865e` adds it to armor), `[this+0x50]`
+  is the level, `[this+0x4c]` the target-class word, `[this+0x20]` flag bits (`0x100` armed).
+  Level-record getters read `Area` at `+0x18`, `DataA` `+0x20`, `DataB` `+0x24`, `DataE` `+0x30`
+  from records of `0x70` bytes (`0x46e900`, `0x46ee20`, `0x46f030`); the order matches the
+  `AbilityData` column order and the field-name table at `0x10dce00`.
 
-Shipped rows (`Units\AbilityData.slk`, War3x.mpq; blank cells omitted):
+### What runs on a hit (observed)
 
-| Row | code | DataA1 | DataB1 | DataE1 | Dur1 | Area1 | BuffID1 |
-|---|---|---|---|---|---|---|---|
-| `AIfb` Orb of Fire | `AIfb` | 5 | | 2 | 0 | 140 | |
-| `AIcb` Orb of Corruption | `AIcb` | 5 | 5 | 2 | 5 | | `BIcb` |
-| `AIgd` Orb of Kil'jaeden | `AIfb` | 6 | | 2 | 0 | 140 | |
+The attack code calls three virtuals per ability. Slot 77 (`+0x134`, `AIDB` `0xc9e4a0`) arms the
+ability: it returns 0 without arming when the attack record's flag `0x80` is set, when the target
+check `0x682450` (which passes the ability's class word `[this+0x4c]` to the target-allowed test
+`0x6adb90`) reports an error, or when the target-side veto `0x682180` fires; otherwise it sets
+`[this+0x20] |= 0x100` unless the owner's flag word `[owner+0x164]` has bit `0x40000000`. Slot 85
+(`+0x154`) is the handler for a unit target: the base version (`0xc9e550`) only clears the flag.
+The orb versions run their effect first and then apply the attack record to the target through the
+unit virtual `[unit+0x120]`, so the attack damage is the same call as an ordinary hit.
 
-Editor meaning (`Units\AbilityMetaData.slk` with `UI\WorldEditStrings.txt`):
+- Fire, `0xc9fa10`: one call of the area-damage routine `0x6eb640` with the target's position,
+  one ring `{radius = Area1 (0x46e900), amount = [this+0x8c]}`, damage-type word `0x4000000` (the
+  orb's `+0x32c` getter `0xc9fe60`; `AIDB` returns `0x10`), the ability class word with bit
+  `0x10000` ORed in, and the filter `0xca60f0` (`unit != target`). Then the target takes the
+  attack record.
+- Corruption, `0xc9d5a0`: the duration is `0x46f500` when `0xcaf450` says the target qualifies
+  (inferred: hero, `HeroDur1`) and `0x46f3a0` otherwise (`Dur1`); the amount is `0x46ee20`
+  (`DataB1`) or 0 when owner bit `0x40000000` is set. It then looks for the target's existing
+  `BIcb` buff (`0x6d6570`); if present it calls buff virtual `+0x360`, else it creates the buff
+  (`0xca3c40`), calls `+0x35c` and attaches it (`0x6d4880`). Then the target takes the attack
+  record.
+- The `BIcb` buff class (vtable `0xfbf33c`): apply `0xc9dc80` stores the amount and adds the negated
+  amount to the target through `0x680070`; refresh `0xc9dcf0` restarts the timer (`0x6f6c30`),
+  adds `old - new` through `0x680070` and stores the new amount; removal `0xc9dd70` adds the
+  stored amount back. `0x680070` adds a float to the unit field `[unit+0x1e8]` and refreshes the UI.
+  The damage routine `0x6677c0` reads `[unit+0x1e8]` as the armor for `0x67d960` (the
+  `DefenseArmor` curve), and the `AIde` apply and removal use the same call, so this field is the
+  armor bonus.
 
-- `Idam` ("Damage Bonus", real, DataA) admits `AIfb` among other codes. No metadata row
-  admits `AIgd`.
-- `Iob5` ("Enabled Attack Index", int, DataE, max 2) admits `AIfb` and `AIcb` among others.
-- `Idic` ("Damage Bonus Dice", int, DataA) admits `AIcb` among others.
-- `Iarp` ("Armor Penalty", int, DataB) admits `AIcb` only.
+### Rules decoded
 
-Ubertip text (`Units\ItemStrings.txt`, sections `[ofir]`, `[ocor]`, `[gldo]`): Orb of Fire adds
-bonus fire damage to the carrier's attack, makes its attacks ranged against air, and does
-splash damage to nearby enemies. Orb of Corruption adds bonus damage, makes its attacks ranged
-against air, and reduces enemy armor for `Dur1` seconds. Orb of Kil'jaeden matches Orb of Fire.
+1. **One damage instance plus the flat bonus.** The orb's `DataA1` is the same property `AIat`
+   adds to the holder's attack (the orb classes derive from `AIat`), so the primary hit is the
+   ordinary attack damage with the bonus, armored once (damage type `0x10` is the only type the
+   damage routine `0x6677c0` armors, at `0x667b2d`). The splash and the penalty are separate.
+   Implemented as held flat damage (`AttributeBonus.damage`) plus the on-hit effects below. That the
+   flat bonus applies to every target, including those the orb's class list excludes, is inferred
+   from the inheritance.
+2. **Splash (`AIfb`, `AIgd`).** Every living enemy of the attacker within `Area1` of the target's
+   position, except the target, takes the full `DataA1`. There is a single ring, so no falloff
+   (`0x6ea0a0` takes the smallest containing ring's amount). The damage type is universal (bit 26 of
+   the damage-type mask, `0x4000000`): the routines at `0x6ea0a0` and `0x667855` skip the spell
+   immunity checks for the types `0x10`, `0x20`, `0x400000` and `0x4000000`, and `0x6677c0` does
+   not armor it. The record's attack type is 0 (`0x6a9940` zeroes `+0x20`), which indexes the
+   `DamageBonusSpells` row of the table loaded by `0x67b920` (table base `0x113e9e8`, entry
+   `attack * 8 + defense`, load order Spells, Normal, Pierce, Siege, Magic, Chaos, Hero), so the
+   splash is `DataA1 * DamageBonusSpells[defense]`. The splash runs before the primary hit.
+   - Target filter: class tokens of `targs1` (bits `ground` 0x2, `air` 0x4, `structure` 0x8, `ward`
+     0x10, from the token table at `0x10dce70`) plus the enemies bit `0x10000` the handler ORs in.
+     The shipped rows list `ground,air,ward`, so structures are not hit and are not armed (the
+     arming check uses the same word). Whether `alive` and `vulnerable` are implied when absent is
+     inferred: the recreation uses live, targetable units (`weapon_target`).
+   - Reach: `0x7ff460` tests the unit position against the radius plus the unit field `[+0x90]`.
+     Treating that field as the collision radius is inferred; the recreation uses
+     `Area1 + collision radius` of the struck unit, from the target's position.
+3. **Air switch.** Attaching an orb (slot 32, `0xc9e3a0`) reads `DataE1` (`0x46f030`), truncates it
+   (`0x9a07b0`) and, when nonzero, calls `0xb1c6e0` on the owner's sub-object `[owner+0x3f4]`, which
+   increments a counter at `+0x234` and on the first enable sets flags `0x8100000`; detach
+   (`0xc9e2f0`) calls `0xb22960` to undo it. The call takes no attack index, so the value only has
+   to be nonzero for the call, and `Enabled Attack Index` (`Iob5`, `maxVal` 2) is the editor name of
+   the field. That the sub-object is the second weapon is inferred: the stock melee heroes author
+   attack 2 as a ranged missile weapon that targets air (`Hpal`: `weapsOn` 1, `targs1`
+   `ground,structure,...`, `targs2` includes `air`, `rangeN2` 500, `weapTp2` missile), the item
+   texts say "attacks also become ranged when attacking air", and every shipped orb row has
+   `DataE1` 2. Implemented: with an orb held, a target with `movetp` `fly` that weapon 1's `targs1`
+   cannot reach is attacked with weapon 2 (its own range, cooldown, damage point, dice, attack type
+   and missile) when weapon 2 exists (`weapTp2` is not a placeholder) and its `targs2` names air.
+   Otherwise weapon 1 is kept. `DataE1` other than 2 refuses at pickup.
+4. **Armor penalty (`AIcb`).** The first hit that arms the orb attaches `BIcb` and lowers the
+   target's armor by `DataB1` before the attack damage is applied, so that hit already sees the
+   lowered armor (instant weapons: applied before the roll; missile weapons: the roll is redone
+   against the lowered armor on impact). The duration is `HeroDur1` for a hero target and `Dur1`
+   otherwise. A later hit refreshes: the penalty is replaced by the new value (not added) and the
+   timer restarts. Expiry, `UnitRemoveBuffs` and death restore the armor. A non-positive duration
+   refuses at pickup (the base refresh at `0x6f6c30` starts no timer for it, and that is not
+   modeled). The buff is attached through the unit buff host with only the negative flag, like the
+   curse buffs; its dispel class is not decoded.
+5. **`AIgd` (Orb of Kil'jaeden).** Its row's `code` is `AIfb`, so it uses the `AIfb` class, and the
+   instance value comes from the row's own `DataA1` (6). The image reads the level record by
+   offset, not through the editor metadata, so the `Idam` `useSpecific` list that omits `AIgd` is
+   an editor-only admission (inferred). The amount is read from the row for any alias whose code is
+   a registered orb class, and a map that modifies the row refuses.
+6. **Missiles.** A missile weapon carries the orb armed at launch and applies it on impact
+   (inferred: the effect and the attack record are applied by the same handler, which the engine
+   calls when the attack lands). The target is checked for liveness at impact.
 
-Why each family stays refused:
+### Tests
 
-- `AIfb` (and `AIgd`): the splash (`Area1` 140), the ranged-against-air attack type, and the
-  bonus fire damage have no recreation path. Modeling the bonus as flat `held_damage` (the `AIat`
-  path) would apply one damage total with armor applied once. The native application as a
-  separate fire hit, its splash amount and targeting, and the air-ranged change are not
-  established, so that model is a guess.
-- `AIcb`: the armor penalty needs a timed per-target armor reduction (`Iarp`, `BIcb`, `Dur1`).
-  No code reads `Iarp`, `Idic`, `Iob5` or `Idam`, and the curse path reads only the Slow,
-  Polymorph and Dark Conversion effect columns (`unit_curse_host.rs`). The `BIcb` buff row is not
-  read.
-- `AIgd`: even with the `AIfb` class admitted, `Idam` does not admit the `AIgd` alias, so its
-  amount (6) refuses at the alias check.
+Parser: `crates/pcx-play/src/inventory_orb_tests.rs` (`fire_orb_reads_damage_area_and_target_classes_from_its_row`,
+`kiljaeden_orb_takes_its_amount_from_its_own_row_without_metadata_admission`,
+`corruption_orb_reads_penalty_durations_and_buff_from_its_row`,
+`orb_rows_outside_the_decoded_shape_refuse`, `an_item_with_two_orb_abilities_refuses`,
+`structure_class_in_targs_covers_buildings`,
+`orb_registration_must_chain_through_the_attack_damage_base_and_stay_distinct`,
+`without_the_orb_registration_an_orb_row_stays_refused`). Combat host:
+`crates/pcx-play/src/inventory_orb_host_tests.rs` (splash area, collision reach, allies, spells row
+and no armor, Kil'jaeden amount, drop, structure targets, corruption timing, refresh without
+stacking, hero duration, second-orb refusal, missile impact for both orbs, second weapon against
+air, no second weapon, no orb). All inputs are synthetic rows built in the tests.
 
-Class-code getters found this pass (observed, `objdump`/`rizin`, `mov eax, <code>; ret`):
-`AIcb` at `0xca67a0`, `AIDB` at `0xca67b0` and at `0xc9e2a0` (the last is a vtable entry at
-`0xfbf7d8`, a single pointer hit in the image), `AIDE` at `0xc9ef20`. The `AIDB` vtable start and
-the slot index of the getter are not established. Neighbouring slots point into `0xc9e1xx` to
-`0xc9ecxx`, which suggests this class's own methods, but no on-hit handler was identified.
-The `AIgd` code `0x41496764` has no immediate in `.text`. The three descriptor pointers
-(`0x11b98ec`, `0x11b9784`, `0x11b98d4`) read as zero in the file image, so their runtime
-contents are not established.
+### Open (not decoded, so not modeled)
 
-Not decoded (open, refused): the on-hit damage path (bonus as a separate hit or added to the
-attack, and its armor interaction), splash (`Area1`, falloff, targets), the air-ranged switch,
-the `AIcb` armor debuff (`BIcb`, duration, stacking), and the amount source for `AIgd` (its
-`Idam` admission versus native `DataA1` lookup). No orb is admitted until its on-hit effect is
-complete.
+- The meaning of the attack-record flag `0x80`, the owner flag `0x40000000` and the target-side
+  veto `0x682180` (it calls virtual `+0x26c` of the target's abilities); the recreation arms on the
+  class list alone.
+- Slots `+0x14c` and `+0x150` (`AIfb` `0xc9fcb0`, `0xc9fba0`; `AIcb` `0xc9d8d0`, `0xc9d750`) run the
+  same arming test with a different damage call (`[ebx+0xc8]`); the target kinds they serve were not
+  identified. Orb attacks on destructables and items are outside the recreation's combat.
+- How several orbs on one unit fire on one hit. A second orb refuses at pickup, so no ordering is
+  guessed.
+- Damage modifiers after the armor step in `0x6677c0` (calls `0x6a0630` and the ethereal and
+  hero tables) beyond the damage-bonus matrix.
+- The selected-unit panel armor does not show the corruption penalty.
+- The `Targetart`, `Missileart` and `Specialart` of the orb rows are not shown, and the orb missile
+  model does not replace the unit's missile.
+- Map-modified orb rows, `DataE1` other than 2, multi-level orb rows and orb rows with relationship
+  or state tokens in `targs1` refuse.
+- The `ward` class token is accepted and has no effect (the recreation does not model ward units as a
+  separate class). The enemies bit is the only relationship the handlers add.
 
-Not verified: native order of on-hit effects against armor, splash damage and targeting, whether
-the bonus is a separate armor-reduced hit, the meaning of `Enabled Attack Index` 2 for a hero
-with one attack, the air-ranged switch, and `BIcb` duration and stacking.
+### Locked-chapter probe
 
-Locked-chapter probe (`selected_install_locked_chapter_startup_probe`, selected install, headless
-wrapper): RoC Undead02, TFT UndeadX01Interlude, TFT HumanX05 and TFT UndeadX08 each refuse at
-the same `UnitAddItemToSlotById` call before and after this doc change. The code is unchanged.
+Each row is the result of `selected_install_locked_chapter_startup_probe` on the selected
+install, before this change (orb refusal at `UnitAddItemToSlotById`) and after. Exit 0 means the
+probe passed.
 
-REA `search` and `inspect` with `REA_ANALYSIS_PROVIDER=ghidra` failed on this host: the Ghidra
-flatpak `active` path resolves to a previous commit that lacks `support/launch.properties`
-(`Ghidra LaunchSupport -envvars`). The registrations above come from `objdump`, not from REA.
+| Chapter | Before | After |
+|---|---|---|
+| RoC Undead02 | `AIfb` on `ofir` | `AIms` on `bspd` (unsupported passive ability) |
+| RoC Orc02Interlude | `AIfb` on `ofir` | passes |
+| RoC Undead01 | `AIfb` on `ofir` | passes |
+| RoC NightElf06 | `AIfb` on `ofir` | `IssueTargetOrder` `entangleinstant` (only the attack target order is supported) |
+| TFT UndeadX01Interlude | `AIfb` on `ofir` | `AIdf` (code `AIsb`) on `odef` |
+| TFT HumanX05 | `AIcb` on `ocor` | `AIll` (code `AIsb`) on `oli2` |
+| TFT UndeadX08 | `AIgd` (code `AIfb`) on `gldo` | `UnitSetUsesAltIcon` is unsupported by this host |
+| TFT UndeadX02 | `AIfb` on `ofir` | `AIpb` on `oven` |
 
-### Locked-chapter probe, orb pass (selected install, unchanged code)
-
-Each row is the first refusal of `selected_install_locked_chapter_startup_probe`. Before and after
-are the same because this pass changed no code; the orb effects remain refused.
-
-| Chapter | First refusal |
-|---|---|
-| RoC Undead02 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
-| RoC Orc02Interlude | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
-| RoC Undead01 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
-| RoC NightElf06 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
-| TFT UndeadX01Interlude | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
-| TFT HumanX05 | `UnitAddItemToSlotById`: `AIcb` with code `AIcb` on `ocor` |
-| TFT UndeadX08 | `UnitAddItemToSlotById`: `AIgd` with code `AIfb` on `gldo` |
-| TFT UndeadX02 | `UnitAddItemToSlotById`: `AIfb` with code `AIfb` on `ofir` |
+All eight chapters are past the orb pickups; the new stops are other families or natives.

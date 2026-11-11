@@ -31,6 +31,15 @@ const MANA_REGEN_WINDOW: u32 = 0xbc9ec0;
 /// window is longer than the immediate-base shape. Reviewed at `0xbf0520`.
 pub(crate) const HEAL_WINDOW: u32 = 0xbf0520;
 const HEAL_WINDOW_LEN: usize = 25;
+/// Registration call for the orb base class (source `AIDB`, base from the call `0xbc92b0`, which
+/// returns `AIat`). Same 25-byte layout as the healing window.
+pub(crate) const ORB_BASE_WINDOW: u32 = 0xca6d00;
+/// Registration call for the Orb of Fire class (source `AIfb`, base `AIDB`).
+const FIRE_ORB_WINDOW: u32 = 0xca6d40;
+/// Registration call for the Orb of Corruption class (source `AIcb`, base `AIDB`).
+const CORRUPTION_ORB_WINDOW: u32 = 0xca6ce0;
+/// `AbilityData` `DataE` value that enables the unit's second attack, the only orb value decoded.
+const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 const BASE_FN_LEN: usize = 6;
 pub(crate) const REGISTER_FN: u32 = 0x7f6360;
 const CLASS_WINDOW_LEN: usize = 24;
@@ -63,6 +72,38 @@ impl StrengthEffect {
     }
 }
 
+/// Which units an orb's on-hit effect applies to: the `targs1` class tokens of its ability row.
+/// Relationship and state tokens are refused when the row is read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OrbTargets {
+    pub ground: bool,
+    pub air: bool,
+    pub structure: bool,
+}
+
+/// The on-hit effect of an orb, besides the flat attack damage that every orb adds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OrbKind {
+    /// Splash of `DataA1` damage to enemies within `Area1` of the target, sparing the target.
+    Fire { area: f32 },
+    /// Armor penalty of `DataB1` on the target for `Dur1` (`HeroDur1` for a hero), tracked
+    /// under buff `buff`.
+    Corruption {
+        armor_penalty: i32,
+        duration: f32,
+        hero_duration: f32,
+        buff: [u8; 4],
+    },
+}
+
+/// A held orb: `damage` is `DataA1`, already counted in [`AttributeBonus::damage`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Orb {
+    pub kind: OrbKind,
+    pub damage: i32,
+    pub targets: OrbTargets,
+}
+
 /// Flat attributes, armor, attack damage, maximum life and regeneration from passive held
 /// items. Unit strength also includes retained powerups. Armor points are added to unit armor
 /// while held; damage is a flat addition to the unit's attack damage; maximum life applies to
@@ -79,6 +120,8 @@ pub struct AttributeBonus {
     pub life_regen: i32,
     /// Fraction of the unit's normal mana regeneration added while held.
     pub mana_regen_fraction: f32,
+    /// The held orb, when one is held. A unit holds at most one.
+    pub orb: Option<Orb>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +160,16 @@ pub struct Rules {
     heal: Option<AmountClass>,
     life_regen: Option<AmountClass>,
     mana_regen: Option<FractionClass>,
+    /// Orb registrations, attached by `with_orbs`. Absent until the orb windows are read.
+    orbs: Option<OrbClasses>,
+}
+
+/// The registered orb classes: the shared `AIDB` base, `AIfb` (Orb of Fire, and Orb of
+/// Kil'jaeden through its row's code) and `AIcb` (Orb of Corruption).
+#[derive(Clone, Debug)]
+struct OrbClasses {
+    fire: String,
+    corruption: String,
 }
 
 /// One admitted scalar ability class and its metadata-selected amount column.
@@ -173,13 +226,28 @@ impl Rules {
             .get(..HEAL_WINDOW_LEN)
             .map(<[u8]>::to_vec)
             .ok_or_else(|| fail("truncated healing registration window"))?;
-        let base_va = call_target(&heal, 5).map_err(|e| fail(&e))?;
+        let base_va = call_target(&heal, HEAL_WINDOW, 5).map_err(|e| fail(&e))?;
         let base_code = pe
             .read_from(base_va, true)
             .map_err(|e| fail(&e.to_string()))?
             .get(..BASE_FN_LEN)
             .map(<[u8]>::to_vec)
             .ok_or_else(|| fail("truncated healing base function"))?;
+        let orb_base = pe
+            .read_from(ORB_BASE_WINDOW, true)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..HEAL_WINDOW_LEN)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| fail("truncated orb base registration window"))?;
+        let orb_base_va = call_target(&orb_base, ORB_BASE_WINDOW, 5).map_err(|e| fail(&e))?;
+        let orb_base_code = pe
+            .read_from(orb_base_va, true)
+            .map_err(|e| fail(&e.to_string()))?
+            .get(..BASE_FN_LEN)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| fail("truncated orb base function"))?;
+        let fire_orb = window(FIRE_ORB_WINDOW)?;
+        let corruption_orb = window(CORRUPTION_ORB_WINDOW)?;
         Self::decode(
             tables,
             overlay,
@@ -191,7 +259,52 @@ impl Rules {
         .and_then(|rules| rules.with_life_regen(&life_regen))
         .and_then(|rules| rules.with_mana_regen(&mana_regen))
         .and_then(|rules| rules.with_heal(&heal, &base_code))
+        .and_then(|rules| rules.with_orbs(&orb_base, &orb_base_code, &fire_orb, &corruption_orb))
         .map_err(|e| fail(&e))
+    }
+
+    /// Attaches the orb classes. The shared base `AIDB` registers over `AIat` (the flat
+    /// attack-damage class), and `AIfb` and `AIcb` register over `AIDB`. All four classes must be
+    /// distinct from every other registered class.
+    pub(crate) fn with_orbs(
+        mut self,
+        base_window: &[u8],
+        base_fn: &[u8],
+        fire_window: &[u8],
+        corruption_window: &[u8],
+    ) -> Result<Self, String> {
+        let (orb_base, damage_base) =
+            class_from_call_window_at(base_window, ORB_BASE_WINDOW, base_fn)?;
+        if damage_base != self.damage_class {
+            return Err("orb base registration must derive from the attack-damage class".into());
+        }
+        let (fire, fire_base) = class_from_window(fire_window)?;
+        let (corruption, corruption_base) = class_from_window(corruption_window)?;
+        if fire_base != orb_base || corruption_base != orb_base {
+            return Err("orb registrations must name the orb base class".into());
+        }
+        let taken = [
+            Some(&self.powerup_class),
+            Some(&self.passive_class),
+            Some(&self.armor_class),
+            Some(&self.damage_class),
+            self.max_life.as_ref().map(|c| &c.class),
+            self.life_regen.as_ref().map(|c| &c.class),
+            self.mana_regen.as_ref().map(|c| &c.class),
+            self.heal.as_ref().map(|c| &c.class),
+            Some(&orb_base),
+        ];
+        if self.orbs.is_some()
+            || fire == corruption
+            || taken
+                .iter()
+                .flatten()
+                .any(|c| **c == fire || **c == corruption)
+        {
+            return Err("orb registrations must name distinct classes".into());
+        }
+        self.orbs = Some(OrbClasses { fire, corruption });
+        Ok(self)
     }
 
     /// Attaches the healing class. The class key is an immediate in the window; the base comes
@@ -445,6 +558,7 @@ impl Rules {
             heal: None,
             life_regen: None,
             mana_regen: None,
+            orbs: None,
         })
     }
 
@@ -586,6 +700,23 @@ impl Rules {
                 held.mana_regen_fraction = sum;
                 continue;
             }
+            if let Some(orbs) = &self.orbs
+                && (code == orbs.fire || code == orbs.corruption)
+            {
+                if held.orb.is_some() {
+                    return Err(format!(
+                        "two orb abilities on {} are unsupported",
+                        item.rawcode()
+                    ));
+                }
+                let orb = self.orb(alias, code == orbs.corruption)?;
+                held.damage = held
+                    .damage
+                    .checked_add(orb.damage)
+                    .ok_or("passive damage overflows")?;
+                held.orb = Some(orb);
+                continue;
+            }
             if code != self.passive_class {
                 return Err(format!(
                     "unsupported passive ability {alias} with code {code} on {}",
@@ -607,6 +738,80 @@ impl Rules {
                 .ok_or("passive intelligence overflows")?;
         }
         Ok(Some(held))
+    }
+
+    /// One orb ability row at the effect level. The reviewed client reads these fields straight
+    /// from the ability row, so the amount does not go through the `Idam` metadata admission
+    /// (which omits `AIgd`). A map that modifies the row is refused, because the overrides of the
+    /// orb fields are not decoded.
+    fn orb(&self, alias: &str, corruption: bool) -> Result<Orb, String> {
+        let modified =
+            self.overlay.new_object(alias).is_some() || !self.overlay.on(alias).is_empty();
+        if modified {
+            return Err(format!("map-modified orb ability {alias} is unsupported"));
+        }
+        let ability = self
+            .tables
+            .object(Family::Ability, alias)
+            .map_err(|e| e.to_string())?;
+        let cell = |name: &str| {
+            ability
+                .cell(SlkId::AbilityData, name)
+                .map_err(|e| e.to_string())
+        };
+        let int = |name: &str| match cell(name)?.typed(FieldKind::Int) {
+            Ok(Value::Integer(n)) => Ok(n),
+            _ => Err(format!("{name} of orb {alias} is not an integer")),
+        };
+        let real = |name: &str| match cell(name)?.typed(FieldKind::Real) {
+            Ok(Value::Real(value)) if value.is_finite() => Ok(value as f32),
+            _ => Err(format!("{name} of orb {alias} is not a finite real")),
+        };
+        if int("DataE1")? != ORB_ENABLED_ATTACK_INDEX {
+            return Err(format!(
+                "orb {alias} enabled attack index is not {ORB_ENABLED_ATTACK_INDEX}"
+            ));
+        }
+        let damage = i32::try_from(int("DataA1")?)
+            .ok()
+            .filter(|damage| *damage >= 0)
+            .ok_or_else(|| format!("orb {alias} damage is negative or too large"))?;
+        let targets = orb_targets(alias, cell("targs1")?.text)?;
+        let kind = if corruption {
+            let armor_penalty = i32::try_from(int("DataB1")?)
+                .ok()
+                .filter(|penalty| *penalty >= 0)
+                .ok_or_else(|| format!("orb {alias} armor penalty is negative or too large"))?;
+            let (duration, hero_duration) = (real("Dur1")?, real("HeroDur1")?);
+            if duration <= 0.0 || hero_duration <= 0.0 {
+                return Err(format!(
+                    "orb {alias} duration is not positive; a buff without a timer is not decoded"
+                ));
+            }
+            let buff = cell("BuffID1")?.text.trim().as_bytes().to_vec();
+            let buff: [u8; 4] = buff
+                .try_into()
+                .ok()
+                .filter(|code: &[u8; 4]| code.iter().all(u8::is_ascii_alphanumeric))
+                .ok_or_else(|| format!("orb {alias} BuffID1 is not a rawcode"))?;
+            OrbKind::Corruption {
+                armor_penalty,
+                duration,
+                hero_duration,
+                buff,
+            }
+        } else {
+            let area = real("Area1")?;
+            if area <= 0.0 {
+                return Err(format!("orb {alias} Area1 is not positive"));
+            }
+            OrbKind::Fire { area }
+        };
+        Ok(Orb {
+            kind,
+            damage,
+            targets,
+        })
     }
 
     /// Authored real fraction at the effect level, after the map's W3A override for that field.
@@ -786,9 +991,9 @@ fn class_from_window(window: &[u8]) -> Result<(String, String), String> {
     Ok((key(11)?, key(6)?))
 }
 
-/// Target of the `call rel32` at `at` inside a healing window, given the window's own address.
-fn call_target(window: &[u8], at: usize) -> Result<u32, String> {
-    let fail = || "unsupported healing registration call".to_string();
+/// Target of the `call rel32` at `at` inside a registration window, given the window's own address.
+fn call_target(window: &[u8], window_va: u32, at: usize) -> Result<u32, String> {
+    let fail = || "unsupported registration call".to_string();
     if window.get(at) != Some(&CALL_REL32) {
         return Err(fail());
     }
@@ -797,23 +1002,32 @@ fn call_target(window: &[u8], at: usize) -> Result<u32, String> {
         .ok_or_else(fail)?
         .try_into()
         .map_err(|_| fail())?;
-    let next = i64::from(HEAL_WINDOW) + at as i64 + 5;
+    let next = i64::from(window_va) + at as i64 + 5;
     u32::try_from(next + i64::from(i32::from_le_bytes(rel))).map_err(|_| fail())
 }
 
-/// Source class from a healing registration window with a computed base. The window pushes the
-/// third argument, calls the base function, pushes its result, pushes the source class, calls the
-/// registration function (`0x7f6360`), cleans up and returns. The base function must be
-/// `mov eax, imm32; ret`, and its immediate is the base class.
+/// [`class_from_call_window_at`] for the healing window.
 fn class_from_call_window(window: &[u8], base_code: &[u8]) -> Result<(String, String), String> {
-    let fail = || "unsupported healing registration window".to_string();
+    class_from_call_window_at(window, HEAL_WINDOW, base_code)
+}
+
+/// Source class from a registration window with a computed base, located at `window_va`. The
+/// window pushes the third argument, calls the base function, pushes its result, pushes the
+/// source class, calls the registration function (`0x7f6360`), cleans up and returns. The base
+/// function must be `mov eax, imm32; ret`, and its immediate is the base class.
+fn class_from_call_window_at(
+    window: &[u8],
+    window_va: u32,
+    base_code: &[u8],
+) -> Result<(String, String), String> {
+    let fail = || "unsupported computed-base registration window".to_string();
     if window.len() != HEAL_WINDOW_LEN
         || window[0] != PUSH_IMM32
         || window[5] != CALL_REL32
         || window[10] != PUSH_EAX
         || window[11] != PUSH_IMM32
         || window[21..] != CLEANUP_RET
-        || call_target(window, 16)? != REGISTER_FN
+        || call_target(window, window_va, 16)? != REGISTER_FN
         || base_code.len() != BASE_FN_LEN
         || base_code[0] != MOV_EAX_IMM32
         || base_code[5] != RET
@@ -821,6 +1035,32 @@ fn class_from_call_window(window: &[u8], base_code: &[u8]) -> Result<(String, St
         return Err(fail());
     }
     Ok((fourcc_le(&window[12..16])?, fourcc_le(&base_code[1..5])?))
+}
+
+/// Unit-class tokens of an orb's `targs1`. The decoded flag word adds the enemies bit and takes
+/// the class bits from this list (`ground` 0x2, `air` 0x4, `structure` 0x8). Tokens that select
+/// destructables, items or wards are accepted and have no effect on unit targets; relationship and
+/// state tokens, which the reviewed client resolves in the target query, are refused.
+fn orb_targets(alias: &str, targs: &str) -> Result<OrbTargets, String> {
+    let mut targets = OrbTargets::default();
+    let mut any = false;
+    for token in targs.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        any = true;
+        match token.to_ascii_lowercase().as_str() {
+            "ground" => targets.ground = true,
+            "air" => targets.air = true,
+            "structure" => targets.structure = true,
+            "ward" | "debris" | "item" | "tree" | "wall" | "decoration" | "bridge" => {}
+            other => {
+                return Err(format!("orb {alias} targs1 token {other:?} is not decoded"));
+            }
+        }
+    }
+    if any {
+        Ok(targets)
+    } else {
+        Err(format!("orb {alias} targs1 is empty"))
+    }
 }
 
 /// Four alphanumeric characters from a little-endian immediate.

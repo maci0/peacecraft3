@@ -21,6 +21,11 @@ pub(super) fn structure(definition: &Definition) -> Result<bool, String> {
     }
 }
 
+/// Whether the unit moves through the air: its `UnitData` `movetp` is `fly`.
+pub(super) fn flying(definition: &Definition) -> bool {
+    super::unit_positions::text(definition, SlkId::UnitData, "movetp").unwrap_or("") == "fly"
+}
+
 /// Script type names whose suffix is the `UnitBalance/type` source token.
 const CLASSES: [&str; 8] = [
     "UNIT_TYPE_GIANT",

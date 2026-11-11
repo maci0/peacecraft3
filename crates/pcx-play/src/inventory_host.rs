@@ -441,6 +441,7 @@ impl ObjectHost {
             max_life: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
+            orb: None,
         };
         for (item, _) in self
             .executed_items()
@@ -484,6 +485,15 @@ impl ObjectHost {
             bonus.mana_regen_fraction += passive.mana_regen_fraction;
             if !bonus.mana_regen_fraction.is_finite() {
                 return Err(overflow());
+            }
+            if let Some(orb) = passive.orb {
+                if bonus.orb.is_some() {
+                    return Err(self.inner.error(
+                        "inventory",
+                        Failure::UnitActivity("two held orbs are unsupported".into()),
+                    ));
+                }
+                bonus.orb = Some(orb);
             }
         }
         Ok(bonus)
@@ -1045,6 +1055,16 @@ impl ObjectHost {
             return Err(self.inner.error(
                 "inventory",
                 Failure::UnitActivity("held passive bonus overflows".into()),
+            ));
+        }
+        if held.orb.is_some() && passive.orb.is_some() {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::UnitActivity(
+                    "a second orb on one holder is unsupported: the order in which several orbs \
+                     fire on one hit is not decoded"
+                        .into(),
+                ),
             ));
         }
         if (passive.strength != 0 || passive.agility != 0)

@@ -309,3 +309,5 @@ Open after this lane:
 - Town Bell militia conversion: the callback and dispatcher are undecoded.
 - Entangle mine conversion: undecoded.
 - The `WaygateActivate` native (RoC Undead05): not started.
+
+The orb refusals above (`AIfb`, `AIgd`, `AIcb`) no longer occur: orbs are admitted, and the eight chapters now stop at other refusals, listed in the locked-chapter probe table of [passive-held-items.md](passive-held-items.md).

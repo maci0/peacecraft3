@@ -27,6 +27,7 @@ pub struct ObjectHost {
     holy_light: Option<holy_light::Rules>,
     chain_lightning: Option<chain_lightning::Rules>,
     curses: Option<unit_curse::State>,
+    orbs: orb::State,
     summoning: Option<unit_summon::State>,
     mirror_image: Option<unit_mirror_image::State>,
     morph_active: Vec<HandleId>,
@@ -324,6 +325,7 @@ impl ObjectHost {
             holy_light: None,
             chain_lightning: None,
             curses: None,
+            orbs: orb::State::default(),
             summoning: None,
             mirror_image: None,
             morph_active: Vec::new(),
@@ -1699,6 +1701,9 @@ mod chain_lightning;
 
 #[path = "unit_curse_host.rs"]
 mod unit_curse;
+
+#[path = "orb_host.rs"]
+mod orb;
 
 #[path = "doodad_host.rs"]
 mod doodads;

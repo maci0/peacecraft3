@@ -759,6 +759,7 @@ fn armor_points_come_from_the_admitted_source_row() {
             max_life: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
+            orb: None,
         }
     );
 }
@@ -1061,6 +1062,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             max_life: 0,
             life_regen: 0,
             mana_regen_fraction: 0.0,
+            orb: None,
         }
     );
 }
@@ -1193,7 +1195,7 @@ fn healing_window_reads_the_source_class_and_the_constant_base() {
         ("AIhe".to_string(), "AAsm".to_string())
     );
     assert_eq!(
-        call_target(&heal_window("AIhe"), 5).unwrap(),
+        call_target(&heal_window("AIhe"), HEAL_WINDOW, 5).unwrap(),
         HEAL_WINDOW + 0x100
     );
 }
@@ -1397,3 +1399,6 @@ fn local_original_healing_registration_and_phea_row() {
     assert_eq!(rules.heal_effect(&catalog_item("phea")).unwrap(), Some(250));
     assert_eq!(rules.heal_range(&catalog_item("phea")).unwrap(), 100.0);
 }
+
+#[path = "inventory_orb_tests.rs"]
+mod orb;

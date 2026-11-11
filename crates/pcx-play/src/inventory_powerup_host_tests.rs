@@ -44,6 +44,7 @@ native GetHeroAgi takes unit whichHero, boolean includeBonuses returns integer
 native GetHeroInt takes unit whichHero, boolean includeBonuses returns integer
 native PauseUnit takes unit u, boolean paused returns nothing
 native RemoveUnit takes unit u returns nothing
+native SetUnitPosition takes unit u, real x, real y returns nothing
 constant native GetManipulatedItem takes nothing returns item
 constant native GetManipulatingUnit takes nothing returns unit
 globals
@@ -71,6 +72,52 @@ fn sylk(headers: &[&str], rows: &[&[&str]]) -> Vec<u8> {
     }
     text.push_str("E\r\n");
     text.into_bytes()
+}
+
+/// Orb splash radius, penalty and timers of the fixture rows. The duration for a hero differs from
+/// the one for other units so the two are told apart.
+const ORB_AREA: &str = "40";
+const ORB_PENALTY: f32 = 5.0;
+const ORB_DURATION: f32 = 5.0;
+const ORB_HERO_DURATION: f32 = 7.0;
+const ORB_DAMAGE: f32 = 5.0;
+const KILJAEDEN_DAMAGE: f32 = 6.0;
+/// Damage-bonus entry of the spells attack type against the fixture units' medium defense.
+const SPELLS_VS_MEDIUM: f32 = 0.5;
+
+/// The ability table: the plain rows get empty orb columns, then the three source-shaped orb rows.
+fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
+    let mut rows: Vec<Vec<&str>> = plain
+        .iter()
+        .map(|row| {
+            let mut row = row.to_vec();
+            row.extend(["-", "-", "-", ""]);
+            row
+        })
+        .collect();
+    let orb_targs = "ground,air,ward";
+    rows.extend([
+        vec![
+            "AIfb", "AIfb", "1", "5", "0", "0", "0", "2", "-", "-", orb_targs, ORB_AREA, "0", "0",
+            "",
+        ],
+        vec![
+            "AIgd", "AIfb", "1", "6", "0", "0", "0", "2", "-", "-", orb_targs, ORB_AREA, "0", "0",
+            "",
+        ],
+        vec![
+            "AIcb", "AIcb", "1", "5", "5", "0", "0", "2", "-", "-", orb_targs, "-", "5", "7",
+            "BIcb",
+        ],
+    ]);
+    let refs: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
+    sylk(
+        &[
+            "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
+            "Cool1", "targs1", "Area1", "Dur1", "HeroDur1", "BuffID1",
+        ],
+        &refs,
+    )
 }
 
 fn powerup_tables() -> Arc<DefaultTables> {
@@ -113,111 +160,110 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["plsm", "AIl2", "0", "0", "0", "-"],
             &["plmx", "AIl3", "0", "0", "0", "-"],
             &["plon", "AIl4", "0", "0", "0", "-"],
+            &["ofir", "AIfb", "0", "0", "0", "-"],
+            &["ogld", "AIgd", "0", "0", "0", "-"],
+            &["ocor", "AIcb", "0", "0", "0", "-"],
+            &["oboo", "AIfb,AIcb", "0", "0", "0", "-"],
         ],
     );
-    let abilities = sylk(
+    let plain_ability_rows: &[&[&str]] = &[
+        &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-", "_"],
+        &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-", "_"],
+        &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-", "_"],
         &[
-            "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
-            "Cool1", "targs1",
+            "AIsh", "AIab", "1", "0", "0", "1000", "0", "0", "-", "-", "_",
         ],
         &[
-            &["L000", "Xinv", "1", "2", "1", "1", "1", "1", "-", "-", "_"],
-            &["AIsm", "AIsm", "1", "0", "0", "7", "0", "0", "-", "-", "_"],
-            &["AIs4", "AIab", "1", "0", "0", "5", "0", "0", "-", "-", "_"],
-            &[
-                "AIsh", "AIab", "1", "0", "0", "1000", "0", "0", "-", "-", "_",
-            ],
-            &[
-                "AImn",
-                "AIab",
-                "1",
-                "0",
-                "0",
-                "-2147483648",
-                "0",
-                "0",
-                "-",
-                "-",
-                "_",
-            ],
-            &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-", "_"],
-            &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
-            &[
-                "AIi9",
-                "AIab",
-                "1",
-                "0",
-                "2147483647",
-                "0",
-                "0",
-                "0",
-                "-",
-                "-",
-                "_",
-            ],
-            &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
-            &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-", "_"],
-            &[
-                "AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "_",
-            ],
-            &[
-                "AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20", "_",
-            ],
-            &[
-                "AIh3",
-                "AIhe",
-                "1",
-                "250",
-                "0",
-                "0",
-                "0",
-                "0",
-                "100",
-                "20",
-                "ground,air",
-            ],
-            &["AItf", "AIat", "1", "15", "0", "0", "0", "0", "-", "-", "_"],
-            &["AIat", "AIat", "1", "20", "0", "0", "0", "0", "-", "-", "_"],
-            &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
-            &["AIt1", "AIat", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
-            &["Arel", "Arel", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
-            &[
-                "AIrm", "AIrm", "1", "0.5", "0", "0", "0", "0", "-", "-", "_",
-            ],
-            &[
-                "AImx", "AIrm", "1", "3.4e38", "0", "0", "0", "0", "-", "-", "_",
-            ],
-            &[
-                "AIwz",
-                "AIat",
-                "1",
-                "2147483647",
-                "0",
-                "0",
-                "0",
-                "0",
-                "-",
-                "-",
-                "_",
-            ],
-            &["AIl1", "AIml", "1", "37", "0", "0", "0", "0", "-", "-", "_"],
-            &["AIl2", "AIml", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
-            &[
-                "AIl3",
-                "AIml",
-                "1",
-                "2147483647",
-                "0",
-                "0",
-                "0",
-                "0",
-                "-",
-                "-",
-                "_",
-            ],
-            &["AIl4", "AIml", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+            "AImn",
+            "AIab",
+            "1",
+            "0",
+            "0",
+            "-2147483648",
+            "0",
+            "0",
+            "-",
+            "-",
+            "_",
         ],
-    );
+        &["AIa4", "AIab", "1", "2", "0", "0", "0", "0", "-", "-", "_"],
+        &["AIi4", "AIab", "1", "0", "3", "0", "0", "0", "-", "-", "_"],
+        &[
+            "AIi9",
+            "AIab",
+            "1",
+            "0",
+            "2147483647",
+            "0",
+            "0",
+            "0",
+            "-",
+            "-",
+            "_",
+        ],
+        &["AId1", "AIde", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+        &["AId8", "AIde", "1", "8", "0", "0", "0", "0", "-", "-", "_"],
+        &[
+            "AIh1", "AIhe", "1", "250", "0", "0", "0", "0", "100", "20", "_",
+        ],
+        &[
+            "AIh2", "AIhe", "1", "250", "0", "0", "0", "0", "10", "20", "_",
+        ],
+        &[
+            "AIh3",
+            "AIhe",
+            "1",
+            "250",
+            "0",
+            "0",
+            "0",
+            "0",
+            "100",
+            "20",
+            "ground,air",
+        ],
+        &["AItf", "AIat", "1", "15", "0", "0", "0", "0", "-", "-", "_"],
+        &["AIat", "AIat", "1", "20", "0", "0", "0", "0", "-", "-", "_"],
+        &["AItz", "AIat", "1", "3", "0", "0", "0", "0", "-", "-", "_"],
+        &["AIt1", "AIat", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+        &["Arel", "Arel", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
+        &[
+            "AIrm", "AIrm", "1", "0.5", "0", "0", "0", "0", "-", "-", "_",
+        ],
+        &[
+            "AImx", "AIrm", "1", "3.4e38", "0", "0", "0", "0", "-", "-", "_",
+        ],
+        &[
+            "AIwz",
+            "AIat",
+            "1",
+            "2147483647",
+            "0",
+            "0",
+            "0",
+            "0",
+            "-",
+            "-",
+            "_",
+        ],
+        &["AIl1", "AIml", "1", "37", "0", "0", "0", "0", "-", "-", "_"],
+        &["AIl2", "AIml", "1", "7", "0", "0", "0", "0", "-", "-", "_"],
+        &[
+            "AIl3",
+            "AIml",
+            "1",
+            "2147483647",
+            "0",
+            "0",
+            "0",
+            "0",
+            "-",
+            "-",
+            "_",
+        ],
+        &["AIl4", "AIml", "1", "1", "0", "0", "0", "0", "-", "-", "_"],
+    ];
+    let abilities = ability_table(plain_ability_rows);
     let metadata = sylk(
         &[
             "ID",
@@ -396,6 +442,34 @@ fn healing_registration() -> Vec<u8> {
     w
 }
 
+/// The orb base registration (`AIDB`) in the reviewed 25-byte layout, with its base function 0x100
+/// bytes after the window.
+fn orb_base_registration() -> Vec<u8> {
+    use crate::inventory_powerup::{
+        CALL_REL32, CLEANUP_RET, ORB_BASE_WINDOW, PUSH_EAX, PUSH_IMM32, REGISTER_FN,
+    };
+    let rel_base: i32 = 0x100 - 10;
+    let rel_register = (i64::from(REGISTER_FN) - (i64::from(ORB_BASE_WINDOW) + 21)) as i32;
+    let mut w = vec![PUSH_IMM32, 1, 2, 3, 4, CALL_REL32];
+    w.extend(rel_base.to_le_bytes());
+    w.push(PUSH_EAX);
+    w.push(PUSH_IMM32);
+    w.extend(b"AIDB".iter().rev());
+    w.push(CALL_REL32);
+    w.extend(rel_register.to_le_bytes());
+    w.extend(CLEANUP_RET);
+    w
+}
+
+/// The base function the orb base window calls: `mov eax, "AIat"; ret`.
+fn orb_base_code() -> Vec<u8> {
+    use crate::inventory_powerup::{MOV_EAX_IMM32, RET};
+    let mut b = vec![MOV_EAX_IMM32];
+    b.extend(b"AIat".iter().rev());
+    b.push(RET);
+    b
+}
+
 /// The base function the healing window calls: `mov eax, "AAsm"; ret`.
 fn healing_base() -> Vec<u8> {
     use crate::inventory_powerup::{MOV_EAX_IMM32, RET};
@@ -543,7 +617,34 @@ fn open_with_regens_overlays_hp(
     mana_per_intelligence: f32,
     hp: &str,
 ) -> Fixture {
-    let (hero_rules, combat) = hero_rules();
+    open_with_regens_overlays_extra(
+        inventory_overlay,
+        hero_overlay,
+        strength_regen,
+        mana_regen,
+        mana_per_intelligence,
+        hp,
+        &[],
+    )
+}
+
+/// `extra` unit fields are applied last, so they replace a fixture field with the same id.
+fn open_with_regens_overlays_extra(
+    inventory_overlay: Overlay,
+    hero_overlay: Overlay,
+    strength_regen: f32,
+    mana_regen: Option<&str>,
+    mana_per_intelligence: f32,
+    hp: &str,
+    extra: &[([u8; 4], ObjectField)],
+) -> Fixture {
+    let (hero_rules, mut combat) = hero_rules();
+    // Orb splash is spells-type damage; a distinct entry shows that its row is the one read.
+    let spells = pcx_objects::editor::misc::ATTACK_TYPES
+        .iter()
+        .position(|name| *name == "spells")
+        .expect("spells attack type");
+    combat.damage_bonus[spells][1] = SPELLS_VS_MEDIUM;
     // `uabi` supplies the one ability list; the hero fixture's own `abilList` would be ambiguous.
     let mut fields: Vec<_> = hero_fields("STR")
         .into_iter()
@@ -574,6 +675,14 @@ fn open_with_regens_overlays_hp(
         field.1.value = Ok(FieldValue::Cell(rate.into()));
     }
     fields.push((*b"uabi", ability_field("abilList", "L000")));
+    fields.push(column(
+        b"B001",
+        SlkId::UnitBalance,
+        "isbldg",
+        FieldKind::Bool,
+        "0",
+    ));
+    fields.extend(extra.iter().cloned());
     let declarations = format!(
         "{}\n{}{DECLARATIONS}{POWERUP_DECLARATIONS}",
         enumeration::TRIGGERS,
@@ -618,6 +727,13 @@ fn open_with_regens_overlays_hp(
     .with_mana_regen(&registration("AIrm", "Arem"))
     .unwrap()
     .with_max_life(&registration("AIml", "APbo"))
+    .unwrap()
+    .with_orbs(
+        &orb_base_registration(),
+        &orb_base_code(),
+        &registration("AIfb", "AIDB"),
+        &registration("AIcb", "AIDB"),
+    )
     .unwrap();
     let mut h = h
         .with_order_registry(registry)
@@ -1841,18 +1957,19 @@ fn held_flat_damage_changes_real_damage() {
         missile_speed: MissileSpeed::Instant,
         min_range: 0.0,
         splash: None,
+        reaches_air: None,
     };
-    let factor = h.roll_damage(ordinary, weapon, ordinary).unwrap() / 10.0;
-    let hero_bare = h.roll_damage(hero, weapon, ordinary).unwrap();
+    let factor = h.roll_damage(ordinary, weapon, ordinary).unwrap().0 / 10.0;
+    let hero_bare = h.roll_damage(hero, weapon, ordinary).unwrap().0;
     let first = item(&mut h, b"pdm1", 0.0);
     assert_eq!(add(&mut h, hero, first), Ok(Value::Bool(true)));
-    let hero_with = h.roll_damage(hero, weapon, ordinary).unwrap();
+    let hero_with = h.roll_damage(hero, weapon, ordinary).unwrap().0;
     assert!(
         (hero_with - hero_bare - 15.0 * factor).abs() < 1e-4,
         "hero: {hero_with} vs {hero_bare} at factor {factor}"
     );
     assert_eq!(add(&mut h, ordinary, first), Ok(Value::Bool(true)));
-    let ordinary_with = h.roll_damage(ordinary, weapon, ordinary).unwrap();
+    let ordinary_with = h.roll_damage(ordinary, weapon, ordinary).unwrap().0;
     assert!(
         (ordinary_with - 25.0 * factor).abs() < 1e-4,
         "non-hero: {ordinary_with} at factor {factor}"
@@ -1880,18 +1997,19 @@ fn held_armor_changes_real_damage_and_its_drop_restores_it() {
         missile_speed: MissileSpeed::Instant,
         min_range: 0.0,
         splash: None,
+        reaches_air: None,
     };
-    let bare = h.roll_damage(hero, weapon, ordinary).unwrap();
+    let bare = h.roll_damage(hero, weapon, ordinary).unwrap().0;
     let armor = item(&mut h, b"parm", 0.0);
     assert_eq!(add(&mut h, ordinary, armor), Ok(Value::Bool(true)));
-    let armored = h.roll_damage(hero, weapon, ordinary).unwrap();
+    let armored = h.roll_damage(hero, weapon, ordinary).unwrap().0;
     assert!(armored < bare, "armor reduces damage: {armored} < {bare}");
     h.native(
         "UnitRemoveItem",
         &[Value::Handle(ordinary), Value::Handle(armor)],
     )
     .unwrap();
-    assert_eq!(h.roll_damage(hero, weapon, ordinary).unwrap(), bare);
+    assert_eq!(h.roll_damage(hero, weapon, ordinary).unwrap().0, bare);
 }
 
 fn use_item(h: &mut ObjectHost, unit: HandleId, potion: HandleId) -> Result<Value, String> {
@@ -3715,3 +3833,6 @@ fn slot_input_from_another_player_changes_nothing() {
         Ok(Value::Bool(true))
     );
 }
+
+#[path = "inventory_orb_host_tests.rs"]
+mod orb;

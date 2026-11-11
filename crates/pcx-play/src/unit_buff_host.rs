@@ -311,6 +311,7 @@ impl ObjectHost {
             }
             for rawcode in removed {
                 self.curse_buff_removed(id, rawcode)?;
+                self.orb_buff_removed(id, rawcode);
             }
             Ok(Value::Null)
         })())

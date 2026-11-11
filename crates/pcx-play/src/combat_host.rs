@@ -13,7 +13,7 @@
 use super::{
     Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost, VisionCapability, VisionState,
 };
-use crate::inventory_powerup::AttributeBonus;
+use crate::inventory_powerup::{AttributeBonus, Orb};
 use pcx_objects::editor::misc::{ATTACK_TYPES, CombatRules, DEFENSE_TYPES};
 use pcx_objects::editor::{FieldSource, SlkId};
 use pcx_script::{HandleId, Value};
@@ -72,6 +72,9 @@ pub struct Weapon {
     pub min_range: f32,
     /// The weapon-1 splash columns, when all five are numeric.
     pub splash: Option<Splash>,
+    /// Whether the weapon's `targs` list names air; `None` when the unit has no `targs` column.
+    /// Only a held orb consults it: attack eligibility by target class is not otherwise modelled.
+    pub reaches_air: Option<bool>,
 }
 
 /// `Farea1`/`Harea1`/`Qarea1` radii with the `Hfact1`/`Qfact1` damage factors of the
@@ -153,6 +156,16 @@ struct Missile {
     target: HandleId,
     impact_at: f64,
     damage: f32,
+    /// The orb armed at launch, whose effect runs on impact.
+    orb: Option<MissileOrb>,
+}
+
+/// An orb armed by a missile weapon, with what impact needs to redo the armor step: the
+/// roll before the victim's armor and the weapon's attack type.
+struct MissileOrb {
+    orb: Orb,
+    base: f32,
+    weapon: Weapon,
 }
 
 /// A damage error plus whether the victim's life was already committed, so a
@@ -269,6 +282,64 @@ pub(super) fn text<'a>(value: &'a FieldValue, name: &str) -> Result<&'a str, Str
     }
 }
 
+/// Weapon `n` (1 or 2) of the unit's `UnitWeapons` row. Weapon 2 is absent when its `weapTp2`
+/// cell is a placeholder; only weapon 1 carries the splash columns.
+pub(super) fn read_weapon(d: &Definition, n: u8) -> Result<Option<Weapon>, String> {
+    let num = |slk, name: &str| match column(d, slk, name)? {
+        Some(v) => number(v, name),
+        None => Ok(None),
+    };
+    let word = |slk, name: &str| {
+        column(d, slk, name)?
+            .ok_or_else(|| format!("unit field {name} is empty"))
+            .and_then(|v| text(v, name))
+    };
+    let required =
+        |slk, name: &str| num(slk, name)?.ok_or_else(|| format!("unit field {name} is empty"));
+    let kind = word(SlkId::UnitWeapons, &format!("weapTp{n}"))?;
+    if n == 2 && matches!(kind, "_" | "-" | "") {
+        return Ok(None);
+    }
+    let attack_name = word(SlkId::UnitWeapons, &format!("atkType{n}"))?;
+    let attack = ATTACK_TYPES
+        .iter()
+        .position(|t| t.eq_ignore_ascii_case(attack_name))
+        .ok_or_else(|| format!("unsupported attack type {attack_name}"))?;
+    let missile_speed = match kind {
+        "normal" | "instant" => MissileSpeed::Instant,
+        "missile" | "msplash" | "mbounce" | "mline" | "artillery" | "aline" => {
+            match profile(d, "missilespeed")?
+                .map(|v| number(v, "Missilespeed"))
+                .transpose()?
+                .flatten()
+            {
+                Some(speed) if speed > 0.0 => MissileSpeed::Travel(speed),
+                Some(_) => return Err("missile weapon with a non-positive Missilespeed".into()),
+                None => MissileSpeed::Absent,
+            }
+        }
+        other => return Err(format!("unsupported weapon type {other}")),
+    };
+    let reaches_air = optional_column(d, &format!("targs{n}"))?
+        .map(|v| text(v, "targs"))
+        .transpose()?
+        .map(|tokens| SplashTargets::parse(tokens).air);
+    Ok(Some(Weapon {
+        range: required(SlkId::UnitWeapons, &format!("rangeN{n}"))?,
+        acquire: required(SlkId::UnitWeapons, "acquire")?,
+        cooldown: required(SlkId::UnitWeapons, &format!("cool{n}"))?,
+        damage_point: num(SlkId::UnitWeapons, &format!("dmgpt{n}"))?,
+        base: required(SlkId::UnitWeapons, &format!("dmgplus{n}"))? as i32,
+        dice: required(SlkId::UnitWeapons, &format!("dice{n}"))? as i32,
+        sides: required(SlkId::UnitWeapons, &format!("sides{n}"))? as i32,
+        attack,
+        missile_speed,
+        min_range: optional_number(d, "minRange")?.unwrap_or(0.0),
+        splash: if n == 1 { read_splash(d)? } else { None },
+        reaches_air,
+    }))
+}
+
 fn read_combat(d: &Definition) -> Result<Combat, String> {
     let num = |slk, name| match column(d, slk, name)? {
         Some(v) => number(v, name),
@@ -279,7 +350,6 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
             .ok_or_else(|| format!("unit field {name} is empty"))
             .and_then(|v| text(v, name))
     };
-    let required = |slk, name| num(slk, name)?.ok_or_else(|| format!("unit field {name} is empty"));
     let defense_name = word(SlkId::UnitBalance, "defType")?;
     let defense = DEFENSE_TYPES
         .iter()
@@ -290,40 +360,7 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
     let weapon = if enabled & 1 == 0 {
         None
     } else {
-        let attack_name = word(SlkId::UnitWeapons, "atkType1")?;
-        let attack = ATTACK_TYPES
-            .iter()
-            .position(|t| t.eq_ignore_ascii_case(attack_name))
-            .ok_or_else(|| format!("unsupported attack type {attack_name}"))?;
-        let kind = word(SlkId::UnitWeapons, "weapTp1")?;
-        let missile_speed = match kind {
-            "normal" | "instant" => MissileSpeed::Instant,
-            "missile" | "msplash" | "mbounce" | "mline" | "artillery" | "aline" => {
-                match profile(d, "missilespeed")?
-                    .map(|v| number(v, "Missilespeed"))
-                    .transpose()?
-                    .flatten()
-                {
-                    Some(speed) if speed > 0.0 => MissileSpeed::Travel(speed),
-                    Some(_) => return Err("missile weapon with a non-positive Missilespeed".into()),
-                    None => MissileSpeed::Absent,
-                }
-            }
-            other => return Err(format!("unsupported weapon type {other}")),
-        };
-        Some(Weapon {
-            range: required(SlkId::UnitWeapons, "rangeN1")?,
-            acquire: required(SlkId::UnitWeapons, "acquire")?,
-            cooldown: required(SlkId::UnitWeapons, "cool1")?,
-            damage_point: num(SlkId::UnitWeapons, "dmgpt1")?,
-            base: required(SlkId::UnitWeapons, "dmgplus1")? as i32,
-            dice: required(SlkId::UnitWeapons, "dice1")? as i32,
-            sides: required(SlkId::UnitWeapons, "sides1")? as i32,
-            attack,
-            missile_speed,
-            min_range: optional_number(d, "minRange")?.unwrap_or(0.0),
-            splash: read_splash(d)?,
-        })
+        read_weapon(d, 1)?
     };
     Ok(Combat {
         weapon,
@@ -1433,6 +1470,7 @@ impl ObjectHost {
         let experience = self.plan_hero_kill_experience(unit, killer)?;
         self.forget_morph_unit(unit);
         self.forget_curse_unit(unit);
+        self.forget_orb_unit(unit);
         self.forget_mirror_unit(unit);
         let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
@@ -1569,6 +1607,7 @@ impl ObjectHost {
                 target,
                 impact_at,
                 damage,
+                orb: None,
             });
     }
 
@@ -1608,6 +1647,24 @@ impl ObjectHost {
                 error: Box::new(error),
                 applied,
             })
+    }
+
+    /// Runs the orb armed at launch against the target a missile reaches: the corruption
+    /// penalty first, with the impact damage recomputed against the lowered armor, then the
+    /// fire splash. A target that can no longer be hit takes no orb effect.
+    fn orb_impact(&mut self, missile: &mut Missile) -> Result<(), Error> {
+        let Some(armed) = missile.orb.take() else {
+            return Ok(());
+        };
+        if self.weapon_target(missile.target).is_none() {
+            return Ok(());
+        }
+        if Self::orb_corrupts(&armed.orb) {
+            self.orb_corrupt(&armed.orb, missile.target)?;
+            let (armor, defense) = self.victim_armor(missile.target)?;
+            missile.damage = self.armored_damage(armed.base, armed.weapon, armor, defense);
+        }
+        self.orb_splash(&armed.orb, missile.source, missile.target)
     }
 
     /// Prepare a retreat before any damage mutation. A refusal propagates with
@@ -1701,16 +1758,17 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// The damage after the victim's armor, and the roll before it.
     pub(crate) fn roll_damage(
         &mut self,
         source: HandleId,
         weapon: Weapon,
         target: HandleId,
-    ) -> Result<f32, Error> {
+    ) -> Result<(f32, f32), Error> {
         // Hero armor derives from agility; held armor points are a separate item bonus.
         let (armor, defense) = self.victim_armor(target)?;
         let base = self.roll_base_damage(source, weapon)?;
-        Ok(self.armored_damage(base, weapon, armor, defense))
+        Ok((self.armored_damage(base, weapon, armor, defense), base))
     }
 
     /// The dice roll plus the attacker's flat bonuses, before any victim's armor.
@@ -1736,8 +1794,24 @@ impl ObjectHost {
         })?;
         let armor = combat.armor
             + self.hero_combat_bonuses(target)?.armor
-            + self.held_armor_bonus(target)? as f32;
+            + self.held_armor_bonus(target)? as f32
+            - self.orb_armor_penalty(target);
         Ok((armor, combat.defense))
+    }
+
+    /// `amount` scaled by the damage-bonus entry of the named attack type against `defense`.
+    /// `None` when the selected table has no such attack type.
+    pub(super) fn attack_type_damage(
+        &self,
+        attack: &str,
+        amount: f32,
+        defense: usize,
+    ) -> Option<f32> {
+        let rules = &self.combat.as_ref()?.rules;
+        let index = ATTACK_TYPES
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(attack))?;
+        Some(amount * rules.damage_bonus[index][defense])
     }
 
     pub(super) fn armored_damage(
@@ -1777,7 +1851,16 @@ impl ObjectHost {
             missiles.into_iter().partition(|m| m.impact_at <= now);
         self.combat.as_mut().expect("combat").missiles = pending;
         let mut due = due.into_iter();
-        while let Some(missile) = due.next() {
+        while let Some(mut missile) = due.next() {
+            if let Err(error) = self.orb_impact(&mut missile) {
+                // The orb effect may have partly run, so this missile is not replayed.
+                let combat = self.combat.as_mut().expect("combat");
+                let mut restore = Vec::with_capacity(due.len() + combat.missiles.len());
+                restore.extend(due);
+                restore.append(&mut combat.missiles);
+                combat.missiles = restore;
+                return Err(error);
+            }
             if let Err(failure) =
                 self.apply_damage_outcome(missile.source, missile.target, missile.damage, true)
             {
@@ -1800,6 +1883,7 @@ impl ObjectHost {
         self.advance_holy_light(now)?;
         self.advance_chain_lightning(now)?;
         self.advance_curses(now)?;
+        self.advance_orbs(now);
         self.advance_unit_expirations(now)?;
         self.advance_summoning(now)?;
         // Callbacks are queued, not executed here; later deaths still require live target checks.
@@ -1964,6 +2048,7 @@ impl ObjectHost {
                 }
                 continue;
             };
+            let weapon = self.weapon_against(unit, weapon, target)?;
             let target_position = self
                 .live(target)
                 .and_then(|t| t.position)
@@ -2086,11 +2171,18 @@ impl ObjectHost {
                     }
                     // A refused melee source consumes no RNG and leaves the swing
                     // pending; the missile impact is the incoming hit instead.
+                    let orb = self.orb_for_hit(unit, swung)?;
+                    if weapon.missile_speed == MissileSpeed::Instant
+                        && let Some(orb) = &orb
+                    {
+                        // The client lowers the armor first, then applies the attack damage.
+                        self.orb_corrupt(orb, swung)?;
+                    }
                     let preflight = weapon.missile_speed == MissileSpeed::Instant
                         && self.campaign_flee_source_preflight(unit, swung)?;
                     let checkpoint = self.script_random_primary_checkpoint();
                     let prepared = (|| -> Result<_, Error> {
-                        let damage = self.roll_damage(unit, weapon, swung)?;
+                        let (damage, base) = self.roll_damage(unit, weapon, swung)?;
                         let retreat = if preflight {
                             let life = self
                                 .weapon_target(swung)
@@ -2104,9 +2196,9 @@ impl ObjectHost {
                         } else {
                             None
                         };
-                        Ok((damage, retreat))
+                        Ok((damage, base, retreat))
                     })();
-                    let (damage, retreat) = match prepared {
+                    let (damage, base, retreat) = match prepared {
                         Ok(prepared) => prepared,
                         Err(error) => {
                             self.restore_script_random_primary(checkpoint);
@@ -2139,9 +2231,16 @@ impl ObjectHost {
                                 target: swung,
                                 impact_at: now + f64::from(gap / speed),
                                 damage,
+                                orb: orb.map(|orb| MissileOrb { orb, base, weapon }),
                             });
                         }
                         MissileSpeed::Instant => {
+                            if let Some(orb) = &orb
+                                && let Err(error) = self.orb_splash(orb, unit, swung)
+                            {
+                                self.restore_script_random_primary(checkpoint);
+                                return Err(error);
+                            }
                             let mut applied = false;
                             if let Err(error) =
                                 self.apply_damage_commit(unit, swung, damage, retreat, &mut applied)
