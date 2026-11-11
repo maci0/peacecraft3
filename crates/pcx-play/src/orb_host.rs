@@ -201,9 +201,10 @@ impl ObjectHost {
         Ok(None)
     }
 
-    /// The weapon `unit` attacks `target` with. A held orb enables the unit's second attack
-    /// (`DataE1` of 2); against an air target that weapon 1 cannot reach, a second weapon that
-    /// names air replaces it, with its own range, cooldown, damage and missile.
+    /// The weapon `unit` attacks `target` with. A held orb with `DataE1` nonzero enables the
+    /// unit's second attack (`0xc9e3a0`); against an air target that weapon 1 cannot reach, a
+    /// second weapon that names air replaces it, with its own range, cooldown, damage and
+    /// missile. An orb with `DataE1` 0 leaves weapon 1 in place.
     pub(super) fn weapon_against(
         &self,
         unit: HandleId,
@@ -212,7 +213,10 @@ impl ObjectHost {
     ) -> Result<Weapon, Error> {
         if first.reaches_air != Some(false)
             || !super::unit_types::flying(&self.executed_unit(target)?.definition)
-            || self.unit_hero_bonus(unit)?.orb.is_none()
+            || !self
+                .unit_hero_bonus(unit)?
+                .orb
+                .is_some_and(|orb| orb.air_switch)
         {
             return Ok(first);
         }

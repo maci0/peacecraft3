@@ -74,7 +74,9 @@ const LIFE_STEAL_MAGIC_IMMUNE_KEY: &str = "MagicImmunesResistLeech";
 /// `Misc` keys of `MiscGame.txt` that the Frost buff reads when it is applied (`0xc5b5e0`).
 const FROST_MOVE_KEY: &str = "FrostMoveSpeedDecrease";
 const FROST_ATTACK_KEY: &str = "FrostAttackSpeedDecrease";
-/// `AbilityData` `DataE` value that enables the unit's second attack, the only orb value decoded.
+/// `AbilityData` `DataE` values of an orb that are decoded: 0 attaches without the air switch
+/// (`0xc9e3a0` skips `0xb1c6e0`), 2 is the value every other shipped orb row carries.
+const ORB_NO_ATTACK_INDEX: i64 = 0;
 const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 /// Held-item classes whose class was decoded from the reviewed client but whose effect is not
 /// modeled, with the reason the pickup stays refused. See `passive-held-items.md`, "Open held
@@ -182,6 +184,8 @@ pub struct Orb {
     pub kind: OrbKind,
     pub damage: i32,
     pub targets: OrbTargets,
+    /// Whether attaching the orb enables the holder's second weapon (`DataE1` nonzero).
+    pub air_switch: bool,
 }
 
 /// Flat attributes, armor, attack damage, maximum life and regeneration from passive held
@@ -1560,11 +1564,15 @@ impl Rules {
                 .ok_or_else(|| format!("orb {alias} BuffID1 is not a rawcode"))?;
             Ok((duration, hero_duration, buff))
         };
-        if int("DataE1")? != ORB_ENABLED_ATTACK_INDEX {
-            return Err(format!(
-                "orb {alias} enabled attack index is not {ORB_ENABLED_ATTACK_INDEX}"
-            ));
-        }
+        let air_switch = match int("DataE1")? {
+            ORB_NO_ATTACK_INDEX => false,
+            ORB_ENABLED_ATTACK_INDEX => true,
+            _ => {
+                return Err(format!(
+                    "orb {alias} enabled attack index is not {ORB_NO_ATTACK_INDEX} or {ORB_ENABLED_ATTACK_INDEX}"
+                ));
+            }
+        };
         let damage = i32::try_from(int("DataA1")?)
             .ok()
             .filter(|damage| *damage >= 0)
@@ -1652,6 +1660,7 @@ impl Rules {
             kind,
             damage,
             targets,
+            air_switch,
         })
     }
 

@@ -293,6 +293,10 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
             "",
         ],
         vec![
+            "AIfn", "AIfb", "1", "5", "0", "0", "0", "0", "-", "-", orb_targs, ORB_AREA, "0", "0",
+            "",
+        ],
+        vec![
             "AIcb", "AIcb", "1", "5", "5", "0", "0", "2", "-", "-", orb_targs, "-", "5", "7",
             "BIcb",
         ],
@@ -470,6 +474,7 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["mskb", "AIva,AIfb", "0", "0", "0", "-"],
             &["ofir", "AIfb", "0", "0", "0", "-"],
             &["ogld", "AIgd", "0", "0", "0", "-"],
+            &["ofin", "AIfn", "0", "0", "0", "-"],
             &["ocor", "AIcb", "0", "0", "0", "-"],
             &["ofro", "AIob", "0", "0", "0", "-"],
             &["brac", "AIsr", "0", "0", "0", "-"],

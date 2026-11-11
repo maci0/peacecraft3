@@ -433,11 +433,18 @@ unit virtual `[unit+0x120]`, so the attack damage is the same call as an ordinar
    the field. That the sub-object is the second weapon is inferred: the stock melee heroes author
    attack 2 as a ranged missile weapon that targets air (`Hpal`: `weapsOn` 1, `targs1`
    `ground,structure,...`, `targs2` includes `air`, `rangeN2` 500, `weapTp2` missile), the item
-   texts say "attacks also become ranged when attacking air", and every shipped orb row has
-   `DataE1` 2. Implemented: with an orb held, a target with `movetp` `fly` that weapon 1's `targs1`
+   texts say "attacks also become ranged when attacking air", and the shipped orb rows have
+   `DataE1` 2 except `AIft` (below). Implemented: with an orb held, a target with `movetp` `fly` that weapon 1's `targs1`
    cannot reach is attacked with weapon 2 (its own range, cooldown, damage point, dice, attack type
    and missile) when weapon 2 exists (`weapTp2` is not a placeholder) and its `targs2` names air.
-   Otherwise weapon 1 is kept. `DataE1` other than 2 refuses at pickup.
+   Otherwise weapon 1 is kept. `DataE1` 0 attaches the orb without the switch: `0xc9e3a0` still
+   sets the item-ability flag `0x200` and runs the common attach `0x6c0010`, and only the
+   `0xb1c6e0` call is skipped (`test eax, eax; je 0xc9e3f3` at `0xc9e3e8`). The counter at `+0x234`
+   is per orb, so with several orbs the switch is on while any held orb has `DataE1` nonzero. The
+   shipped row `AIft` (Frostguard, code `AIob`, `DataA1` 5, `DataE1` 0, `targs1` `ground,ward`,
+   `BuffID1` `Bfro`) is the one `DataE1` 0 case (`Units\AbilityData.slk`, `War3x.mpq`). Values
+   other than 0 and 2 refuse at pickup: every nonzero value takes the same branch in the code
+   read, but no row uses them and the weapon index is inferred.
 4. **Armor penalty (`AIcb`).** The first hit that arms the orb attaches `BIcb` and lowers the
    target's armor by `DataB1` before the attack damage is applied, so that hit already sees the
    lowered armor (instant weapons: applied before the roll; missile weapons: the roll is redone
@@ -484,7 +491,7 @@ air, no second weapon, no orb). All inputs are synthetic rows built in the tests
 - The selected-unit panel armor does not show the corruption penalty.
 - The `Targetart`, `Missileart` and `Specialart` of the orb rows are not shown, and the orb missile
   model does not replace the unit's missile.
-- Map-modified orb rows, `DataE1` other than 2, multi-level orb rows and orb rows with relationship
+- Map-modified orb rows, `DataE1` other than 0 and 2, multi-level orb rows and orb rows with relationship
   or state tokens in `targs1` refuse.
 - The `ward` class token is accepted and has no effect (the recreation does not model ward units as a
   separate class). The enemies bit is the only relationship the handlers add.

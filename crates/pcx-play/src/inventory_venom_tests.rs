@@ -150,6 +150,7 @@ fn venom_orb_reads_damage_and_the_poison_from_its_siblings_row() {
                 buff: *b"BIpb",
             },
             damage: 5,
+            air_switch: true,
             targets: OrbTargets {
                 ground: true,
                 air: true,

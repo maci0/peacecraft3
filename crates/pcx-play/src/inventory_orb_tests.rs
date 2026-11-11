@@ -276,6 +276,7 @@ fn fire_orb_reads_damage_area_and_target_classes_from_its_row() {
         Some(Orb {
             kind: OrbKind::Fire { area: 140.0 },
             damage: 5,
+            air_switch: true,
             targets: OrbTargets {
                 ground: true,
                 air: true,
@@ -327,6 +328,26 @@ fn edited(row: usize, column: usize, value: &'static str) -> [Row; 3] {
     let mut rows = ORB_ROWS;
     rows[row][column] = value;
     rows
+}
+
+#[test]
+fn an_orb_row_with_data_e1_zero_attaches_without_the_air_switch() {
+    let rules = orb_rules_with(&edited(0, 4, "0"), Overlay::default());
+    let orb = rules
+        .held_attributes(&catalog_item("ofir"))
+        .unwrap()
+        .unwrap()
+        .orb
+        .unwrap();
+    assert!(!orb.air_switch);
+    assert_eq!(orb.damage, 5, "the flat damage is still held");
+    let shipped = orb_rules().held_attributes(&catalog_item("ofir")).unwrap();
+    assert!(shipped.unwrap().orb.unwrap().air_switch);
+    for other in ["1", "3", "-1"] {
+        let rows = edited(0, 4, other);
+        let err = refused(rows, Overlay::default(), "ofir");
+        assert!(err.contains("is not 0 or 2"), "{other}: {err}");
+    }
 }
 
 #[test]
@@ -503,6 +524,7 @@ fn frost_orb_reads_durations_and_buff_from_its_row_and_decreases_from_misc() {
                 buff: *b"Bfro",
             },
             damage: 6,
+            air_switch: true,
             targets: OrbTargets {
                 ground: true,
                 air: true,

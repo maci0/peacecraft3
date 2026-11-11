@@ -547,6 +547,9 @@ impl ObjectHost {
                 // The aggregate says whether an orb is held; the orb a hit arms is chosen per
                 // hit. A spell orb is kept in preference, because its proc state is the one
                 // that is per holder.
+                // Each orb with `DataE1` nonzero adds to the owner's second-weapon counter
+                // (`0xb1c6e0`), so the switch is on when any held orb has it.
+                let air_switch = orb.air_switch || bonus.orb.is_some_and(|held| held.air_switch);
                 bonus.orb = match bonus.orb {
                     Some(held) if matches!(held.kind, OrbKind::Spell(_)) => {
                         if matches!(orb.kind, OrbKind::Spell(_)) {
@@ -559,6 +562,9 @@ impl ObjectHost {
                     Some(held) if !matches!(orb.kind, OrbKind::Spell(_)) => Some(held),
                     _ => Some(orb),
                 };
+                if let Some(kept) = bonus.orb.as_mut() {
+                    kept.air_switch = air_switch;
+                }
             }
             if let Some(steal) = passive.life_steal {
                 if bonus.life_steal.is_some() {

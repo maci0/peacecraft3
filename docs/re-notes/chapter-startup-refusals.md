@@ -852,3 +852,17 @@ Same exe (SHA-256 `3f2ed012...0eed`). `AOac` (`AIcd` on `shhn`) is hosted with t
 | TFT HumanX06 | no refusal on current main, `executed_units=248` (the fatLOS footprint cleared the `DTrx` refusal) | unchanged, `executed_units=248` |
 
 Not attempted: the two new refusals.
+
+## 2026-11-11 `SetDestructableAnimationSpeed` and orb `DataE1` 0
+
+Same exe (SHA-256 `3f2ed012...0eed`). Decodes: [script-destructable-animation.md](script-destructable-animation.md)
+("Destructable animation speed", handler `0x4a7b30`) and [passive-held-items.md](passive-held-items.md)
+(orb air switch, `0xc9e3a0`, `AIft` `DataE1` 0). First refusal of
+`selected_install_locked_chapter_startup_probe` (`.scratch/chapter-sweep.sh`, headless):
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX02 | `SetDestructableAnimationSpeed` is unsupported by this host | `SetUnitFlyHeight`: height setter without an admitted form is not qualified (unit `nzep`, air movement) |
+| TFT OrcX03a | `UnitAddItem`: orb `AIft` enabled attack index is not 2 | passes, `executed_units=246` |
+
+Not attempted: the `SetUnitFlyHeight` refusal, which is the unit height-setter qualification rather than a sibling native.

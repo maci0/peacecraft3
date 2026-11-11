@@ -752,3 +752,40 @@ fn a_hero_without_the_orb_rolls_nothing() {
     assert_eq!(spell_rolls(&h), 0);
     assert!(!marked(&h, target));
 }
+
+#[test]
+fn an_orb_with_no_enabled_attack_index_keeps_weapon_one_against_air() {
+    let mut f = open_orb(&air_fields("normal"));
+    let orb = item(&mut f.h, b"ofin", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, orb), Ok(Value::Bool(true)));
+    let target = unit_for(&mut f.h, b"u001", 5, 100.0);
+    let Fixture { mut h, hero, .. } = f;
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert_life(
+        &h,
+        target,
+        0.0,
+        "DataE1 0 skips the air switch, so weapon 1 is out of reach and the hero walks",
+    );
+    assert!(h.executed_unit(hero).unwrap().position.unwrap()[0] > 0.0);
+}
+
+#[test]
+fn an_orb_with_the_air_switch_enables_it_beside_one_without() {
+    let mut f = open_orb(&air_fields("normal"));
+    for raw in [b"ofin", b"ofir"] {
+        let orb = item(&mut f.h, raw, 0.0);
+        assert_eq!(add(&mut f.h, f.hero, orb), Ok(Value::Bool(true)));
+    }
+    let target = unit_for(&mut f.h, b"u001", 5, 100.0);
+    let Fixture { mut h, hero, .. } = f;
+    attack(&mut h, hero, target);
+    run(&mut h, 0.3);
+    assert_life(
+        &h,
+        target,
+        attack_damage(100.0, 2.0 * ORB_DAMAGE, BASE_ARMOR),
+        "the second weapon with both orbs' flat damage",
+    );
+}
