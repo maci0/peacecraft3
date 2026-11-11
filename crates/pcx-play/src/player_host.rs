@@ -966,8 +966,9 @@ impl ObjectHost {
 
     fn live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
         self.executed_units()
-            .filter(|(_, u)| {
+            .filter(|(id, u)| {
                 u.owner == owner
+                    && (column != "fused" || !self.unit_food_disabled(*id))
                     && u.illusion.is_none()
                     && u.construction.is_none()
                     && u.combat.as_ref().is_none_or(|c| !c.dead)

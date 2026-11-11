@@ -1033,3 +1033,129 @@ fn effective_upkeep_follows_food_ownership_and_counter_assignments_without_consu
         1
     );
 }
+
+const USE_FOOD: &str =
+    "native SetUnitUseFood takes unit whichUnit, boolean useFood returns nothing\n";
+type CreateUnit = fn(&mut ObjectHost, Value) -> Value;
+fn use_food_host(declaration: &str, max_flags: usize) -> (ObjectHost, CreateUnit) {
+    use crate::playercolor_host::UnitBudget;
+    let common = format!("{}{declaration}", resource_common());
+    let (_, host) = fixture(&common, "// unit use food", true);
+    let host = host
+        .with_player_state_requests(PlayerStateRequestBudget { max_records: 4 })
+        .unwrap()
+        .with_player_resources(crate::player_resources::fixture::rules())
+        .unwrap()
+        .with_unit_catalog(
+            Arc::new(FoodCatalog),
+            pcx_sim::world::Source {
+                install: "synthetic catalog".into(),
+                edition: "synthetic".into(),
+                map: "synthetic use food".into(),
+            },
+            UnitBudget {
+                max_records: 4,
+                max_retained_fields: 2,
+                max_modifications: 0,
+            },
+        )
+        .unwrap()
+        .with_unit_food_use(max_flags)
+        .unwrap();
+    let create: CreateUnit = |host, owner| {
+        host.native(
+            "CreateUnit",
+            &[
+                owner,
+                Value::Int(i32::from_be_bytes(*b"hfoo")),
+                Value::Real(0.0),
+                Value::Real(0.0),
+                Value::Real(0.0),
+            ],
+        )
+        .unwrap()
+    };
+    (host, create)
+}
+
+#[test]
+fn set_unit_use_food_removes_and_restores_only_that_units_food_cost() {
+    let (mut host, create) = use_food_host(USE_FOOD, 4);
+    let owner = host.native("Player", &[Value::Int(0)]).unwrap();
+    let first = create(&mut host, owner.clone());
+    let _second = create(&mut host, owner.clone());
+    let used = "PLAYER_STATE_RESOURCE_FOOD_USED";
+    let cap = "PLAYER_STATE_RESOURCE_FOOD_CAP";
+    let state = |host: &ObjectHost, name| host.player_resource_value(id(&owner), name).unwrap();
+    let cap_before = state(&host, cap);
+    // The fixture's initial food used is 18 and each hfoo costs 2 and makes 5.
+    assert_eq!(state(&host, used), Some(22));
+    let set = |host: &mut ObjectHost, flag| {
+        host.native("SetUnitUseFood", &[first.clone(), Value::Bool(flag)])
+            .unwrap()
+    };
+    assert_eq!(set(&mut host, false), Value::Null);
+    assert_eq!(state(&host, used), Some(20));
+    assert_eq!(state(&host, cap), cap_before);
+    // The bit is already clear: a second disable changes nothing.
+    set(&mut host, false);
+    assert_eq!(state(&host, used), Some(20));
+    set(&mut host, true);
+    assert_eq!(state(&host, used), Some(22));
+    // The bit is already set: a second enable changes nothing.
+    set(&mut host, true);
+    assert_eq!(state(&host, used), Some(22));
+    // A disabled unit that is removed leaves the counter as it was.
+    set(&mut host, false);
+    host.native("RemoveUnit", std::slice::from_ref(&first))
+        .unwrap();
+    assert_eq!(state(&host, used), Some(20));
+    // A removed unit and a null handle do nothing.
+    set(&mut host, true);
+    host.native("SetUnitUseFood", &[Value::Null, Value::Bool(true)])
+        .unwrap();
+    assert_eq!(state(&host, used), Some(20));
+}
+
+#[test]
+fn set_unit_use_food_bounds_its_flags_and_checks_its_arguments() {
+    let (mut host, create) = use_food_host(USE_FOOD, 1);
+    let owner = host.native("Player", &[Value::Int(0)]).unwrap();
+    let first = create(&mut host, owner.clone());
+    let second = create(&mut host, owner.clone());
+    host.native("SetUnitUseFood", &[first.clone(), Value::Bool(false)])
+        .unwrap();
+    // Disabling a flagged unit again needs no new slot; a second unit does.
+    host.native("SetUnitUseFood", &[first.clone(), Value::Bool(false)])
+        .unwrap();
+    assert!(
+        host.native("SetUnitUseFood", &[second, Value::Bool(false)])
+            .is_err()
+    );
+    for args in [
+        vec![],
+        vec![first.clone()],
+        vec![first, Value::Int(1)],
+        vec![owner, Value::Bool(true)],
+    ] {
+        assert!(host.native("SetUnitUseFood", &args).is_err());
+    }
+}
+
+#[test]
+fn set_unit_use_food_admission_needs_the_declaration_and_happens_once() {
+    // Undeclared in the selected source: admission is skipped and the native stays unknown.
+    let (mut host, create) = use_food_host("", 4);
+    let owner = host.native("Player", &[Value::Int(0)]).unwrap();
+    let unit = create(&mut host, owner);
+    assert!(
+        host.native("SetUnitUseFood", &[unit, Value::Bool(false)])
+            .is_err()
+    );
+    let wrong = "native SetUnitUseFood takes unit whichUnit, integer useFood returns nothing\n";
+    let common = format!("{}{wrong}", resource_common());
+    let (_, host) = fixture(&common, "// wrong use food", true);
+    assert!(host.with_unit_food_use(1).is_err());
+    let (host, _) = use_food_host(USE_FOOD, 4);
+    assert!(host.with_unit_food_use(1).is_err());
+}

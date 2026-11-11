@@ -123,6 +123,7 @@ pub struct ObjectHost {
     item_use: Option<item_use::ItemUse>,
     player_scores: Option<Vec<player_score::PlayerScoreCounter>>,
     unit_explosions: Option<unit_explosion::UnitExplosions>,
+    unit_food_use: Option<unit_food_use::UnitFoodUse>,
     player_removal: Option<player_removal::PlayerRemovalState>,
     localized_queries: Option<crate::script_localization::Bank>,
     game_pause: Option<Option<bool>>,
@@ -360,6 +361,7 @@ impl ObjectHost {
             timer_dialogs: false,
             items: None,
             unit_explosions: None,
+            unit_food_use: None,
             item_drops: None,
             item_queries: None,
             item_sales: None,
@@ -1217,6 +1219,9 @@ impl Host for ObjectHost {
         if let Some(result) = self.unit_position_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
+        if let Some(result) = self.unit_food_use_native(name, args) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.unit_explosion_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1416,6 +1421,8 @@ pub use item_creation::{ExecutedItem, ItemBudget, ItemCommand, ItemDrop};
 
 #[path = "unit_explosion_host.rs"]
 mod unit_explosion;
+#[path = "unit_food_use_host.rs"]
+mod unit_food_use;
 
 #[path = "boolexpr_destroy_host.rs"]
 mod boolexpr_destroy;

@@ -789,6 +789,7 @@ fn assemble_inner(
     }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
+    object = object.with_unit_food_use(budgets.units.max_records)?;
     if let Some(rules) = resources {
         object = object.with_player_resources(rules)?;
     }
