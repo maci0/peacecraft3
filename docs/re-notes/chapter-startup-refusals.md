@@ -761,3 +761,23 @@ Not reached by a startup probe, so refused or open in code: a death of a unit th
 and a hero reincarnation ability, several ankhs, or a flier; Purge pauses (`DataD`, `DataE`, so the
 shipped `AIpg` row of `AIll`), a Purge on a summoned enemy (magic-type damage path), and a Purge
 cast on a unit with a buff whose magic bit is unread. Open: `Adet` (`gemt`) and the multi-orb order.
+
+## 2026-11-11 Held classes by class code, `AIva`, aura buff lifetime
+
+Same exe (`Warcraft III.exe` 1.29.2.9231, SHA-256 `3f2ed012...0eed`). Decodes and addresses:
+[passive-held-items.md](passive-held-items.md) ("Held classes are admitted by class code", `AIva`,
+"Aura buff lifetime").
+
+- Every held class attach reads `DataA` of its row by class code (`AIde`, `AIml`, `AImm`, `AIab`, `Arel`,
+  `AIrm`, `AIas`, powerup `AIsm`, healing `AIhe`). The `useSpecific` gate is removed for all of them.
+- `AIva` is a vampiric attack on the holder's hits (no `Area1`, no buff), now implemented.
+- `BUau` ends 4.0 s after its last application (timer `0xd01c4`). Whether the range registration
+  repeats for units that stay in range is not decoded, so `AUau` stays refused.
+
+First refusal of `selected_install_locked_chapter_startup_probe` (`.scratch/run-asset-gate.sh`):
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX02 | `UnitAddItem`: unsupported passive ability `AIva` on `klmm` | `UnitAddItem`: unsupported passive ability `AIad` (code `AHad`) on `blba` |
+| TFT OrcX03a | `UnitAddItemToSlotById`: unsupported passive ability `AIva` on `modt` | same `AIad` on `blba` |
+| TFT HumanX06 | `UnitAddItem`: `AIau` (code `AUau`) on `lgdh` | same item, message now names the 4.0 s buff lifetime and the open range repeat |

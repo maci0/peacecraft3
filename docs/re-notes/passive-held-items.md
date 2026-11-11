@@ -32,6 +32,8 @@ derived on demand from the held slots, so no add/remove state exists.
   holder takes at most one orb.
 - A held Ankh of Reincarnation (`AIrc`) revives its holder at the place it died `DataA1` seconds
   after the death and spends its charge; see "`AIrc`" below.
+- A vampiric attack (`AIva`) heals the holder on its attack hits; see "`AIva`" below. A holder takes
+  at most one, and none beside an orb.
 - Usable items (`usable=1`) are held without any passive bonus. Their activation is not
   implemented.
 - Passive rows whose abilities are outside the admitted classes refuse the pickup atomically
@@ -47,9 +49,10 @@ transfer, death and level results are what the tests check.
   powerup window `0xbca0e0` (`AIsm`, base `AIxm`). `Rules::read` decodes the powerup, passive,
   armor, damage and maximum-life (`0xbc9f40`, `AIml` against `APbo`) windows from the reviewed
   client (SHA-256 `3f2ed012…`, `REVIEWED_IMAGE`).
-- Attribute metadata: `Iagi`, `Iint`, `Istr`, `Idef`, `Iatt`, `Ilif`, `Ihpr` and `Imrp`
-  `useSpecific` lists must admit the item's ability alias. Amounts come from `Data{column}1`
-  through `W3A` overlays. In the selected metadata, `Iint` uses Data column 2. No ID or amount
+- Attribute metadata: `Iagi`, `Iint`, `Istr`, `Idef`, `Iatt`, `Ilif`, `Iman`, `Ihpr`, `Imrp` and
+  `Isx1` give the `Data` column and the W3A override pointer of each amount. Their `useSpecific`
+  lists do not gate admission: the client reads by class code (see "Held classes are admitted by
+  class code"). Amounts come from `Data{column}1` through `W3A` overlays. In the selected metadata, `Iint` uses Data column 2. No ID or amount
   is written in code. A level-1 W3A entry applies only when its second selector equals the
   field's metadata `data` ordinal, which selects the `Data` letter; the metadata `index` column
   is unrelated. A mismatched pointer, including selector 0 where the data ordinal is not 0,
@@ -125,11 +128,11 @@ diagnostic instead of applying a silent wrong stat.
   reviewed layout and base as `AIab`. The class must be distinct from the other registered
   classes. See `passive-max-life.md` for the original-runtime samples.
 - Amounts: metadata row `Ilif` (`field Data`, `slk AbilityData`, `data 1` = `DataA` in the
-  selected source). The `useSpecific` list must admit the item's ability alias, and typed W3A
+  selected source). Typed W3A
   overrides win only at level 1 with the second selector equal to that metadata `data` ordinal.
   A selector-0 or other mismatched pointer refuses instead of applying. The synthetic parser
   fixture maps `Ilif` to column 2 and puts a decoy in DataA, so a hardcoded DataA or pointer 1
-  fails. Negative or unadmitted amounts refuse; held sums use checked addition.
+  fails. Negative amounts refuse; held sums use checked addition.
 - Held effect: flat maximum-life points, summed over held passive items and derived per unit,
   hero or not. It applies whenever the holder has current vitals; a unit without vitals refuses
   a nonzero contribution.
@@ -141,7 +144,7 @@ diagnostic instead of applying a silent wrong stat.
 - Tests: parser (`max_life_points_come_from_the_admitted_ilif_row`,
   `max_life_w3a_override_on_ilif_wins`,
   `max_life_override_with_the_wrong_data_pointer_refuses`,
-  `negative_authored_max_life_refuses`, `max_life_row_outside_the_ilif_admission_refuses`,
+  `negative_authored_max_life_refuses`, `max_life_row_missing_from_the_ilif_list_is_admitted_by_its_class_code`,
   `max_life_registration_requires_the_passive_base_and_a_distinct_class`); host
   (`held_max_life_stacks_on_a_hero_and_rounds_the_retained_ratio`,
   `held_max_life_applies_to_a_non_hero_and_transfers_the_pool`,
@@ -156,8 +159,8 @@ diagnostic instead of applying a silent wrong stat.
 - Registration: window `0xbc9d40` (`push "APbo"`, `push "AIde"`, `call 0x7f6360`), same layout and base as
   the `AIab` window. Read by `Rules::read` as the third window; classes must be distinct.
 - Amounts: metadata row `Idef` (`field Data`, `slk AbilityData`, `data 1` = `DataA`), `useSpecific`
-  `AIde,AId1,AId2,AId3,AId4,AId5,AIda,AIdb`. Source rows `AId0`, `AId7`, `AId8` are not admitted
-  and refuse. `forceNonNeg=0`, `minVal=0`; a negative authored value refuses.
+  `AIde,AId1,AId2,AId3,AId4,AId5,AIda,AIdb`, which omits the shipped rows `AId0`, `AId7` and `AId8`;
+  those are held by class code. `forceNonNeg=0`, `minVal=0`; a negative authored value refuses.
 - Held effect: flat armor points, summed over held passive items, derived per unit (any unit, hero or not).
   Not stored. Equip, drop, transfer and death follow the same held-slot derivation as strength.
 - Interpretation: flat points added to unit armor before the existing armor reduction curve. Basis: the
@@ -167,10 +170,10 @@ diagnostic instead of applying a silent wrong stat.
 - Damage hook: `combat_host.rs` adds `held_armor_bonus(target)` once to the target's armor in
   `roll_damage`. Hero armor derives from agility only, so held armor is not counted twice.
 - Tests: parser (`armor_points_come_from_the_admitted_source_row`,
-  `armor_row_outside_the_idef_admission_refuses`, `negative_authored_armor_refuses`); host
+  `armor_row_missing_from_the_idef_list_is_admitted_by_its_class_code`, `negative_authored_armor_refuses`); host
   (`held_armor_on_a_hero_is_derived_and_removed_on_drop`, `held_armor_on_a_non_hero_is_supported_and_derived`,
   `armor_transfer_moves_the_points_to_the_receiver`, `death_drops_held_armor_and_removes_its_points`,
-  `armor_row_outside_the_admission_refuses_atomically`, `held_armor_changes_real_damage_and_its_drop_restores_it`).
+  `armor_row_missing_from_the_idef_list_is_held_by_its_class_code`, `held_armor_changes_real_damage_and_its_drop_restores_it`).
   The damage test runs `roll_damage` with the held item, then after the drop. Overflow of the held armor
   sum is guarded (`checked_add`) but not tested.
 - Non-hero refusal: now applies only to nonzero strength or agility. Non-hero armor is accepted.
@@ -195,10 +198,10 @@ diagnostic instead of applying a silent wrong stat.
   it does not change the attribute query or the life pools.
 - Tests: parser (`flat_damage_comes_from_the_admitted_iatt_column`,
   `w3a_override_on_the_iatt_field_wins_at_effect_level`,
-  `damage_row_outside_the_iatt_admission_refuses`, `negative_or_malformed_authored_damage_refuses`,
+  `damage_row_missing_from_the_iatt_list_is_admitted_by_its_class_code`, `negative_or_malformed_authored_damage_refuses`,
   `repeated_damage_aliases_overflow_atomically`, `damage_registration_must_name_a_distinct_class`);
   host (`held_flat_damage_stacks_transfers_and_removes`, `death_drops_held_flat_damage`,
-  `damage_row_outside_admission_and_overflow_refuse_atomically`,
+  `damage_row_missing_from_the_iatt_list_is_held_and_overflow_refuses_atomically`,
   `held_flat_damage_changes_real_damage`).
 
 ## Mana-regeneration family (`AIrm`, Item Mana Regeneration): implemented and tested
@@ -207,7 +210,7 @@ diagnostic instead of applying a silent wrong stat.
   reviewed immediate-class layout and base shape as the `Arel` window. `Rules::read` decodes it as
   an additional class window and all registered classes must be distinct.
 - Amounts: metadata row `Imrp` (`field Data`, `slk AbilityData`, `data 1` = `DataA1`, authored
-  type `real`), whose `useSpecific` list must admit the item's ability alias. The selected source
+  type `real`). The selected source
   rows give `AIrm` `DataA1=0.5` and `AIrn` `DataA1=0.25`. The value is read at level 1 and a typed
   `real`/`unreal` W3A override with the matching data pointer wins. The editor string is the
   mana-regeneration bonus as a fraction
@@ -259,7 +262,7 @@ and keep native interaction with the unit's regeneration type explicit.
 
 The class and amount now follow the reviewed registration and `Ihpr` metadata,
 including typed level-one W3A overrides. Held rates are checked integer sums;
-negative, malformed, unadmitted and overflowing amounts refuse. Rates change
+negative, malformed and overflowing amounts refuse. Rates change
 neither current nor maximum life immediately. The existing logical-clock
 regeneration consumer applies the held contribution while alive and unpaused,
 clamps at maximum life, and derives ownership from current inventory records.
@@ -521,8 +524,8 @@ Items: Pendant of Mana (`pmna`, ability `AIbm`, `DataA1` 250).
   `round(current / old maximum * new maximum)`. `[this+0x8c]` is the same `DataA1` instance value
   `AIde` and `AIat` read. The class code has no hero test.
 - Amount: metadata row `Iman` (field `Data`, `AbilityData`, integer, `useSpecific`
-  `AImm,AImb,AIbm`), read at level 1 with the same typed W3A override rule as `Ilif`. Negative or
-  unadmitted amounts refuse.
+  `AImm,AImb,AIbm`, which omits the shipped rows `AI2m`, `AImv` and `AImz`), read at level 1 with
+  the same typed W3A override rule as `Ilif`. Negative amounts refuse.
 - Implementation: `AttributeBonus.max_mana`, summed over held items. Equip, drop, transfer, death
   cleanup and the cached-unit restore apply it through the same pool function the upgrade effect
   uses (`reprice_max_mana`), on any unit with vitals, and after the intelligence change when both
@@ -530,7 +533,7 @@ Items: Pendant of Mana (`pmna`, ability `AIbm`, `DataA1` 250).
   inferred (sequential), since a single item never carries both.
 - Tests: parser (`max_mana_points_come_from_the_admitted_iman_row`,
   `max_mana_w3a_override_wins_and_a_wrong_pointer_refuses`,
-  `negative_or_unadmitted_max_mana_refuses`,
+  `negative_max_mana_refuses_and_an_unlisted_row_is_admitted_by_class_code`,
   `max_mana_registration_requires_the_passive_base_and_a_distinct_class`); host
   (`held_max_mana_moves_the_maximum_and_rounds_the_retained_ratio`,
   `held_max_mana_applies_to_a_non_hero_and_transfers_the_pool`).
@@ -913,7 +916,7 @@ All addresses are in the reviewed image (SHA-256 `3f2ed012…`), read with `objd
   by later hits, the dispel filter, the unread-buff refusal, an ally, a summoned enemy, removal and
   death, the spell orb path and the shipped pause row).
 
-## Open held classes (decoded in part, still refused at pickup; `AIpb` below is implemented)
+## Open held classes (decoded in part, still refused at pickup; `AIpb` and `AIva` below are implemented)
 
 Each class below is registered in the reviewed image and its first-level structure is read. The
 effect is not fully decoded or its host mechanism is absent, so the pickup refuses with the reason
@@ -1010,6 +1013,75 @@ differ, an orb row without exactly one `Apo2` beside it, poison buffs of two dif
 unit, and a tick whose holder unit was removed (the client resolves a null source). The owner flag
 `0x40000000`, the target kinds of slots 83 and 84, and what dispel does to only the aggregate or
 only one stack are not decoded.
+
+### `AIva` (Mask of Death `modt`, Killmaim `klmm`): vampiric attack, implemented and tested
+
+Decoded from the reviewed image (SHA-256 `3f2ed012…`, `objdump`/`rizin`) and the shipped rows; no
+runtime capture. Observed unless marked inferred. This class is not an aura: its row has no `Area1`,
+no `BuffID1` and no duration, and the hook runs on the holder's own attack hits.
+
+- Row (shipped, `War3.mpq` and `War3x.mpq` identical): `AIva` "Vampiric attack", `levels` 1, `targs1`
+  `air,ground,enemy`, `DataA1` 0.5, nothing else set. `modt` lists `AIva`; `klmm` lists `AItx,AIva`.
+- Registration: window `0xbca120` (`push 0x11b66c4`, `push "APbo"`, `push "AIva"`, `call 0x7f6360`).
+  Constructor `0xbc7f90` (stores vtable `0xf54df0`, sets `[this+0x8c]` to 0.0 and `[this+0x90]` to 0),
+  class getter slot 7 `0xbc68e0`. Attach is slot 32 `0xbc2170`: it stores `DataA1` of the row at
+  `[this+0x8c]` (the same attach shape as the classes in the class-code table).
+- Arming (slot 77 `+0x134`, `0xbc6ad0`): called by `0x697620` at the start of every attack (`0xb1cf1a`,
+  before the weapon-type switch, so melee and missile attacks both arm). `0x697620` walks the attacker's
+  abilities by their slot 76 (`+0x130`) value from `0xb` to `0x19` and stops at the first ability whose
+  slot 77 returns nonzero; then it tries the abilities of value `0x1a`. The `AIva` slot 76 (`0xbc6ac0`)
+  is `[this+0x90] + 0xc`, so 12 for the constructor default; an orb's (`0xc9e440`) is `[this+0xa4] +
+  0x12`. The `AIva` slot 77 sets ability flag `0x80`, then returns 0 without arming when the ability's
+  disabled counter `[this+0x3c]` is above zero, when virtual `+0x268` of the ability is 0, or when the
+  allowed-target test `0x682450(owner, target, [this+0x4c])` reports an error; it returns 1 when the
+  owner's flag word `[owner+0x164]` lacks `0x40000000`. Unlike the orb arming (`0xc9e4a0`) it does not
+  test the attack record's flag `0x80`.
+- Hit hook (slot 92 `+0x170`, `0xbc69b0`): the damage routine `0x6677c0` (unit virtual `+0x120`) ends
+  by calling `0x6a0630(victim, record, &damage, flag)`. That fires the damage event (`0x68b2a0`, event
+  `0x80234`, which can change the amount), then, when `flag` and the record's attacker are nonzero,
+  computes `min(damage, victim life)` through virtual `+0x12c` (the life pool read at `unit+0x1a0`)
+  and calls slot 92 of every ability of the attacker (`0x67b0a0`). The life is lowered afterwards
+  (`+0x128` with the negated amount at `0x667dc4`), so the cap uses the life before the hit. The
+  ordinary attack landing passes `flag` 1 (`0xb1d04f`, `0xb1d072`); the orbs pass the record's
+  flag `0x100` (`0xc9d710`). For missile attacks the landing is the same routine, so the hook runs on
+  impact (inferred from the missile code that carries the record; not read to the end).
+- The hook returns when the ability flag `0x80` is clear (it clears the flag at once), when the target
+  test `0x682450` or the target-side veto `0x682180(victim, 0xd0142, ability)` fires, and when the
+  capped amount is not above 0. Otherwise the heal is `amount * [this+0x8c]` (`0x99ffe0`), applied
+  to the owner by `0x690770` (a loop over the owner's abilities of slot 67 value `0x44` to `0x52`
+  that can zero the amount through slot 68, then the life add `+0x128`, which clamps at maximum
+  life through `0x6bee40`), followed by `0x4705f0(owner)` (art, a presentation call, inferred). With
+  `Misc/IllusionsCanRestoreLife` equal to 0 (key at `0xf2ff6c`, read at `0xbc6a6a`; 0 in `Custom_V0` and
+  `Custom_V1`, 1 in `Melee_V0` and the root file) the heal is skipped when the owner or the target has
+  unit flag `0x40000000` (the illusion flag is inferred from the key name).
+- Target-side veto `0x682180`: `0x682210` and `0x6822e0` read the target's own flags and its immunity
+  counters `[unit+0x260]` and `[unit+0x264]` against virtuals of the incoming ability. For `AIva` the
+  deciding virtual is slot 126 (`+0x1f8`, `0xbc6bf0`), which returns `Misc/MagicImmunesResistLeech` (key
+  at `0xf55ebc`; 1 in `Custom_V0` and `Melee_V0`, 0 in `Custom_V1` and the root file). With the key
+  0 no immunity veto applies. The remaining part scans the target's abilities through virtual `+0x26c`
+  (slot 155). Of the 440 vtables with the default slot (`0x46ad80`, returns 0), 13 override it, named
+  here by the class code their slot 7 returns: `Bplg` (`0xb9b870`, always `0xdd`), `Aloc` (`0xc6acd0`,
+  always `0x36`), `BNto` (`0xc7de40`, always `0x5c`), `BNsl` (`0xc97440`, always `0x36`), and under
+  conditions on virtuals of the incoming ability `Buns` (`0xbbbe10`), `Agho` (`0xbf2ac0`), `Bphx`
+  (`0xc0d690`), `Bcyc`, `Bcy2` and `Btsp` (`0xc38cd0`), `Bfrz` (`0xc58520`), `Bliq` (`0xc58f40`) and
+  `BUim` (`0xc69020`). Whether a target carrying one of those vetoes the heal is not modelled.
+
+Recreation: `Rules::with_life_steal` reads the class from the window `0xbca120` and
+`with_life_steal_misc` reads `Misc/IllusionsCanRestoreLife` and `Misc/MagicImmunesResistLeech`;
+`held_attributes` admits the row by class code and returns `AttributeBonus.life_steal`
+(`LifeSteal { fraction, targets, illusions_restore }`). The combat step calls `life_steal_hit`
+(`orb_host.rs`) before an instant hit lands and at a missile's impact: the holder gains
+`min(damage, target life) * fraction`, capped at its maximum life, when the target's owner is hostile
+to the holder, the target class (structure, air, ground; `organic` as for orbs) is in the row's
+`targs1`, and no illusion blocks it under the key. Refused: a map-modified row, a nonfinite or
+negative `DataA1`, a `targs1` without `enemy` (the ally case is not decoded), two `AIva` on one
+holder or in one item, an `AIva` together with an orb on one holder (the arming order against an
+orb's `[+0xa4] + 0x12` is not decoded), a rule set that did not give the `Misc` keys, and a rule set
+with `Misc/MagicImmunesResistLeech` nonzero (the immunity counter `[unit+0x264]` has no recreation
+state). Not modelled: the ability disabled counter and slot 77's virtual `+0x268`, the target-side
+vetoes of the 13 classes above, the heal-modifier loop of `0x690770`, and the arming order between
+several armed abilities. Tests: `inventory_orb_tests.rs` (`life_steal_*`) and
+`inventory_life_steal_host_tests.rs`.
 
 ### `AIlb` (Orb of Lightning old, `olig` with `AIlp`): implemented
 
@@ -1263,10 +1335,9 @@ Aura base mechanics (observed, labelled where inferred):
 
 Not decoded, so `AUau` stays refused (`UNMODELED_PASSIVE_CLASSES`):
 
-- When the range registration fires `0xd01c7` (on entry only, or at each interval for every unit in
-  range) and what its flag bit 2 changes; the aura and buff code read no duration (`Dur1`, `HeroDur1` are 0),
-  and no path that removes a `BUau` buff when its unit leaves the area was found, so the buff lifetime
-  and removal are open.
+- Whether the range registration fires `0xd01c7` again for a unit that stays in range, and what its
+  flag bit 2 changes (set by the 2.0 s event `0xd01c1` through `0x803840`, cleared by a consumer not
+  found). See "Aura buff lifetime" below.
 - The body of the allowed-target test `0x6adb90` and the stacking test `0x682180`/`0x682210`/`0x6822e0`
   against the hero `AUau` (the item text says the two do not stack).
 - The target virtual `+0x130` used by the percent mode.
@@ -1274,9 +1345,58 @@ Not decoded, so `AUau` stays refused (`UNMODELED_PASSIVE_CLASSES`):
 Recreation consequence: an aura host needs the removal and lifetime rule; none is built, because the rule
 is not decoded.
 
-### Damage admission by class code
+#### Aura buff lifetime (decoded 2026-11-11, observed in the image)
 
-The `AIat` attach `0xbc2a20` reads `DataA1` of any ability whose class code is `AIat` and does not
-consult `Iatt.useSpecific`. That list omits the shipped `AItx` (`AttackBonus +20`, `DataA1` 20), so
-the damage branch admits by class code alone; the column and the W3A override pointer still come
-from `Iatt`.
+The `BUau` buff ends by a timer, not by a leave event, and no read of `Dur1` or `HeroDur1` is involved.
+
+- Creation: slot 214 (`0xc65000`) builds the buff and calls buff virtual `+0x374` (`0xc647d0`), which
+  calls `0x6f2aa0`. That converts the integer 4 to the float 4.0 (`0x9a1620`) and calls `0x6f6820`,
+  which, for a duration above 0, sets buff flag `0x80` and calls virtual `+0x354` (`0x6f6bd0`). That
+  starts the buff's timer (`0x7fbf80`) with event `0xd01c4` and the duration 4.0.
+- Expiry: the base event handler `0x6f6cc0` answers `0xd01c4` with `0x6d8530(owner, buff)`, which takes
+  the buff out of the unit's ability list (`unit+0x3e8`) and runs its end slot, which for `BUau` is slot
+  209 (`0xc64a20`: remove the speed half, then the regeneration half).
+- Refresh: slot 213 (`0xc64fb0`) on an existing buff calls `+0x37c` (`0xc64860`). Unless the stored
+  `DataA` and `DataB` both exceed the new values by more than the tolerance at `0x10db054`, it calls
+  `+0x32c` and `+0x354` again with 4.0, restarting the timer; it re-applies a half only when its
+  value changed. A weaker source therefore cannot refresh a stronger buff, and an equal one does.
+- Ability stop: slot 56 (`0xb8fcc0`) stops the 2.0 s timer, calls virtual `+0x310(1)` (`0x6f7420`, which
+  disposes the ability's effect objects at `+0x74`, not buffs) and releases the range registration. It
+  removes no buff, so a buff outlives its source by at most 4.0 s.
+- Slot 199 (`0xc64a40`) removes both halves at once and schedules event `0xd01c1` on the buff after
+  `0.1` s (`0x10db078`), whose handler (slot 3, `0xc64a90`) applies them again.
+
+What stays open: the aura needs a refresh every 2 s or faster to keep the buff alive for a unit that
+stays in range, since the buff lasts 4.0 s. The ability's own 2.0 s timer refreshes only the owner
+(`0xb90c10(this, owner)`). Whether the range registration repeats `0xd01c7` for units that stay in
+range (the 0.5 s argument at `0x8bc260`, and flag bit 2 of the registration object at `+0x54`, set by
+`0x803840`) was not decoded: the JASS range event, which shares the registration class, was observed
+to fire on entry only (`script-unit-world.md`), and the consumer of bit 2 was not found. Until that is
+read, an aura host would guess the refresh cadence, so `AUau` stays refused.
+
+### Held classes are admitted by class code, not by `useSpecific`
+
+Every passive held class reads its amount from the ability row it is attached to, by the row's
+class code, and never consults `AbilityMetaData.slk` `useSpecific` (an editor list). The attach
+routines (virtual slot 32, `+0x80`) each format `"%s%d"` with the field-name string at `0x10dce1c`
+(`DataA`, then `0x10dce20` `DataB` and `0x10dce24` `DataC`) and level 1, and read that cell of
+the row they were handed through `0x6b06a0`:
+
+| Class | Attach | Reads |
+|---|---|---|
+| `AIat` (damage) | `0xbc2a20` | `DataA` |
+| `AIas` (attack speed) | `0xbc3310` | `DataA` |
+| `AIde` (armor) | `0xbc3b40` | `DataA` |
+| `AIab` (attributes) | `0xbc43b0` | `DataA`, `DataB`, `DataC` |
+| `AIml` (maximum life) | `0xbc7320` | `DataA` |
+| `AImm` (maximum mana) | `0xbc75f0` | `DataA` |
+| `Arel`, `AIrm` (regeneration, shared base attach) | `0xbbf870` | `DataA` |
+| `AIsm` (powerup) | `0xbc5340` | `DataA`, `DataB`, `DataC` |
+| `AIhe` (healing, usable) | `0xbed680` | `DataA` |
+| `AIva` (vampiric attack) | `0xbc2170` | `DataA` |
+
+So the held-item branches of `held_attributes`, the powerup path and the healing path admit a row
+by its class code. The shipped rows the lists omit (`AItx`, `AId0`, `AId7`, `AId8`, `AIx3`, `AIx4`,
+`AIlz`, `AI2m`, `AImv`, `AImz`) are held like the listed ones. The metadata rows stay as the
+source of the `Data` column and of the W3A override pointer; the alias lists are not read.
+Observed in the image; not observed at runtime.

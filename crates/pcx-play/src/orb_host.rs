@@ -26,7 +26,8 @@ use super::combat::Weapon;
 use super::unit_buff::{ActiveBuff, BuffTraits};
 use super::{Error, Failure, ObjectHost};
 use crate::inventory_powerup::{
-    BlackArrow, Orb, OrbKind, ProcCounters, ProcKind, SpellOrb, WrappedAbility, WrappedTargets,
+    BlackArrow, Orb, OrbKind, OrbTargets, ProcCounters, ProcKind, SpellOrb, WrappedAbility,
+    WrappedTargets,
 };
 use pcx_script::HandleId;
 use pcx_sim::world::Definition;
@@ -141,7 +142,7 @@ impl ObjectHost {
         let Some(orb) = self.unit_hero_bonus(source)?.orb else {
             return Ok(None);
         };
-        let covered = self.orb_covers(&orb, &self.executed_unit(target)?.definition)?;
+        let covered = self.targets_cover(&orb.targets, &self.executed_unit(target)?.definition)?;
         Ok(covered.then_some(orb))
     }
 
@@ -167,22 +168,56 @@ impl ObjectHost {
             .unwrap_or(first))
     }
 
-    /// Whether the orb row's `targs1` lists the unit class of `victim`: structure, air (a
+    /// Whether a row's `targs1` classes list the unit class of `victim`: structure, air (a
     /// `movetp` of `fly`) or ground.
-    fn orb_covers(&self, orb: &Orb, victim: &Definition) -> Result<bool, Error> {
+    fn targets_cover(&self, targets: &OrbTargets, victim: &Definition) -> Result<bool, Error> {
         let structure = super::unit_types::structure(victim).map_err(|e| self.orb_error(e))?;
         let class = if structure {
-            orb.targets.structure
+            targets.structure
         } else if super::unit_types::flying(victim) {
-            orb.targets.air
+            targets.air
         } else {
-            orb.targets.ground
+            targets.ground
         };
         // `organic` is the class bit a mechanical unit lacks.
-        let organic = !orb.targets.organic
+        let organic = !targets.organic
             || !super::unit_types::class(victim, "UNIT_TYPE_MECHANICAL")
                 .map_err(|e| self.orb_error(e))?;
         Ok(class && organic)
+    }
+
+    /// The vampiric attack (`AIva`) of a landed attack hit: the holder gains `DataA1` of the
+    /// damage, capped at the life the target still has, before the hit lowers that life. The hook
+    /// `0xbc69b0` runs from the damage routine `0x6677c0` for every attack hit, melee or missile,
+    /// when the target's class is in the row's `targs1` and its owner is an enemy. An illusion on
+    /// either side heals only when `Misc/IllusionsCanRestoreLife` is set. The target-side veto
+    /// `0x682180` is not modelled beyond that, and neither are the ability disabled counter and
+    /// virtual `+0x268` of the arming routine `0xbc6ad0`.
+    pub(super) fn life_steal_hit(
+        &mut self,
+        source: HandleId,
+        target: HandleId,
+        damage: f32,
+    ) -> Result<(), Error> {
+        if !damage.is_finite() || damage <= 0.0 {
+            return Ok(());
+        }
+        let Some(steal) = self.unit_hero_bonus(source)?.life_steal else {
+            return Ok(());
+        };
+        let Some(victim) = self.weapon_target(target) else {
+            return Ok(());
+        };
+        let holder = self.executed_unit(source)?;
+        if !self.hostile_owners(holder.owner, victim.owner)
+            || !self.targets_cover(&steal.targets, &victim.definition)?
+            || (!steal.illusions_restore
+                && (holder.illusion.is_some() || victim.illusion.is_some()))
+        {
+            return Ok(());
+        }
+        let remaining = victim.vitals.map_or(0.0, |vitals| vitals.life);
+        self.heal_unit(source, damage.min(remaining) * steal.fraction)
     }
 
     /// Whether the orb changes the target's armor before the attack damage is computed.
@@ -486,7 +521,7 @@ impl ObjectHost {
             if !self.hostile_owners(owner, victim.owner) {
                 continue;
             }
-            if !self.orb_covers(orb, &victim.definition)? {
+            if !self.targets_cover(&orb.targets, &victim.definition)? {
                 continue;
             }
             let defense = combat.defense;
@@ -648,7 +683,7 @@ impl ObjectHost {
             self.orbs.procs.remove(&unit);
             return Ok(());
         };
-        if !self.orb_covers(&orb, &self.executed_unit(target)?.definition)? {
+        if !self.targets_cover(&orb.targets, &self.executed_unit(target)?.definition)? {
             return Ok(());
         }
         let kind = self.proc_kind(target)?;

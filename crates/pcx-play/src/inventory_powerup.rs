@@ -63,8 +63,14 @@ const SPELL_RESISTANCE_WINDOW: u32 = 0xbc9ee0;
 const ATTACK_SPEED_WINDOW: u32 = 0xbc9cc0;
 /// Registration call for the movement-speed bonus class (source `AIms`, base `APbo`).
 const MOVE_SPEED_BONUS_WINDOW: u32 = 0xbc9fc0;
+/// Registration call for the held life-steal class (source `AIva`, base `APbo`).
+const LIFE_STEAL_WINDOW: u32 = 0xbca120;
 /// `Misc` key of `MiscGame.txt` that the speed-bonus class reads (`0xbbeee0`, `0xbbefc0`).
 const MOVE_SPEED_STACK_KEY: &str = "MoveSpeedBonusesStack";
+/// `Misc` keys the life-steal hit hook reads: `IllusionsCanRestoreLife` (`0xbc6a6a`) and
+/// `MagicImmunesResistLeech` (the `+0x1f8` getter `0xbc6bf0`, read by the veto `0x682210`).
+const LIFE_STEAL_ILLUSION_KEY: &str = "IllusionsCanRestoreLife";
+const LIFE_STEAL_MAGIC_IMMUNE_KEY: &str = "MagicImmunesResistLeech";
 /// `Misc` keys of `MiscGame.txt` that the Frost buff reads when it is applied (`0xc5b5e0`).
 const FROST_MOVE_KEY: &str = "FrostMoveSpeedDecrease";
 const FROST_ATTACK_KEY: &str = "FrostAttackSpeedDecrease";
@@ -76,9 +82,10 @@ const ORB_ENABLED_ATTACK_INDEX: i64 = 2;
 const UNMODELED_PASSIVE_CLASSES: [(&str, &str); 1] = [(
     "AUau",
     "the unholy aura applies buff BUau to units within Area1 of the holder; the buff adds \
-         DataA1 to the speed multiplier and DataB1 as a permanent life regeneration rate, but \
-         when the client fires the range events, how the buff ends after a unit leaves the \
-         area, and the stacking test against the hero aura are not decoded",
+     DataA1 to the speed multiplier and DataB1 as a permanent life regeneration rate and \
+     ends 4.0 s after its last application, but whether the range registration fires again \
+     for a unit that stays in range, and the stacking test against the hero aura, are not \
+     decoded",
 )];
 const BASE_FN_LEN: usize = 6;
 pub(crate) const REGISTER_FN: u32 = 0x7f6360;
@@ -223,13 +230,14 @@ pub struct AttributeBonus {
     /// The reincarnation an `AIrc` ability on this item grants, `None` without one. It is read per
     /// item and never aggregated: each held item is its own death handler.
     pub reincarnation: Option<Reincarnation>,
+    /// The held vampiric attack (`AIva`), `None` without one.
+    pub life_steal: Option<LifeSteal>,
 }
 
 #[derive(Clone, Debug)]
 struct Column {
     field: [u8; 4],
     data: u32,
-    aliases: Vec<String>,
 }
 
 /// A real-valued metadata column, such as the mana-regeneration fraction.
@@ -237,7 +245,6 @@ struct Column {
 struct FractionColumn {
     field: [u8; 4],
     data: u32,
-    aliases: Vec<String>,
     /// What the amount is, for refusal messages.
     label: &'static str,
 }
@@ -275,6 +282,8 @@ pub struct Rules {
     move_speed_bonus: Option<MoveSpeedBonusClass>,
     /// `AIrc` and the hero reincarnation classes, attached by `with_reincarnation`.
     reincarnation: Option<ReincarnationClasses>,
+    /// Life-steal registration, attached by `with_life_steal`.
+    life_steal: Option<LifeStealClass>,
 }
 
 /// The registered `AIms` class and whether `Misc/MoveSpeedBonusesStack` is set, attached by
@@ -284,6 +293,33 @@ pub struct Rules {
 struct MoveSpeedBonusClass {
     class: String,
     stacks: Option<bool>,
+}
+
+/// The vampiric attack of a held `AIva` item. On each armed hit the holder gains `fraction` of the
+/// damage dealt, up to the life the target had; see `passive-held-items.md`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LifeSteal {
+    /// `DataA1` of the row.
+    pub fraction: f32,
+    /// The unit classes of the row's `targs1` (the `enemy` token is required).
+    pub targets: OrbTargets,
+    /// `Misc/IllusionsCanRestoreLife`: whether an illusion on either side still heals.
+    pub illusions_restore: bool,
+}
+
+/// The registered `AIva` class and the `Misc` keys its hit hook reads, attached by
+/// `with_life_steal_misc`.
+#[derive(Clone, Debug)]
+struct LifeStealClass {
+    class: String,
+    misc: Option<LifeStealMisc>,
+}
+
+/// The `Misc` flags the life-steal hook reads.
+#[derive(Clone, Copy, Debug)]
+struct LifeStealMisc {
+    illusions_restore: bool,
+    magic_immune_veto: bool,
 }
 
 /// The registered orb classes: the shared `AIDB` base, `AIfb` (Orb of Fire, and Orb of
@@ -421,6 +457,7 @@ impl Rules {
         let spell_resistance = window(SPELL_RESISTANCE_WINDOW)?;
         let attack_speed = window(ATTACK_SPEED_WINDOW)?;
         let move_speed_bonus = window(MOVE_SPEED_BONUS_WINDOW)?;
+        let life_steal = window(LIFE_STEAL_WINDOW)?;
         let spell_orb = SpellOrbImage::read(&pe).map_err(|e| fail(&e))?;
         let reincarnation = ReincarnationImage::read(&pe).map_err(|e| fail(&e))?;
         let purge = PurgeImage::read(&pe).map_err(|e| fail(&e))?;
@@ -445,6 +482,7 @@ impl Rules {
         .and_then(|rules| rules.with_attack_speed(&attack_speed))
         .and_then(|rules| rules.with_move_speed_bonus(&move_speed_bonus))
         .and_then(|rules| rules.with_reincarnation(&reincarnation))
+        .and_then(|rules| rules.with_life_steal(&life_steal))
         .map_err(|e| fail(&e))
     }
 
@@ -528,6 +566,10 @@ impl Rules {
                 .as_ref()
                 .is_some_and(|regen| regen.class == class)
             || self.spell_resistance.as_deref() == Some(class)
+            || self
+                .life_steal
+                .as_ref()
+                .is_some_and(|steal| steal.class == class)
             || self
                 .attack_speed
                 .as_ref()
@@ -708,6 +750,45 @@ impl Rules {
             .as_mut()
             .ok_or("the stacking flag needs the speed-bonus registration")?;
         class.stacks = Some(stacks.unwrap_or(0.0) != 0.0);
+        Ok(self)
+    }
+
+    /// Attaches the held life-steal class. Its registration must name the passive base `APbo`, as
+    /// the reviewed image registers it (`0xbca120`).
+    pub(crate) fn with_life_steal(mut self, window: &[u8]) -> Result<Self, String> {
+        let (class, base) = class_from_window(window)?;
+        if base != "APbo" {
+            return Err("life-steal registration must name base APbo".into());
+        }
+        if self.life_steal.is_some() || self.is_registered(&class) {
+            return Err("life-steal registration must name a distinct class".into());
+        }
+        self.life_steal = Some(LifeStealClass { class, misc: None });
+        Ok(self)
+    }
+
+    /// Reads the `Misc` keys of the life-steal hit hook (`MiscGame.txt` first, then the map's
+    /// profile); a missing key reads as 0, the default the client passes. A set
+    /// `MagicImmunesResistLeech` makes the pickup refuse: the veto it enables tests the victim's
+    /// immunity counter (`[unit+0x264]`), which no recreation state maps to.
+    pub(crate) fn with_life_steal_misc(
+        mut self,
+        profiles: &[(&str, &[u8])],
+        max_bytes: usize,
+    ) -> Result<Self, String> {
+        let ([illusions, magic_immune], _) = pcx_objects::editor::misc::misc_scalars(
+            profiles,
+            [LIFE_STEAL_ILLUSION_KEY, LIFE_STEAL_MAGIC_IMMUNE_KEY],
+            max_bytes,
+        )?;
+        let class = self
+            .life_steal
+            .as_mut()
+            .ok_or("the life-steal keys need the life-steal registration")?;
+        class.misc = Some(LifeStealMisc {
+            illusions_restore: illusions.unwrap_or(0.0) != 0.0,
+            magic_immune_veto: magic_immune.unwrap_or(0.0) != 0.0,
+        });
         Ok(self)
     }
 
@@ -905,9 +986,6 @@ impl Rules {
             [] => Ok(None),
             [alias] if aliases.len() == 1 => {
                 self.single_level(alias)?;
-                if !heal.amount.aliases.iter().any(|a| a == alias) {
-                    return Err(format!("healing metadata does not admit ability {alias}"));
-                }
                 let amount = self.amount(alias, &heal.amount)?;
                 if amount < 0 {
                     return Err(format!("negative healing amount on {}", item.rawcode()));
@@ -972,7 +1050,7 @@ impl Rules {
         windows: [&[u8]; 4],
     ) -> Result<Self, String> {
         let [powerup_window, passive_window, armor_window, damage_window] = windows;
-        let (powerup_class, powerup_base) = class_from_window(powerup_window)?;
+        let (powerup_class, _) = class_from_window(powerup_window)?;
         // The passive, armor and damage bases (`APbo`) are native classes with no ability row, so
         // they are not checked against metadata.
         let (passive_class, _) = class_from_window(passive_window)?;
@@ -988,9 +1066,6 @@ impl Rules {
             return Err("attribute registrations must name distinct classes".into());
         }
         let strength = column(&tables, b"Istr")?;
-        if !strength.aliases.contains(&powerup_base) {
-            return Err("strength metadata does not admit the registered base class".into());
-        }
         let agility = column(&tables, b"Iagi")?;
         let intelligence = column(&tables, b"Iint")?;
         let armor = column(&tables, b"Idef")?;
@@ -1019,6 +1094,7 @@ impl Rules {
             spell_resistance: None,
             move_speed_bonus: None,
             reincarnation: None,
+            life_steal: None,
         })
     }
 
@@ -1046,7 +1122,6 @@ impl Rules {
             return Err("powerup ability class does not match the client registration".into());
         }
         self.single_level(alias)?;
-        self.admit(alias)?;
         let agility = self.amount(alias, &self.agility)?;
         let intelligence = self.amount(alias, &self.intelligence)?;
         if agility != 0 || intelligence != 0 {
@@ -1080,9 +1155,6 @@ impl Rules {
             let code = self.ability_code(alias)?;
             self.single_level(alias)?;
             if code == self.armor_class {
-                if !self.armor.aliases.iter().any(|a| a == alias) {
-                    return Err(format!("armor metadata does not admit ability {alias}"));
-                }
                 let points = self.amount(alias, &self.armor)?;
                 if points < 0 {
                     return Err(format!("negative armor on {}", item.rawcode()));
@@ -1109,9 +1181,6 @@ impl Rules {
             if let Some(max_life) = &self.max_life
                 && code == max_life.class
             {
-                if !max_life.amount.aliases.iter().any(|a| a == alias) {
-                    return Err(format!("max-life metadata does not admit ability {alias}"));
-                }
                 let points = self.amount(alias, &max_life.amount)?;
                 if points < 0 {
                     return Err(format!("negative max-life on {}", item.rawcode()));
@@ -1125,9 +1194,6 @@ impl Rules {
             if let Some(max_mana) = &self.max_mana
                 && code == max_mana.class
             {
-                if !max_mana.amount.aliases.iter().any(|a| a == alias) {
-                    return Err(format!("max-mana metadata does not admit ability {alias}"));
-                }
                 let points = self.amount(alias, &max_mana.amount)?;
                 if points < 0 {
                     return Err(format!("negative max-mana on {}", item.rawcode()));
@@ -1141,11 +1207,6 @@ impl Rules {
             if let Some(regen) = &self.life_regen
                 && code == regen.class
             {
-                if !regen.amount.aliases.iter().any(|a| a == alias) {
-                    return Err(format!(
-                        "life regeneration metadata does not admit ability {alias}"
-                    ));
-                }
                 let points = self.amount(alias, &regen.amount)?;
                 if points < 0 {
                     return Err(format!("negative life regeneration on {}", item.rawcode()));
@@ -1159,11 +1220,6 @@ impl Rules {
             if let Some(regen) = &self.mana_regen
                 && code == regen.class
             {
-                if !regen.amount.aliases.iter().any(|a| a == alias) {
-                    return Err(format!(
-                        "mana regeneration metadata does not admit ability {alias}"
-                    ));
-                }
                 let fraction = self.fraction(alias, &regen.amount)?;
                 if fraction < 0.0 {
                     return Err(format!("negative mana regeneration on {}", item.rawcode()));
@@ -1240,11 +1296,6 @@ impl Rules {
             if let Some(speed) = &self.attack_speed
                 && code == speed.class
             {
-                if !speed.amount.aliases.iter().any(|a| a == alias) {
-                    return Err(format!(
-                        "attack speed metadata does not admit ability {alias}"
-                    ));
-                }
                 let bonus = self.fraction(alias, &speed.amount)?;
                 let sum = held.attack_speed + bonus;
                 if !sum.is_finite() {
@@ -1274,6 +1325,37 @@ impl Rules {
                 held.reincarnation = Some(self.reincarnation_row(alias)?);
                 continue;
             }
+            if let Some(class) = &self.life_steal
+                && code == class.class
+            {
+                let Some(misc) = class.misc else {
+                    return Err(format!(
+                        "life steal {alias} reads Misc/{LIFE_STEAL_ILLUSION_KEY}, which this \
+                         rule set was not given"
+                    ));
+                };
+                if misc.magic_immune_veto {
+                    return Err(format!(
+                        "life steal {alias}: Misc/{LIFE_STEAL_MAGIC_IMMUNE_KEY} is set, so the \
+                         client vetoes it on magic immune targets through the immunity counter \
+                         at unit +0x264, which is not modelled"
+                    ));
+                }
+                if held.life_steal.is_some() {
+                    return Err(format!(
+                        "two life-steal abilities on {} are unsupported: the client arms one \
+                         per attack",
+                        item.rawcode()
+                    ));
+                }
+                let (fraction, targets) = self.life_steal_row(alias)?;
+                held.life_steal = Some(LifeSteal {
+                    fraction,
+                    targets,
+                    illusions_restore: misc.illusions_restore,
+                });
+                continue;
+            }
             if let Some(class) = &self.move_speed_bonus
                 && code == class.class
             {
@@ -1300,7 +1382,6 @@ impl Rules {
                     item.rawcode()
                 ));
             }
-            self.admit(alias)?;
             held.strength = held
                 .strength
                 .checked_add(self.amount(alias, &self.strength)?)
@@ -1567,6 +1648,28 @@ impl Rules {
         Ok((damage, 1.0 - reduction))
     }
 
+    /// An `AIva` row at the effect level: the life-steal fraction `DataA1` (the attach `0xbc2170`
+    /// reads it by class, and the hit hook `0xbc69b0` multiplies the damage by it) and the unit
+    /// classes of `targs1`. A negative or nonfinite fraction refuses, and so does a map-modified
+    /// row, because the overrides of these fields are not decoded.
+    fn life_steal_row(&self, alias: &str) -> Result<(f32, OrbTargets), String> {
+        let ability = self.effect_row(alias, "life-steal")?;
+        let cell = |name: &str| {
+            ability
+                .cell(SlkId::AbilityData, name)
+                .map_err(|e| e.to_string())
+        };
+        let fraction = match cell("DataA1")?.typed(FieldKind::Real) {
+            Ok(Value::Real(value)) if value.is_finite() && value >= 0.0 => value as f32,
+            _ => {
+                return Err(format!(
+                    "DataA1 of {alias} is not a finite nonnegative fraction"
+                ));
+            }
+        };
+        Ok((fraction, life_steal_targets(alias, cell("targs1")?.text)?))
+    }
+
     /// The flat bonus of an `AIms` row: `DataA1`. Any finite real is admitted; a negative one never
     /// wins the maximum the client takes from zero.
     fn move_speed_bonus_value(&self, alias: &str) -> Result<f32, String> {
@@ -1666,16 +1769,6 @@ impl Rules {
             return Err(format!(
                 "multi-level attribute ability {alias} is unsupported"
             ));
-        }
-        Ok(())
-    }
-
-    /// Every attribute column must admit the ability alias through its `useSpecific` list.
-    fn admit(&self, alias: &str) -> Result<(), String> {
-        for column in [&self.strength, &self.agility, &self.intelligence] {
-            if !column.aliases.iter().any(|a| a == alias) {
-                return Err(format!("attribute metadata does not admit ability {alias}"));
-            }
         }
         Ok(())
     }
@@ -1860,6 +1953,29 @@ fn orb_targets(alias: &str, targs: &str) -> Result<OrbTargets, String> {
     }
 }
 
+/// Unit classes of a life-steal row's `targs1`: the class tokens an orb reads, plus the `enemy`
+/// token, which the hook's allowed-target test (`0x682450`, over the row's own `[this+0x4c]`
+/// word) needs because the row authors it. A row without `enemy` refuses, as the ally case is
+/// not decoded.
+fn life_steal_targets(alias: &str, targs: &str) -> Result<OrbTargets, String> {
+    let mut enemy = false;
+    let classes: Vec<&str> = targs
+        .split(',')
+        .map(str::trim)
+        .filter(|token| {
+            let is_enemy = token.eq_ignore_ascii_case("enemy");
+            enemy |= is_enemy;
+            !is_enemy
+        })
+        .collect();
+    if !enemy {
+        return Err(format!(
+            "life steal {alias} targs1 does not list enemy, which is the only decoded case"
+        ));
+    }
+    orb_targets(alias, &classes.join(",")).map_err(|e| e.replacen("orb ", "life steal ", 1))
+}
+
 /// Four alphanumeric characters from a little-endian immediate.
 fn fourcc_le(bytes: &[u8]) -> Result<String, String> {
     let fail = || "unsupported registration immediate".to_string();
@@ -1891,15 +2007,7 @@ fn column(tables: &DefaultTables, id: &[u8; 4]) -> Result<Column, String> {
     if !(1..=DATA_COLUMNS).contains(&data) {
         return Err(format!("{name} data index outside column alphabet"));
     }
-    let aliases = text("useSpecific")?
-        .split(',')
-        .map(|a| a.trim().to_owned())
-        .collect();
-    Ok(Column {
-        field: *id,
-        data,
-        aliases,
-    })
+    Ok(Column { field: *id, data })
 }
 
 /// A real-valued metadata column: the same `Data` mapping as [`column`], with a real or unreal
@@ -1931,14 +2039,9 @@ fn fraction_column(
     if !(1..=DATA_COLUMNS).contains(&data) {
         return Err(format!("{name} data index outside column alphabet"));
     }
-    let aliases = text("useSpecific")?
-        .split(',')
-        .map(|a| a.trim().to_owned())
-        .collect();
     Ok(FractionColumn {
         field: *id,
         data,
-        aliases,
         label,
     })
 }

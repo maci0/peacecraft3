@@ -105,6 +105,8 @@ const KILJAEDEN_DAMAGE: f32 = 6.0;
 const SPELLS_VS_MEDIUM: f32 = 0.5;
 /// `DataA1` of the fixture boots, `AIms` row `AIms`.
 const SPEED_BONUS: &str = "60";
+/// `DataA1` of the fixture vampiric attack, `AIva` row `AIva`.
+const LIFE_STEAL_FRACTION: &str = "0.5";
 
 /// Chance of the stock Orb of Darkness row and the fixture's never-procs row.
 const ALWAYS: &str = "100";
@@ -264,6 +266,24 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
         vec![
             "AIm2", "AIms", "1", "20", "0", "0", "0", "-", "-", "-", "", "-", "0", "0", "",
         ],
+        // Vampiric attack: `DataA1` is the life-steal fraction, `targs1` as shipped.
+        vec![
+            "AIva",
+            "AIva",
+            "1",
+            LIFE_STEAL_FRACTION,
+            "0",
+            "0",
+            "0",
+            "0",
+            "-",
+            "-",
+            "air,ground,enemy",
+            "-",
+            "0",
+            "0",
+            "",
+        ],
         vec![
             "AIfb", "AIfb", "1", "5", "0", "0", "0", "2", "-", "-", orb_targs, ORB_AREA, "0", "0",
             "",
@@ -413,6 +433,9 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["plsm", "AIl2", "0", "0", "0", "-"],
             &["plmx", "AIl3", "0", "0", "0", "-"],
             &["plon", "AIl4", "0", "0", "0", "-"],
+            &["mskd", "AIva", "0", "0", "0", "-"],
+            &["msk2", "AIva,AIva", "0", "0", "0", "-"],
+            &["mskb", "AIva,AIfb", "0", "0", "0", "-"],
             &["ofir", "AIfb", "0", "0", "0", "-"],
             &["ogld", "AIgd", "0", "0", "0", "-"],
             &["ocor", "AIcb", "0", "0", "0", "-"],
@@ -1146,6 +1169,16 @@ fn open_fixture(
     .with_attack_speed(&registration("AIas", "APbo"))
     .unwrap()
     .with_move_speed_bonus(&registration("AIms", "APbo"))
+    .unwrap()
+    .with_life_steal(&registration("AIva", "APbo"))
+    .unwrap()
+    .with_life_steal_misc(
+        &[(
+            "synthetic MiscGame",
+            b"[Misc]\nIllusionsCanRestoreLife=0\n".as_slice(),
+        )],
+        4096,
+    )
     .unwrap()
     .with_move_speed_stacking(
         &[(
@@ -2269,24 +2302,17 @@ fn death_drops_held_armor_and_removes_its_points() {
 }
 
 #[test]
-fn armor_row_outside_the_admission_refuses_atomically() {
+fn armor_row_missing_from_the_idef_list_is_held_by_its_class_code() {
     let Fixture { mut h, hero, .. } = open();
-    let before = strength_and_agility(&mut h, hero);
-    let refused = item(&mut h, b"parx", 0.0);
-    let err = add(&mut h, hero, refused).unwrap_err();
-    assert!(
-        err.contains("armor metadata does not admit ability AId8"),
-        "{err}"
-    );
+    let unlisted = item(&mut h, b"parx", 0.0);
+    assert_eq!(add(&mut h, hero, unlisted), Ok(Value::Bool(true)));
+    assert_eq!(h.held_armor_bonus(hero).unwrap(), 8);
+    h.native(
+        "UnitRemoveItem",
+        &[Value::Handle(hero), Value::Handle(unlisted)],
+    )
+    .unwrap();
     assert_eq!(h.held_armor_bonus(hero).unwrap(), 0);
-    assert_eq!(strength_and_agility(&mut h, hero), before);
-    assert_eq!(
-        h.native(
-            "UnitHasItem",
-            &[Value::Handle(hero), Value::Handle(refused)]
-        ),
-        Ok(Value::Bool(false))
-    );
 }
 
 #[test]

@@ -79,6 +79,50 @@ const MOVE_ROWS: [Row; 3] = [
     ["AIm2", "AIms", "20", "0", "-", "-", "0", "0", "", ""],
     ["AIm3", "AIms", "-30", "0", "-", "-", "0", "0", "", ""],
 ];
+/// Vampiric attack rows: the shipped shape, one without `enemy`, one with a negative fraction.
+const LIFE_STEAL_ROWS: [Row; 3] = [
+    [
+        "AIva",
+        "AIva",
+        "0.5",
+        "-",
+        "-",
+        "-",
+        "0",
+        "0",
+        "",
+        "air,ground,enemy",
+    ],
+    [
+        "AIvn",
+        "AIva",
+        "0.5",
+        "-",
+        "-",
+        "-",
+        "0",
+        "0",
+        "",
+        "air,ground",
+    ],
+    [
+        "AIvz",
+        "AIva",
+        "-0.5",
+        "-",
+        "-",
+        "-",
+        "0",
+        "0",
+        "",
+        "air,ground,enemy",
+    ],
+];
+/// The `Misc` section the life-steal hook reads, and one that sets the magic-immune veto.
+const LIFE_STEAL_PROFILES: &[(&str, &[u8])] =
+    &[("synthetic MiscGame", b"[Misc]\nIllusionsCanRestoreLife=1\n")];
+const MAGIC_IMMUNE_PROFILES: &[(&str, &[u8])] =
+    &[("synthetic MiscGame", b"[Misc]\nMagicImmunesResistLeech=1\n")];
 /// The `Misc` section the speed-bonus class reads.
 const MOVE_PROFILES: &[(&str, &[u8])] =
     &[("synthetic MiscGame", b"[Misc]\nMoveSpeedBonusesStack=0\n")];
@@ -96,6 +140,7 @@ fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rul
         .copied()
         .chain([frost, spell])
         .chain(MOVE_ROWS)
+        .chain(LIFE_STEAL_ROWS)
         .collect();
     let rows = rows.as_slice();
     let items = sylk(
@@ -119,6 +164,10 @@ fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rul
             &["bspd", "AIms", "0", "0", "0", "-"],
             &["bsp2", "AIms,AIm2", "0", "0", "0", "-"],
             &["bsp3", "AIm3", "0", "0", "0", "-"],
+            &["mskd", "AIva", "0", "0", "0", "-"],
+            &["msk2", "AIva,AIva", "0", "0", "0", "-"],
+            &["mskn", "AIvn", "0", "0", "0", "-"],
+            &["mskz", "AIvz", "0", "0", "0", "-"],
         ],
     );
     let ability_rows: Vec<Vec<&str>> = rows
@@ -183,6 +232,10 @@ fn orb_rules_full(rows: &[Row], frost: Row, spell: Row, overlay: Overlay) -> Rul
         .with_move_speed_bonus(&window("AIms", "APbo"))
         .unwrap()
         .with_move_speed_stacking(MOVE_PROFILES, 4096)
+        .unwrap()
+        .with_life_steal(&window("AIva", "APbo"))
+        .unwrap()
+        .with_life_steal_misc(LIFE_STEAL_PROFILES, 4096)
         .unwrap()
 }
 
@@ -728,5 +781,93 @@ fn speed_bonus_registration_must_name_the_passive_base() {
         .unwrap();
     assert!(err.contains("distinct"), "{err}");
 }
+#[test]
+fn life_steal_reads_its_fraction_and_target_classes_from_its_row() {
+    let held = orb_rules()
+        .held_attributes(&catalog_item("mskd"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        held.life_steal,
+        Some(LifeSteal {
+            fraction: 0.5,
+            targets: OrbTargets {
+                ground: true,
+                air: true,
+                structure: false,
+                organic: false
+            },
+            illusions_restore: true,
+        })
+    );
+    assert_eq!(held.damage, 0);
+    assert_eq!(held.orb, None);
+}
+
+#[test]
+fn life_steal_rows_outside_the_decoded_shape_refuse() {
+    let rules = orb_rules();
+    let refused = |raw: &str| rules.held_attributes(&catalog_item(raw)).unwrap_err();
+    assert!(
+        refused("msk2").contains("two life-steal"),
+        "{}",
+        refused("msk2")
+    );
+    assert!(refused("mskn").contains("does not list enemy"));
+    assert!(refused("mskz").contains("nonnegative"));
+    let mut overlay = Overlay::default();
+    overlay
+        .mods
+        .insert("AIva".into(), vec![int_mod(b"Idam", Some([1, 1]), 9)]);
+    let err = orb_rules_with(&ORB_ROWS, overlay)
+        .held_attributes(&catalog_item("mskd"))
+        .unwrap_err();
+    assert!(err.contains("map-modified"), "{err}");
+}
+
+#[test]
+fn life_steal_needs_its_misc_keys_and_refuses_the_magic_immune_veto() {
+    let tables = Arc::clone(&orb_rules().tables);
+    let plain = || {
+        plain_rules(Arc::clone(&tables), Overlay::default())
+            .with_life_steal(&window("AIva", "APbo"))
+            .unwrap()
+    };
+    let err = plain().held_attributes(&catalog_item("mskd")).unwrap_err();
+    assert!(err.contains("IllusionsCanRestoreLife"), "{err}");
+    let veto = plain()
+        .with_life_steal_misc(MAGIC_IMMUNE_PROFILES, 4096)
+        .unwrap();
+    let err = veto.held_attributes(&catalog_item("mskd")).unwrap_err();
+    assert!(err.contains("MagicImmunesResistLeech"), "{err}");
+    let unset = plain().with_life_steal_misc(&[], 4096).unwrap();
+    let held = unset
+        .held_attributes(&catalog_item("mskd"))
+        .unwrap()
+        .unwrap();
+    assert!(!held.life_steal.unwrap().illusions_restore);
+}
+
+#[test]
+fn life_steal_registration_must_name_the_passive_base_and_a_distinct_class() {
+    let plain = || plain_rules(Arc::clone(&orb_rules().tables), Overlay::default());
+    assert!(plain().with_life_steal(&window("AIva", "APbo")).is_ok());
+    let err = plain()
+        .with_life_steal(&window("AIva", "AIat"))
+        .err()
+        .unwrap();
+    assert!(err.contains("APbo"), "{err}");
+    let err = plain()
+        .with_life_steal(&window("AIab", "APbo"))
+        .err()
+        .unwrap();
+    assert!(err.contains("distinct"), "{err}");
+    let err = plain()
+        .with_life_steal_misc(LIFE_STEAL_PROFILES, 4096)
+        .err()
+        .unwrap();
+    assert!(err.contains("registration"), "{err}");
+}
+
 #[path = "inventory_venom_tests.rs"]
 mod venom;

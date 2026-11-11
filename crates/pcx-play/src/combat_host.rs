@@ -1947,8 +1947,12 @@ impl ObjectHost {
         self.combat.as_mut().expect("combat").missiles = pending;
         let mut due = due.into_iter();
         while let Some(mut missile) = due.next() {
-            if let Err(error) = self.orb_impact(&mut missile) {
-                // The orb effect may have partly run, so this missile is not replayed.
+            let impact = self.orb_impact(&mut missile).and_then(|()| {
+                let damage = self.mirror_damage(missile.source, missile.target, missile.damage)?;
+                self.life_steal_hit(missile.source, missile.target, damage)
+            });
+            if let Err(error) = impact {
+                // The orb or life-steal effect may have partly run, so this missile is not replayed.
                 let combat = self.combat.as_mut().expect("combat");
                 let mut restore = Vec::with_capacity(due.len() + combat.missiles.len());
                 restore.extend(due);
@@ -2337,6 +2341,10 @@ impl ObjectHost {
                             if let Some(orb) = &orb
                                 && let Err(error) = self.orb_splash(orb, unit, swung)
                             {
+                                self.restore_script_random_primary(checkpoint);
+                                return Err(error);
+                            }
+                            if let Err(error) = self.life_steal_hit(unit, swung, damage) {
                                 self.restore_script_random_primary(checkpoint);
                                 return Err(error);
                             }

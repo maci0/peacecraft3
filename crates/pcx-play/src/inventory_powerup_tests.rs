@@ -394,13 +394,6 @@ fn unsupported_item_shapes_refuse_atomically() {
     );
     assert!(
         refuse(Tome {
-            use_specific: "AIxm",
-            ..Tome::default()
-        })
-        .is_err()
-    );
-    assert!(
-        refuse(Tome {
             amounts: ["0", "0", "-1"],
             ..Tome::default()
         })
@@ -767,7 +760,7 @@ fn local_campaign_item_placement_census() {
     assert_eq!(outcomes.values().sum::<usize>(), placements);
 }
 
-/// Armor fixture: `parm` holds `AId1`, admitted by `Idef`; `parx` holds `AId8`, which is not.
+/// Armor fixture: `parm` holds `AId1`, admitted by `Idef`; `parx` holds `AId8`, which is not listed (admitted by its class code).
 fn armor_rules(amount: &str) -> Rules {
     let items = sylk(
         &[
@@ -863,19 +856,18 @@ fn armor_points_come_from_the_admitted_source_row() {
             move_speed_bonus: None,
             reincarnation: None,
             move_speed_refresh_skipped: false,
+            life_steal: None,
         }
     );
 }
 
 #[test]
-fn armor_row_outside_the_idef_admission_refuses() {
-    let err = armor_rules("3")
+fn armor_row_missing_from_the_idef_list_is_admitted_by_its_class_code() {
+    let held = armor_rules("3")
         .held_attributes(&catalog_item("parx"))
-        .unwrap_err();
-    assert!(
-        err.contains("armor metadata does not admit ability AId8"),
-        "{err}"
-    );
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.armor, 8);
 }
 
 #[test]
@@ -886,7 +878,7 @@ fn negative_authored_armor_refuses() {
     assert!(err.contains("negative armor"), "{err}");
 }
 
-/// Maximum-life fixture: `plif` holds `AIml` admitted by `Ilif`; `plx` holds `AIl9`, which is not.
+/// Maximum-life fixture: `plif` holds `AIml` admitted by `Ilif`; `plxx` holds `AIl9`, which is not listed (admitted by its class code).
 /// `Ilif` maps to Data column 2, so the shipped DataA value is a decoy; `index` is unrelated.
 fn max_life_rules_with(amount: &str, overlay: Overlay) -> Rules {
     let items = sylk(
@@ -907,7 +899,7 @@ fn max_life_rules_with(amount: &str, overlay: Overlay) -> Rules {
         &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
         &[
             &["AIl1", "AIml", "1", "11", amount, "0"],
-            &["AIl9", "AIml", "1", "9", "0", "0"],
+            &["AIl9", "AIml", "1", "9", "5", "0"],
         ],
     );
     let meta = sylk(
@@ -1015,14 +1007,12 @@ fn negative_authored_max_life_refuses() {
 }
 
 #[test]
-fn max_life_row_outside_the_ilif_admission_refuses() {
-    let err = max_life_rules("37")
+fn max_life_row_missing_from_the_ilif_list_is_admitted_by_its_class_code() {
+    let held = max_life_rules("37")
         .held_attributes(&catalog_item("plxx"))
-        .unwrap_err();
-    assert!(
-        err.contains("max-life metadata does not admit ability AIl9"),
-        "{err}"
-    );
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_life, 5);
 }
 
 #[test]
@@ -1040,7 +1030,7 @@ fn max_life_registration_requires_the_passive_base_and_a_distinct_class() {
 }
 
 /// Maximum-mana fixture: `pmna` holds `AIbm` (code `AImm`) admitted by `Iman`; `pmnx` holds
-/// `AIbx`, which is not. `Iman` maps to Data column 2, so DataA is a decoy.
+/// `AIbx`, which is not listed (admitted by its class code). `Iman` maps to Data column 2, so DataA is a decoy.
 fn max_mana_rules_with(amount: &str, overlay: Overlay) -> Rules {
     let items = sylk(
         &[
@@ -1060,7 +1050,7 @@ fn max_mana_rules_with(amount: &str, overlay: Overlay) -> Rules {
         &["alias", "code", "levels", "DataA1", "DataB1", "DataC1"],
         &[
             &["AIbm", "AImm", "1", "11", amount, "0"],
-            &["AIbx", "AImm", "1", "9", "0", "0"],
+            &["AIbx", "AImm", "1", "9", "7", "0"],
         ],
     );
     let meta = sylk(
@@ -1151,18 +1141,16 @@ fn max_mana_w3a_override_wins_and_a_wrong_pointer_refuses() {
 }
 
 #[test]
-fn negative_or_unadmitted_max_mana_refuses() {
+fn negative_max_mana_refuses_and_an_unlisted_row_is_admitted_by_class_code() {
     let err = max_mana_rules_with("-5", Overlay::default())
         .held_attributes(&catalog_item("pmna"))
         .unwrap_err();
     assert!(err.contains("negative max-mana"), "{err}");
-    let err = max_mana_rules_with("250", Overlay::default())
+    let held = max_mana_rules_with("250", Overlay::default())
         .held_attributes(&catalog_item("pmnx"))
-        .unwrap_err();
-    assert!(
-        err.contains("max-mana metadata does not admit ability AIbx"),
-        "{err}"
-    );
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.max_mana, 7);
 }
 
 #[test]
@@ -1391,14 +1379,15 @@ fn malformed_and_overflowing_attack_speed_refuse() {
         .held_attributes(&catalog_item("tstr"))
         .unwrap_err();
     assert!(err.contains("passive attack speed overflows"), "{err}");
-    let unadmitted = Tome {
+    let unlisted = Tome {
         use_specific: "AIas,AIxm",
         ..speed_tome("0.15")
     };
-    let err = speed_rules(&unadmitted, Overlay::default())
+    let held = speed_rules(&unlisted, Overlay::default())
         .held_attributes(&catalog_item("tstr"))
-        .unwrap_err();
-    assert!(err.contains("does not admit ability AIsx"), "{err}");
+        .unwrap()
+        .unwrap();
+    assert!((held.attack_speed - 0.15).abs() < 1e-6);
 }
 
 #[test]
@@ -1443,6 +1432,7 @@ fn flat_damage_comes_from_the_admitted_iatt_column() {
             move_speed_bonus: None,
             reincarnation: None,
             move_speed_refresh_skipped: false,
+            life_steal: None,
         }
     );
 }
@@ -1712,12 +1702,11 @@ fn life_regeneration_follows_registered_class_metadata_and_map_override() {
             .life_regen,
         19
     );
-    assert!(
-        rules
-            .held_attributes(&catalog_item("plix"))
-            .unwrap_err()
-            .contains("metadata does not admit")
-    );
+    let unlisted = rules
+        .held_attributes(&catalog_item("plix"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(unlisted.life_regen, 7);
 }
 
 #[test]

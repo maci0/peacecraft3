@@ -458,6 +458,7 @@ impl ObjectHost {
             move_speed_bonus: None,
             move_speed_refresh_skipped: false,
             reincarnation: None,
+            life_steal: None,
         };
         for (item, _) in self
             .executed_items()
@@ -526,6 +527,15 @@ impl ObjectHost {
                     ));
                 }
                 bonus.orb = Some(orb);
+            }
+            if let Some(steal) = passive.life_steal {
+                if bonus.life_steal.is_some() {
+                    return Err(self.inner.error(
+                        "inventory",
+                        Failure::UnitActivity("two held life steals are unsupported".into()),
+                    ));
+                }
+                bonus.life_steal = Some(steal);
             }
         }
         Ok(bonus)
@@ -1135,6 +1145,20 @@ impl ObjectHost {
                 Failure::UnitActivity(
                     "a second orb on one holder is unsupported: the order in which several orbs \
                      fire on one hit is not decoded"
+                        .into(),
+                ),
+            ));
+        }
+        if (held.life_steal.is_some() && passive.life_steal.is_some())
+            || ((held.life_steal.is_some() || passive.life_steal.is_some())
+                && (held.orb.is_some() || passive.orb.is_some()))
+        {
+            return Err(self.inner.error(
+                "inventory",
+                Failure::UnitActivity(
+                    "a vampiric attack with a second life steal or an orb on one holder is \
+                     unsupported: the client arms one ability per attack in priority order \
+                     (the vampiric attack 0xc, an orb [+0xa4] + 0x12) and the first wins"
                         .into(),
                 ),
             ));
