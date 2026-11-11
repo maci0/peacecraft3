@@ -4,6 +4,7 @@ type raritycontrol extends handle
 constant native ConvertRarityControl takes integer n returns raritycontrol
 native SetUnitAnimationWithRarity takes unit u, string animation, raritycontrol rarity returns nothing
 native SetUnitAnimation takes unit u, string animation returns nothing
+native AddUnitAnimationProperties takes unit u, string animation, boolean add returns nothing
 native QueueUnitAnimation takes unit u, string animation returns nothing
 native RemoveUnit takes unit u returns nothing
 native TimerStart takes timer t, real seconds, boolean repeating, code callback returns nothing
@@ -255,4 +256,63 @@ fn timer_callback_explicit_animation_overrides_prior_rarity_request() {
     h.vm.run_thread(&[expiry.callback.unwrap()]).unwrap();
     h.vm.host().inner.finish_timer_expiry(expiry).unwrap();
     assert_eq!(index(&mut h), 3);
+}
+#[test]
+fn native_property_edits_change_the_list_the_explicit_rarity_path_reads() {
+    let mut h = open(Ok(FieldValue::Cell("_".into())));
+    let u = id(&h);
+    let call = |h: &mut VmHost, text: &str, add: bool| {
+        h.vm.host()
+            .inner
+            .native(
+                "AddUnitAnimationProperties",
+                &[Value::Handle(u), Value::Str(text.into()), Value::Bool(add)],
+            )
+            .unwrap()
+    };
+    assert_eq!(call(&mut h, "wave", true), Value::Null);
+    let r = h.vm.global("FREQUENT");
+    h.vm.call("choose", &[r]).unwrap();
+    assert_eq!(index(&mut h), 3);
+    call(&mut h, "wave", false);
+    let r = h.vm.global("FREQUENT");
+    h.vm.call("choose", &[r]).unwrap();
+    assert!([1, 2].contains(&index(&mut h)));
+    for refused in ["\"wave\"", " wave", "wave ", "wave  still", "waveXXXX"] {
+        let before =
+            h.vm.host()
+                .inner
+                .executed_unit(u)
+                .unwrap()
+                .animation
+                .clone();
+        assert!(
+            h.vm.host()
+                .inner
+                .native(
+                    "AddUnitAnimationProperties",
+                    &[
+                        Value::Handle(u),
+                        Value::Str(refused.into()),
+                        Value::Bool(true)
+                    ],
+                )
+                .is_err(),
+            "{refused}"
+        );
+        assert_eq!(
+            h.vm.host().inner.executed_unit(u).unwrap().animation,
+            before
+        );
+    }
+    assert_eq!(
+        h.vm.host()
+            .inner
+            .native(
+                "AddUnitAnimationProperties",
+                &[Value::Null, Value::Str("wave".into()), Value::Bool(true)]
+            )
+            .unwrap(),
+        Value::Null
+    );
 }

@@ -322,6 +322,31 @@ impl Animation {
     pub(crate) fn copy_engine_properties_from(&mut self, source: &Self) {
         self.engine_properties.clone_from(&source.engine_properties);
     }
+    /// The unit's property list once a form or `AddUnitAnimationProperties` has bound one.
+    pub(crate) fn property_list(&self) -> Option<&[String]> {
+        self.engine_properties
+            .as_ref()
+            .map(|(_, list)| list.as_slice())
+    }
+    /// `AddUnitAnimationProperties` on this unit. `authored` is the list the unit data gives, used
+    /// until a list is bound. The current sequence's tags stand in for the slot-0 primary tag,
+    /// which the animation selector writes and this recreation does not track.
+    pub(crate) fn edit_properties(
+        &mut self,
+        rules: &Arc<crate::unit_animation_rarity::Rules>,
+        authored: Vec<String>,
+        text: &str,
+        add: bool,
+    ) -> Result<(), String> {
+        let primary = match self.sequence.and_then(|i| self.model.sequences.get(i)) {
+            Some(sequence) => rules.sequence_tags(&sequence.name)?,
+            None => Vec::new(),
+        };
+        let (_, list) = self
+            .engine_properties
+            .get_or_insert_with(|| (Arc::clone(rules), authored));
+        rules.edit_properties(list, text, add, &primary)
+    }
     pub(crate) fn set_engine_properties(
         &mut self,
         rules: Arc<crate::unit_animation_rarity::Rules>,

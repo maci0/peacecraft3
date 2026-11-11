@@ -1133,6 +1133,26 @@ impl ObjectHost {
                 return Err(self.inner.error(name, Failure::Source));
             }
         }
+        if let Some(native) = self
+            .inner
+            .program
+            .natives()
+            .get("AddUnitAnimationProperties")
+        {
+            Self::contract(
+                &self.inner,
+                "AddUnitAnimationProperties",
+                &["unit", "string", "boolean"],
+                "nothing",
+                false,
+                Some(KIND),
+            )?;
+            if native.source != self.admitted_units()?.declaration_source {
+                return Err(self
+                    .inner
+                    .error("AddUnitAnimationProperties", Failure::Source));
+            }
+        }
         let policy = self.random_policy();
         self.units.as_mut().expect("admitted").rarity = Some(rules.and_then(|rules| {
             crate::unit_animation_rarity::State::new(
@@ -1178,9 +1198,13 @@ impl ObjectHost {
             .as_ref()
             .map_err(|e| fail(e.clone()))?
             .clone();
-        let props =
-            crate::unit_animation_rarity::properties(&record.definition, &state.rules.props)
-                .map_err(fail)?;
+        let props = match animation.property_list() {
+            Some(list) => list.to_vec(),
+            None => {
+                crate::unit_animation_rarity::properties(&record.definition, &state.rules.props)
+                    .map_err(fail)?
+            }
+        };
         let candidates = state
             .rules
             .candidates(&animation.model, sequence, &props, rarity)
@@ -1212,6 +1236,50 @@ impl ObjectHost {
         };
         record.animation = Some(animation);
         self.units.as_mut().expect("admitted").rarity = Some(Ok(state));
+        Ok(Value::Null)
+    }
+
+    /// `AddUnitAnimationProperties` (`unit-animation-properties.md`): edits the unit's property list.
+    /// The immediate re-selection of the playing animation the original runs after each token is
+    /// not reproduced; the list takes effect at the next selection.
+    fn add_unit_animation_properties(&mut self, args: &[Value]) -> Result<Value, Error> {
+        let name = "AddUnitAnimationProperties";
+        let fail = |s: String| self.inner.error(name, Failure::UnitAnimation(s));
+        let [unit, Value::Str(text), Value::Bool(add)] = args else {
+            return Err(self.inner.error(name, Failure::Signature));
+        };
+        let Value::Handle(unit) = unit else {
+            return if matches!(unit, Value::Null) {
+                Ok(Value::Null)
+            } else {
+                Err(self.inner.error(name, Failure::WrongFamily))
+            };
+        };
+        let record = match self.inner.entry(*unit)? {
+            Entry::RemovedUnit { .. } => return Ok(Value::Null),
+            Entry::Unit { record } => record,
+            _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+        };
+        let rules = match &self.admitted_units()?.rarity {
+            Some(Ok(state)) => Arc::clone(&state.rules),
+            Some(Err(e)) => return Err(fail(e.clone())),
+            None => return Err(fail("animation property capability not admitted".into())),
+        };
+        let Some(animation) = &record.animation else {
+            return Err(fail(
+                "the unit has no animation state to hold a property list".into(),
+            ));
+        };
+        let authored = crate::unit_animation_rarity::properties(&record.definition, &rules.props)
+            .map_err(fail)?;
+        let mut animation = animation.clone();
+        animation
+            .edit_properties(&rules, authored, text, *add)
+            .map_err(fail)?;
+        let Entry::Unit { record } = self.inner.entry_mut(*unit)? else {
+            unreachable!("matched a unit above")
+        };
+        record.animation = Some(animation);
         Ok(Value::Null)
     }
 
@@ -1405,6 +1473,12 @@ impl ObjectHost {
         if name == "SetUnitAnimationWithRarity" && self.inner.program.natives().get(name).is_some()
         {
             return Some(self.set_unit_animation_rarity(args));
+        }
+        if name == "AddUnitAnimationProperties"
+            && self.inner.program.natives().get(name).is_some()
+            && self.units.as_ref()?.rarity.is_some()
+        {
+            return Some(self.add_unit_animation_properties(args));
         }
         if name == "SetUnitAnimation" && self.units.as_ref()?.models.is_some() {
             return Some(self.set_unit_animation(args));

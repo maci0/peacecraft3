@@ -300,6 +300,7 @@ impl ObjectHost {
             // unit_construction_host.rs
             "IssueBuildOrderById",
             // unit_host.rs
+            "AddUnitAnimationProperties",
             "CreateUnit",
             "GetFoodMade",
             "GetFoodUsed",

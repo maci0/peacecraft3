@@ -185,6 +185,15 @@ fn fixture(delta: u32) -> BTreeMap<u32, Vec<u8>> {
     b.extend(256u32.to_le_bytes());
     m.insert(0x9774fd, b);
     m.insert(0x4ac682, vec![0x6a, 13, 0, 0, 0, 0, 0, 0]);
+    // AddUnitAnimationProperties: delimiter string, token buffer, unknown-tag default, list
+    // capacity and the constructor's reserved slot 0.
+    let mut b = vec![0x6a, 0, 0x68];
+    b.extend((0x2600 + delta).to_le_bytes());
+    b.extend([0x6a, 8]);
+    m.insert(0x489d45, b);
+    m.insert(0x489d5e, vec![0x6a, 13]);
+    m.insert(0x67a92c, vec![0x83, 0xfe, 4]);
+    m.insert(0x6a034b, vec![0xc7, 0x81, 0xe4, 0x04, 0, 0, 1, 0, 0, 0]);
     for (va, ptr, text) in [
         (0x5d5dd8, 0x2500, "motionTags"),
         (0x4ac66b, 0x2600, " "),
@@ -382,4 +391,64 @@ fn portrait_idle_and_talk_use_admitted_delimiters_and_rarity_extremum() {
         a.choose_portrait(&model(&[("stand", 0.5)]), false, 0)
             .is_err()
     );
+}
+#[test]
+fn property_list_edits_follow_the_decoded_add_and_remove_mechanics() {
+    let mut r = rules();
+    r.property_capacity = 4;
+    let (wave, still) = (19, 13);
+    let mut list = Vec::new();
+    r.edit_properties(&mut list, "wave still cinema", true, &[])
+        .unwrap();
+    assert_eq!(list, ["wave", "still", "cinema"]);
+    // A listed tag, an unknown token (default tag 13 is `still`) and a full list add nothing.
+    r.edit_properties(&mut list, "WAVE zzz", true, &[]).unwrap();
+    assert_eq!(list, ["wave", "still", "cinema"]);
+    // Removal moves the last slot into the hole and ignores a tag that is not listed.
+    r.edit_properties(&mut list, "wave", false, &[]).unwrap();
+    assert_eq!(list, ["cinema", "still"]);
+    r.edit_properties(&mut list, "wave", false, &[]).unwrap();
+    assert_eq!(list, ["cinema", "still"]);
+    // Slot 0 holds the primary tag: adding it is skipped.
+    r.edit_properties(&mut list, "wave", true, &[wave]).unwrap();
+    assert_eq!(list, ["cinema", "still"]);
+    r.edit_properties(&mut list, "wave", true, &[still])
+        .unwrap();
+    assert_eq!(list, ["cinema", "still", "wave"]);
+    // The capacity counts slot 0.
+    r.property_capacity = 3;
+    list.truncate(1);
+    r.edit_properties(&mut list, "still wave", true, &[])
+        .unwrap();
+    assert_eq!(list, ["cinema", "still"]);
+}
+#[test]
+fn property_list_refuses_text_the_tokenizer_decode_does_not_cover() {
+    let r = rules();
+    let mut list = vec!["wave".to_owned()];
+    for text in [
+        "\"wave\"",
+        " wave",
+        "wave ",
+        "wave  still",
+        "waveXXXX",
+        "wav\u{e9}",
+    ] {
+        assert!(
+            r.edit_properties(&mut list, text, true, &[]).is_err(),
+            "{text}"
+        );
+        assert_eq!(list, ["wave"]);
+    }
+    r.edit_properties(&mut list, "", true, &[]).unwrap();
+    assert_eq!(list, ["wave"]);
+}
+#[test]
+fn property_tokenizer_operands_must_match_the_rarity_input() {
+    let mut m = fixture(0);
+    m.insert(0x489d5e, vec![0x6a, 12]);
+    assert!(read_fixture(&m, 64 << 10).is_err());
+    let mut m = fixture(0);
+    m.insert(0x6a034b, vec![0xc7, 0x81, 0xe4, 0x04, 0, 0, 0, 0, 0, 0]);
+    assert!(read_fixture(&m, 64 << 10).is_err());
 }

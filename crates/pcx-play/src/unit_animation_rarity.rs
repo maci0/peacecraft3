@@ -18,6 +18,10 @@ pub struct Rules {
     model_delimiters: String,
     fallback: i32,
     token_limits: [usize; 2],
+    /// Token buffer of `AddUnitAnimationProperties` (`0x489d4d`).
+    property_token_limit: usize,
+    /// Most tags a unit's list holds, slot 0 included (`0x67a92e`).
+    property_capacity: usize,
     pub(crate) props: String,
 }
 fn word(b: &[u8], i: usize) -> Result<u32, String> {
@@ -251,6 +255,26 @@ impl Rules {
         let model = r.bytes(0x6dafe0, 5)?;
         shape(&model, 0, &[0x68])?;
         let model_delimiters = r.text(word(&model, 1)?)?;
+        // `AddUnitAnimationProperties` tokenizes like the rarity input (same delimiter string and
+        // unknown-tag default) with its own token buffer; the unit constructor reserves list slot 0.
+        let tokenizer = r.bytes(0x489d45, 9)?;
+        shape(&tokenizer, 0, &[0x6a, 0, 0x68])?;
+        shape(&tokenizer, 7, &[0x6a])?;
+        let property_token_limit = usize::from(tokenizer[8]);
+        let property_default = r.bytes(0x489d5e, 2)?;
+        shape(&property_default, 0, &[0x6a])?;
+        let capacity = r.bytes(0x67a92c, 3)?;
+        shape(&capacity, 0, &[0x83, 0xfe])?;
+        let reserved = r.bytes(0x6a034b, 10)?;
+        shape(&reserved, 0, &[0xc7, 0x81, 0xe4, 0x04, 0, 0])?;
+        if r.text(word(&tokenizer, 3)?)? != input_delimiters
+            || i32::from(property_default[1] as i8) != fallback
+            || property_token_limit == 0
+            || word(&reserved, 6)? != 1
+        {
+            return Err("animation property list source differs from the rarity input".into());
+        }
+        let property_capacity = usize::from(capacity[2]);
         let bytes = r.bytes(0x6db0e0, 0x4b0)?;
         let mut i = 0;
         let mut tags = BTreeMap::new();
@@ -311,8 +335,77 @@ impl Rules {
             model_delimiters,
             fallback,
             token_limits,
+            property_token_limit,
+            property_capacity,
             props,
         })
+    }
+    /// Tag identity of a property token: its registry value, or the default for an unknown token.
+    fn property_tag(&self, token: &str) -> i32 {
+        self.tags
+            .get(&token.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(self.fallback)
+    }
+    /// `AddUnitAnimationProperties` on a unit's property list (`0x489d00`). `list` holds one token per
+    /// entry (slots 1 and up; slot 0 is the primary tag the animation selector writes and is not
+    /// kept here). `primary` is the tags slot 0 may hold. Add (`0x67a900`): a tag already in the
+    /// list or in slot 0 is skipped, as is any add past the capacity. Remove (`0x69b800`) searches
+    /// slots 1 and up and moves the last slot into the hole.
+    ///
+    /// Refused: text with quotes (the tokenizer `0x434460` is quote aware, not decoded), empty
+    /// tokens (leading, trailing or doubled delimiters), tokens that fill the buffer, non-ASCII.
+    pub(crate) fn edit_properties(
+        &self,
+        list: &mut Vec<String>,
+        text: &str,
+        add: bool,
+        primary: &[i32],
+    ) -> Result<(), String> {
+        if !text.is_ascii() || text.contains('"') {
+            return Err("quoted or non-ASCII animation property text is not decoded".into());
+        }
+        let mut edited = Vec::new();
+        for entry in list.iter() {
+            edited.extend(self.property_tokens(entry)?);
+        }
+        for token in self.property_tokens(text)? {
+            let tag = self.property_tag(&token);
+            let present = edited
+                .iter()
+                .position(|held| self.property_tag(held) == tag);
+            if add {
+                // The count includes slot 0, which `edited` does not hold.
+                if present.is_none()
+                    && !primary.contains(&tag)
+                    && edited.len() + 1 < self.property_capacity
+                {
+                    edited.push(token);
+                }
+            } else if let Some(at) = present {
+                edited.swap_remove(at);
+            }
+        }
+        *list = edited;
+        Ok(())
+    }
+    /// Tags of a model sequence name, as the chooser reads them.
+    pub(crate) fn sequence_tags(&self, name: &str) -> Result<Vec<i32>, String> {
+        self.tokens(name, true)
+    }
+    fn property_tokens(&self, text: &str) -> Result<Vec<String>, String> {
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        text.split(|c| self.input_delimiters.contains(c))
+            .map(|token| {
+                if token.is_empty() || token.len() >= self.property_token_limit {
+                    Err("empty or oversized animation property token is not decoded".to_owned())
+                } else {
+                    Ok(token.to_owned())
+                }
+            })
+            .collect()
     }
     fn tokens(&self, text: &str, model: bool) -> Result<Vec<i32>, String> {
         if !text.is_ascii() {
