@@ -1,5 +1,6 @@
 //! Held aura items: `AIau` (Legion Doom-Horn, class `AUau`, Unholy Aura), `AIad` (class `AHad`,
-//! Devotion Aura) and `AIba` (class `AHab`, Brilliance Aura). The registrations and timing come from the reviewed image and the row
+//! Devotion Aura), `AIba` (class `AHab`, Brilliance Aura) and `AIcd` (class `AOac`, Command
+//! Aura). The registrations and timing come from the reviewed image and the row
 //! values from the ability table; the decode is in `docs/re-notes/passive-held-items.md`, "Held
 //! auras".
 //!
@@ -14,6 +15,8 @@ pub(super) const UNHOLY_WINDOW: u32 = 0xc657d0;
 pub(super) const DEVOTION_WINDOW: u32 = 0xbfb7a0;
 /// Registration call of the Brilliance Aura class (source `AHab`, computed base `aura`).
 pub(super) const BRILLIANCE_WINDOW: u32 = 0xbfaa90;
+/// Registration call of the Command Aura class (source `AOac`, computed base `aura`).
+pub(super) const COMMAND_WINDOW: u32 = 0xc25740;
 /// `push 2` that converts the integer period of the ability's own timer (`0xb8fd4b`, start slot
 /// `0xb8fd10`).
 const TIMER_PUSH_VA: u32 = 0xb8fd4b;
@@ -30,7 +33,7 @@ const PUSH_IMM8_LEN: usize = 2;
 const AURA_BASE: &str = "aura";
 /// Nine `Misc` keys the aura reads when it picks targets and when its buff applies. All are zero
 /// in every shipped rule set; a nonzero value changes the target test and is refused.
-const MISC_KEYS: [&str; 9] = [
+const MISC_KEYS: [&str; 10] = [
     "AnimatedUnitsBestowAuras",
     "BurrowedUnitsBestowAuras",
     "IllusionsBestowAuras",
@@ -40,6 +43,7 @@ const MISC_KEYS: [&str; 9] = [
     "IllusionsCanRestoreLife",
     "IllusionsCanRestoreMana",
     "IllusionsGetDefenseBonus",
+    "IllusionsGetAttackBonus",
 ];
 
 /// Bytes of the reviewed image the aura rules are read from.
@@ -48,6 +52,7 @@ pub(crate) struct AuraImage {
     pub(crate) unholy_window: Vec<u8>,
     pub(crate) devotion_window: Vec<u8>,
     pub(crate) brilliance_window: Vec<u8>,
+    pub(crate) command_window: Vec<u8>,
     pub(crate) base: Vec<u8>,
     pub(crate) timer_push: Vec<u8>,
     pub(crate) duration_push: Vec<u8>,
@@ -69,6 +74,7 @@ impl AuraImage {
         Ok(Self {
             devotion_window: bytes(DEVOTION_WINDOW, HEAL_WINDOW_LEN, true)?,
             brilliance_window: bytes(BRILLIANCE_WINDOW, HEAL_WINDOW_LEN, true)?,
+            command_window: bytes(COMMAND_WINDOW, HEAL_WINDOW_LEN, true)?,
             base: bytes(base_va, BASE_FN_LEN, true)?,
             timer_push: bytes(TIMER_PUSH_VA, PUSH_IMM8_LEN, true)?,
             duration_push: bytes(DURATION_PUSH_VA, PUSH_IMM8_LEN, true)?,
@@ -100,6 +106,7 @@ pub(super) struct AuraClasses {
     pub(super) unholy: String,
     pub(super) devotion: String,
     pub(super) brilliance: String,
+    pub(super) command: String,
     timing: AuraTiming,
     /// The first nonzero `Misc` key, `Some(None)` when all are zero; `None` until
     /// `with_aura_misc` reads them.
@@ -116,15 +123,47 @@ pub enum AuraEffect {
     Devotion { armor: f32 },
     /// `AHab`: `mana` (`DataA1`) points of mana regeneration per second.
     Brilliance { mana: f32 },
+    /// `AOac`: attack damage. `amount` is `DataA1`, a fraction of the attack's base damage, or
+    /// points when `flat` (`DataD1` nonzero). `melee` (`DataB1`) and `ranged` (`DataC1`) say which
+    /// weapon types the buff and the target test cover. The flags are the first source's: a
+    /// refresh replaces only the amount.
+    Command {
+        amount: f32,
+        melee: bool,
+        ranged: bool,
+        flat: bool,
+    },
 }
 
 impl AuraEffect {
-    /// The one amount of a devotion or brilliance effect.
+    /// The one amount of a devotion, brilliance or command effect.
     pub(crate) fn amount(self) -> Option<f32> {
         match self {
             AuraEffect::Unholy { .. } => None,
-            AuraEffect::Devotion { armor } => Some(armor),
-            AuraEffect::Brilliance { mana } => Some(mana),
+            AuraEffect::Devotion { armor: amount }
+            | AuraEffect::Brilliance { mana: amount }
+            | AuraEffect::Command { amount, .. } => Some(amount),
+        }
+    }
+
+    /// The same effect with its one amount replaced (the refresh `+0x370` of the buff classes
+    /// keeps everything else the first source set).
+    pub(crate) fn with_amount(self, amount: f32) -> Self {
+        match self {
+            AuraEffect::Unholy { .. } => self,
+            AuraEffect::Devotion { .. } => AuraEffect::Devotion { armor: amount },
+            AuraEffect::Brilliance { .. } => AuraEffect::Brilliance { mana: amount },
+            AuraEffect::Command {
+                melee,
+                ranged,
+                flat,
+                ..
+            } => AuraEffect::Command {
+                amount,
+                melee,
+                ranged,
+                flat,
+            },
         }
     }
 
@@ -132,7 +171,7 @@ impl AuraEffect {
     pub(crate) fn changes_regen(self) -> bool {
         match self {
             AuraEffect::Unholy { regen, .. } => regen != 0.0,
-            AuraEffect::Devotion { .. } => false,
+            AuraEffect::Devotion { .. } | AuraEffect::Command { .. } => false,
             AuraEffect::Brilliance { mana } => mana != 0.0,
         }
     }
@@ -161,19 +200,26 @@ impl Rules {
             class_from_call_window_at(&image.devotion_window, DEVOTION_WINDOW, &image.base)?;
         let (brilliance, brilliance_base) =
             class_from_call_window_at(&image.brilliance_window, BRILLIANCE_WINDOW, &image.base)?;
-        if [&unholy_base, &devotion_base, &brilliance_base]
-            .iter()
-            .any(|base| **base != AURA_BASE)
+        let (command, command_base) =
+            class_from_call_window_at(&image.command_window, COMMAND_WINDOW, &image.base)?;
+        let classes = [&unholy, &devotion, &brilliance, &command];
+        if [
+            &unholy_base,
+            &devotion_base,
+            &brilliance_base,
+            &command_base,
+        ]
+        .iter()
+        .any(|base| **base != AURA_BASE)
         {
             return Err("aura registrations must name the aura base class".into());
         }
         if self.auras.is_some()
-            || unholy == devotion
-            || unholy == brilliance
-            || devotion == brilliance
-            || [&unholy, &devotion, &brilliance]
+            || classes
                 .iter()
-                .any(|class| self.is_registered(class))
+                .enumerate()
+                .any(|(i, class)| classes[..i].contains(class))
+            || classes.iter().any(|class| self.is_registered(class))
         {
             return Err("aura registrations must name distinct classes".into());
         }
@@ -194,6 +240,7 @@ impl Rules {
             unholy,
             devotion,
             brilliance,
+            command,
             timing: AuraTiming {
                 tick,
                 scan,
@@ -231,9 +278,14 @@ impl Rules {
     /// Whether `class` is one of the aura classes.
     pub(super) fn is_aura_class(&self, class: &str) -> bool {
         self.auras.as_ref().is_some_and(|auras| {
-            [&auras.unholy, &auras.devotion, &auras.brilliance]
-                .iter()
-                .any(|aura| **aura == class)
+            [
+                &auras.unholy,
+                &auras.devotion,
+                &auras.brilliance,
+                &auras.command,
+            ]
+            .iter()
+            .any(|aura| **aura == class)
         })
     }
 
@@ -264,8 +316,10 @@ impl Rules {
         Ok(found)
     }
 
-    /// One aura row. The percent flags (`DataC1` of `AUau`, `DataB1` of `AHad`) must be zero:
-    /// the percent mode multiplies by a unit virtual that is not identified. A map-modified row
+    /// One aura row. The percent flags (`DataC1` of `AUau`, `DataB1` of `AHad` and `AHab`) must be
+    /// zero: the percent mode multiplies by a unit virtual that is not identified. The command
+    /// aura has no such mode: its flags select weapon types and flat or percent damage. A
+    /// map-modified row
     /// refuses, because the overrides of its fields are not decoded.
     pub(super) fn aura_row(&self, alias: &str) -> Result<HeldAura, String> {
         let classes = self.auras.as_ref().ok_or("auras need their registration")?;
@@ -290,7 +344,15 @@ impl Rules {
         if area <= 0.0 {
             return Err(format!("Area1 of aura {alias} is not positive"));
         }
-        let effect = if self.ability_code(alias)? == classes.unholy {
+        let code = self.ability_code(alias)?;
+        let effect = if code == classes.command {
+            AuraEffect::Command {
+                amount: real("DataA1")?,
+                melee: real("DataB1")? != 0.0,
+                ranged: real("DataC1")? != 0.0,
+                flat: real("DataD1")? != 0.0,
+            }
+        } else if code == classes.unholy {
             let (speed, regen) = (real("DataA1")?, real("DataB1")?);
             if real("DataC1")? != 0.0 {
                 return Err(format!(
@@ -310,7 +372,7 @@ impl Rules {
                 ));
             }
             let amount = real("DataA1")?;
-            if self.ability_code(alias)? == classes.devotion {
+            if code == classes.devotion {
                 AuraEffect::Devotion { armor: amount }
             } else {
                 AuraEffect::Brilliance { mana: amount }
@@ -388,6 +450,7 @@ pub(crate) mod fixture {
             unholy_window: computed_at("AUau", UNHOLY_WINDOW),
             devotion_window: computed_at("AHad", DEVOTION_WINDOW),
             brilliance_window: computed_at("AHab", BRILLIANCE_WINDOW),
+            command_window: computed_at("AOac", COMMAND_WINDOW),
             base: base(),
             timer_push: vec![PUSH_IMM8, TICK],
             duration_push: vec![PUSH_IMM8, DURATION],

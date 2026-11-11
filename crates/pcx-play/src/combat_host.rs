@@ -376,6 +376,68 @@ pub(super) fn read_weapon(d: &Definition, n: u8) -> Result<Option<Weapon>, Strin
     }))
 }
 
+/// `weapTp` values other than `normal` that the client numbers 2 to 8 (`0x6ac6a6`): the weapon
+/// types the held command aura counts as ranged.
+const RANGED_WEAPON_TYPES: [&str; 7] = [
+    "missile",
+    "artillery",
+    "instant",
+    "msplash",
+    "mbounce",
+    "mline",
+    "aline",
+];
+/// `targs` lists that, taken alone, mark an attack the held damage tests skip (the attack's
+/// target mask is exactly `none`, `tree`, `wall` or `debris`: `0xb20150`, `0xb211c0`).
+const UNCOUNTED_TARGET_LISTS: [&str; 4] = ["none", "tree", "wall", "debris"];
+
+/// How the client's attack tests (`0xb20150`, `0xb211c0`, `0xb21320`) classify one attack slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AttackClass {
+    /// `weapTp` is `normal`.
+    pub melee: bool,
+    /// `weapTp` is one of `RANGED_WEAPON_TYPES`.
+    pub ranged: bool,
+    /// The attack is not skipped: it rolls at least one die and its `targs` list is not exactly
+    /// one of `UNCOUNTED_TARGET_LISTS`.
+    pub counted: bool,
+}
+
+/// The slot (1 or 2) of the unit type whose weapon is `weapon`, `None` when neither is.
+pub(super) fn weapon_slot(d: &Definition, weapon: &Weapon) -> Option<u8> {
+    // A slot that does not read as a weapon is not the one the combat model holds, which was read
+    // by this same function.
+    [1u8, 2]
+        .into_iter()
+        .find(|n| matches!(read_weapon(d, *n), Ok(Some(read)) if read == *weapon))
+}
+
+/// The class of attack slot `n` of `weapon`'s unit type.
+pub(super) fn attack_class(d: &Definition, n: u8, weapon: &Weapon) -> Result<AttackClass, String> {
+    let name = format!("weapTp{n}");
+    let kind = column(d, SlkId::UnitWeapons, &name)?
+        .ok_or_else(|| format!("unit field {name} is empty"))
+        .and_then(|v| text(v, &name))?;
+    let targets = optional_column(d, &format!("targs{n}"))?
+        .map(|v| text(v, "targs"))
+        .transpose()?;
+    let uncounted_targets = targets.is_some_and(|list| {
+        let mut tokens: Vec<String> = list
+            .split(',')
+            .map(|token| token.trim().to_ascii_lowercase())
+            .filter(|token| !token.is_empty() && token != "_" && token != "-")
+            .collect();
+        tokens.sort();
+        tokens.dedup();
+        matches!(tokens.as_slice(), [only] if UNCOUNTED_TARGET_LISTS.contains(&only.as_str()))
+    });
+    Ok(AttackClass {
+        melee: kind == "normal",
+        ranged: RANGED_WEAPON_TYPES.contains(&kind),
+        counted: weapon.dice != 0 && !uncounted_targets,
+    })
+}
+
 fn read_combat(d: &Definition) -> Result<Combat, String> {
     let num = |slk, name| match column(d, slk, name)? {
         Some(v) => number(v, name),
@@ -1874,7 +1936,8 @@ impl ObjectHost {
         weapon: Weapon,
     ) -> Result<f32, Error> {
         let bonuses = self.hero_combat_bonuses(source)?;
-        let primary_damage = bonuses.damage + bonuses.held_damage;
+        let primary_damage =
+            bonuses.damage + bonuses.held_damage + self.aura_damage_bonus(source, &weapon)?;
         let mut roll = weapon.base;
         for _ in 0..weapon.dice.max(0) {
             roll += self.draw_random_integer(1, weapon.sides.max(1), "combat damage")?;

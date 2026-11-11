@@ -1468,8 +1468,9 @@ the item or losing the holder stops the source and removes no buff; a dead holde
 but applies nothing; a dying or removed unit loses its aura buffs.
 Admission refuses: a nonzero `Misc` key of `AnimatedUnitsBestowAuras`, `BurrowedUnitsBestowAuras`,
 `IllusionsBestowAuras`, `InvisibleUnitsBestowAuras`, `PolymorphedUnitsBestowAuras`,
-`IllusionsGetMoveSpeedBonus`, `IllusionsCanRestoreLife`, `IllusionsCanRestoreMana` or
-`IllusionsGetDefenseBonus` (all zero in every shipped rule set); a percent flag (`DataC1` of `AUau`,
+`IllusionsGetMoveSpeedBonus`, `IllusionsCanRestoreLife`, `IllusionsCanRestoreMana`,
+`IllusionsGetDefenseBonus` or `IllusionsGetAttackBonus` (all zero in every shipped rule set; the last is
+read by `AOac`, below); a percent flag (`DataC1` of `AUau`,
 `DataB1` of `AHad` and `AHab`); a `targs1` that is not the
 shipped `air`/`ground`/`structure` classes plus `friend`, `self`, `vuln`, `invu`; a map-modified row;
 two aura abilities on one item; a polymorphed target when a speed amount applies.
@@ -1489,6 +1490,67 @@ order, regeneration rate, devotion armor, brilliance mana rate, script removal, 
 two-ability refusals) and
 `inventory_aura.rs` (target tokens).
 
+
+**`AOac` (Command Aura, `AIcd` on `shhn`).** Decoded from the reviewed image (SHA-256 `3f2ed012…`,
+`objdump`/`rizin`) and the shipped row; no runtime capture. Ability `CAbilityAuraCommand` (vtable
+`0xf82af8`, class getter `0xc23bc0` returns `AOac`, registration `0xc25740` over `aura`, the same
+`push base; push code; call 0x7f6360` window as the other aura classes), buff `CBuffAuraCommand` (vtable
+`0xf82778`, buff class `BOac` from `0xc23630`, constructor `0xc24dc0` sets the per-attack count `+0xe4`
+to 2 and the two stored amounts `+0xe8`, `+0xec` to 0). Row `AIcd`: `Area1` 900, `DataA1` 0.1, `DataB1`
+1, `DataC1` 1, `DataD1` 0, `BuffID1` `BOac`, `targs1` as `AIau`. The scan, 2.0 s timer, 4.0 s buff,
+active flag and refresh slots are the base aura's (slots 212 `0xb90600` and 213 `0xb90630` are
+unchanged; the buff refresh `+0x358` is the shared `0x6f2d60`, which compares `DataA` at buff `+0xd4`
+with the tolerance and replaces it through `+0x370`, `0xc23710`).
+
+- Row meaning (observed): slot 214 (`0xc23cc0`, new buff) reads `DataD` (`0x46ef80`), `DataC`
+  (`0x46eed0`) and `DataB` (`0x46ee20`) as "value != 0" and passes them to buff `+0x374` (`0xc23640`),
+  which sets buff flags `0x400` (`DataD`), `0x200` (`DataC`) and `0x100` (`DataB`); the base slot 212
+  then stores `DataA` (`+0x368`, `0xc236e0`, which calls the apply `0xc25050`). So `DataB` is "melee",
+  `DataC` is "ranged", `DataD` is "flat"; with `DataD` 0 the amount is a percent of base damage. The
+  flat flag is `DataD`, not `DataB`. The buff keeps the flags of its first source: a refresh replaces
+  only `DataA`.
+- Target test (observed, ability slot 210 `0xc23be0`): the base test `0xb90440` first. Then the unit
+  needs an attack component (`[unit+0x3f4]`, else the error `0xdd`), and `DataB` asks `0xb211c0`, `DataC`
+  asks `0xb21320`: each is true when an enabled attack slot has a weapon type that is melee
+  (`[attack+0xe0+4i] == 1`, `weapTp` `normal`) respectively ranged (2 to 8, the other `weapTp` strings
+  numbered at `0x6ac6a6`: `normal` 1, `missile` 2, `artillery` 3, `instant` 4, `msplash` 5, `mbounce` 6,
+  `mline` 7, `aline` 8) and whose target mask `[+0x21c+4i]` is not exactly `none` (1), `tree` (0x40),
+  `wall` (0x80) or `debris` (0x100) (token table `0x10dce70`). The attack setup (`0xb23161`) writes that
+  mask from the attack's `targs`, or 1 when the dice count is 0, so an attack with no dice never counts. The
+  row passes when the flags it sets match; a row that sets neither flag matches no unit. Three
+  suppression counters (`[+0x228]`, `[+0x22c]`, `[+0x230]`, positive when a class of attack is switched
+  off) also skip attacks in these tests; no recreated state sets them.
+- Apply (observed, `0xc25050`, once per buff, flag `0x800`): needs the attack component. Skipped for a
+  target with unit flag `0x40000000` (illusion) while `Misc/IllusionsGetAttackBonus` is 0 (the key at
+  `0xf55ed4`; the same test the `AIat` item class makes, `0xbca1ea`). For each attack slot `i` (the
+  count at buff `+0xe4`, 2): skip it when `DataB` is clear and the slot is melee, or `DataC` is clear and
+  the slot is ranged (the same classification and exclusion list as the target test; a slot whose mask
+  is in the exclusion list is not skipped). The amount: with `DataD` set, `DataA` truncated toward zero
+  (`0x9a07b0`); otherwise `DataA * average + 0.5` truncated, where `average` is `0x690cf0`/`0xb1dbf0`,
+  base damage plus dice times (sides * 0.5 + 0.5) (`[attack+0xa4]`, `+0x8c`, `+0x98`, soft-float
+  `0x99ffe0` multiply, `0x9a01c0` add, constant `0x10db0a8` = 0.5). A zero result with a nonzero
+  `DataA` becomes +1 or -1. A negative result below the attack's minimum damage (base plus dice,
+  `0xb1dd70`) becomes minus that minimum. It is stored at buff `+0xe8+4i` and added through `0xb1e730`
+  to the attack's bonus field (`[attack+0xb0]` or `+0xb4`), the same field the flat item class `AIat`
+  and the orbs add to (`0xbca238` calls the same routine with a mask from `0xb20150`). The bonus sums
+  with them and is not scaled by anything else. Both melee and ranged attacks enter the same field.
+  Removal (`0xc25820`, run by the buff end `0xc23740` and by the event handler `0xc23790`) subtracts the
+  stored amounts and zeroes them.
+- Event `0x80261` on the unit (registered by `0xc23640` through `0x692340`) makes the handler `0xc23790`
+  remove the bonus (`0xc25820`) and schedule `0xd01c1` after 0.1 s (`0x10db078`), whose handler applies
+  it again with the then-current attack values. What posts `0x80261` was not decoded.
+- Recreation: `inventory_aura.rs` reads the registration and `AuraEffect::Command`; `aura_host.rs`
+  applies the amount for the unit's modelled weapon (`Weapon` base, dice, sides) and adds the stored
+  amount to the roll in `roll_base_damage` beside the hero and flat item bonuses. The bonus is computed
+  in `f32` (the client uses its own soft-float routines, not compared bit for bit). Open: the
+  suppression counters; the `0x80261` re-apply (a bonus whose weapon no longer matches the unit's
+  refuses at the roll); both attack slots (the model holds one weapon); the damage shown in the
+  unit panel (the recreation's panel does not include the aura bonus, as for the aura armor); the token table is matched by the names
+  `none`, `tree`, `wall`, `debris` (a token the table ignores is not modelled); the percent
+  of a unit whose attack changes after the buff applied.
+  Tests: `inventory_aura_host_tests.rs` (percent, flat, minimum of one, negative clamp, sum with the flat
+  item bonus, ally in range and expiry, refresh raising the amount, melee and ranged flags, targs
+  and dice exclusions, another weapon).
 
 ### Held classes are admitted by class code, not by `useSpecific`
 

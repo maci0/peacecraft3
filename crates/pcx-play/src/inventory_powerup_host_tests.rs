@@ -381,6 +381,22 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
             alias, code, "1", a, b, c, "-", "-", "-", "-", aura_targs, "50", "0", "0", buff,
         ]);
     }
+    // Held command auras: `DataA1` the damage amount, `DataB1` melee, `DataC1` ranged, `DataD1`
+    // flat.
+    for (alias, a, b, c, d) in [
+        ("AIcd", "0.5", "1", "1", "0"),
+        ("AIc1", "1", "1", "1", "0"),
+        ("AIc2", "2.7", "1", "1", "1"),
+        ("AIc3", "0.01", "1", "1", "0"),
+        ("AIc4", "0.5", "1", "0", "0"),
+        ("AIc5", "0.5", "0", "1", "0"),
+        ("AIc6", "-9", "1", "1", "1"),
+        ("AIc7", "0.5", "0", "0", "0"),
+    ] {
+        rows.push(vec![
+            alias, "AOac", "1", a, b, c, d, "-", "-", "-", aura_targs, "50", "0", "0", "BOac",
+        ]);
+    }
     for row in rows.iter_mut().skip(plain_rows) {
         row.extend(["-", "-"]);
     }
@@ -477,6 +493,14 @@ fn powerup_tables() -> Arc<DefaultTables> {
             &["umna", "AIba", "0", "0", "0", "-"],
             &["upc1", "AIp1", "0", "0", "0", "-"],
             &["upc2", "AIp2", "0", "0", "0", "-"],
+            &["ucmd", "AIcd", "0", "0", "0", "-"],
+            &["ucm1", "AIc1", "0", "0", "0", "-"],
+            &["ucm2", "AIc2", "0", "0", "0", "-"],
+            &["ucm3", "AIc3", "0", "0", "0", "-"],
+            &["ucm4", "AIc4", "0", "0", "0", "-"],
+            &["ucm5", "AIc5", "0", "0", "0", "-"],
+            &["ucm6", "AIc6", "0", "0", "0", "-"],
+            &["ucm7", "AIc7", "0", "0", "0", "-"],
         ],
     );
     let plain_ability_rows: &[&[&str]] = &[

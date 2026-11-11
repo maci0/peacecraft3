@@ -411,3 +411,204 @@ fn brilliance_is_a_permanent_extra_mana_rate_on_the_holder_and_an_ally_in_range(
     assert_eq!(f.h.aura_mana_regen(hero), 0.0);
     assert_eq!(f.h.aura_mana_regen(ally), 0.0);
 }
+
+/// The fixture weapon: base 4 plus one die of one side, so the average base damage is 5.
+const AVERAGE: f32 = 5.0;
+/// `DataA1` 0.5 of `AIcd` on that weapon: `0.5 * 5 + 0.5` truncated.
+const COMMAND: f32 = 3.0;
+
+/// The attacker's base damage roll, before armor. The fixture die has one side, so it is exact.
+fn roll(h: &mut ObjectHost, unit: HandleId) -> f32 {
+    let weapon = h
+        .executed_unit(unit)
+        .unwrap()
+        .combat
+        .as_ref()
+        .unwrap()
+        .weapon
+        .unwrap();
+    h.roll_damage(unit, weapon, unit).unwrap().1
+}
+
+/// Every fixture unit shoots missiles, so the melee-only rows do not cover them.
+fn missile_fields() -> Vec<([u8; 4], ObjectField)> {
+    let mut speed = column(
+        b"M002",
+        SlkId::UnitData,
+        "Missilespeed",
+        FieldKind::Int,
+        "64",
+    );
+    speed.1.metadata.as_mut().unwrap().source = FieldSource::Profile {
+        key: "missilespeed".into(),
+        index: 0,
+        slots: 1,
+    };
+    vec![
+        column(
+            b"W003",
+            SlkId::UnitWeapons,
+            "weapTp1",
+            FieldKind::Token,
+            "missile",
+        ),
+        speed,
+    ]
+}
+
+fn open_with(extra: &[([u8; 4], ObjectField)]) -> Fixture {
+    open_with_regens_overlays_extra(
+        Overlay::default(),
+        Overlay::default(),
+        0.0,
+        None,
+        0.0,
+        "500",
+        extra,
+    )
+}
+
+#[test]
+fn the_command_aura_adds_a_fraction_of_the_average_base_damage_rounded_half_up() {
+    let mut f = open();
+    let plain = roll(&mut f.h, f.hero);
+    let aura = item(&mut f.h, b"ucmd", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, aura), Ok(Value::Bool(true)));
+    assert_eq!(buffs(&f.h, f.hero), [*b"BOac"]);
+    assert_eq!(roll(&mut f.h, f.hero) - plain, COMMAND);
+    assert_eq!(AVERAGE * 0.5 + 0.5, COMMAND, "the fixture arithmetic");
+}
+
+#[test]
+fn a_flat_row_adds_points_truncated_and_a_small_amount_never_rounds_to_nothing() {
+    for (raw, bonus) in [(b"ucm2", 2.0), (b"ucm3", 1.0)] {
+        let mut f = open();
+        let plain = roll(&mut f.h, f.hero);
+        let aura = item(&mut f.h, raw, 0.0);
+        assert_eq!(add(&mut f.h, f.hero, aura), Ok(Value::Bool(true)));
+        assert_eq!(roll(&mut f.h, f.hero) - plain, bonus, "{raw:?}");
+    }
+}
+
+#[test]
+fn a_negative_bonus_stops_at_the_minimum_damage() {
+    let mut f = open();
+    let plain = roll(&mut f.h, f.hero);
+    let aura = item(&mut f.h, b"ucm6", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, aura), Ok(Value::Bool(true)));
+    // Base 4 plus one die: the minimum is 5, so -9 stops at -5.
+    assert_eq!(roll(&mut f.h, f.hero) - plain, -5.0);
+}
+
+#[test]
+fn the_command_bonus_adds_to_the_flat_item_bonus() {
+    let mut f = open();
+    let plain = roll(&mut f.h, f.hero);
+    let flat = item(&mut f.h, b"pdm1", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, flat), Ok(Value::Bool(true)));
+    let held = roll(&mut f.h, f.hero) - plain;
+    assert_eq!(held, 15.0);
+    let aura = item(&mut f.h, b"ucmd", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, aura), Ok(Value::Bool(true)));
+    assert_eq!(roll(&mut f.h, f.hero) - plain, held + COMMAND);
+}
+
+#[test]
+fn an_ally_in_range_is_buffed_and_the_bonus_ends_with_the_buff() {
+    let (mut f, aura) = holder(b"ucmd");
+    let ally = at(&mut f.h, b"u001", 4, NEAR);
+    let plain = roll(&mut f.h, ally);
+    let start = f.h.timer_game_time().unwrap();
+    run(&mut f.h, start + 1.0);
+    assert_eq!(buffs(&f.h, ally), [*b"BOac"]);
+    assert_eq!(roll(&mut f.h, ally) - plain, COMMAND);
+    drop_item(&mut f.h, f.hero, aura);
+    let dropped = f.h.timer_game_time().unwrap();
+    run(&mut f.h, dropped + BUFF_LIFE + 0.1);
+    assert!(buffs(&f.h, ally).is_empty());
+    assert_eq!(roll(&mut f.h, ally), plain);
+}
+
+#[test]
+fn a_stronger_source_raises_the_amount_and_keeps_the_first_sources_flags() {
+    let mut f = open();
+    let plain = roll(&mut f.h, f.hero);
+    let weak = item(&mut f.h, b"ucmd", 0.0);
+    let strong = item(&mut f.h, b"ucm1", 0.0);
+    assert_eq!(add(&mut f.h, f.hero, weak), Ok(Value::Bool(true)));
+    assert_eq!(add(&mut f.h, f.hero, strong), Ok(Value::Bool(true)));
+    assert_eq!(buffs(&f.h, f.hero), [*b"BOac"], "one buff per id");
+    // `AIc1` is 1.0: 1.0 * 5 + 0.5 truncated, raised rather than summed with the 3.
+    assert_eq!(roll(&mut f.h, f.hero) - plain, 5.0);
+}
+
+#[test]
+fn the_melee_and_ranged_flags_pick_the_covered_weapon_types() {
+    // Melee fixture weapon (`weapTp1` normal): the melee row covers it, the ranged-only and the
+    // neither row match no unit.
+    let mut f = open();
+    for (raw, covered) in [(b"ucm4", true), (b"ucm5", false), (b"ucm7", false)] {
+        let aura = item(&mut f.h, raw, 0.0);
+        assert_eq!(add(&mut f.h, f.hero, aura), Ok(Value::Bool(true)));
+        assert_eq!(!buffs(&f.h, f.hero).is_empty(), covered, "{raw:?} melee");
+        drop_item(&mut f.h, f.hero, aura);
+        let dropped = f.h.timer_game_time().unwrap();
+        run(&mut f.h, dropped + BUFF_LIFE + 0.1);
+    }
+    let mut g = open_with(&missile_fields());
+    for (raw, covered) in [(b"ucm4", false), (b"ucm5", true), (b"ucmd", true)] {
+        let aura = item(&mut g.h, raw, 0.0);
+        assert_eq!(add(&mut g.h, g.hero, aura), Ok(Value::Bool(true)));
+        assert_eq!(!buffs(&g.h, g.hero).is_empty(), covered, "{raw:?} missile");
+        drop_item(&mut g.h, g.hero, aura);
+        let dropped = g.h.timer_game_time().unwrap();
+        run(&mut g.h, dropped + BUFF_LIFE + 0.1);
+    }
+}
+
+#[test]
+fn an_amount_computed_for_another_weapon_refuses() {
+    let (f, _) = holder(b"ucmd");
+    let mut weapon =
+        f.h.executed_unit(f.hero)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .weapon
+            .unwrap();
+    weapon.base += 1;
+    let error = f.h.aura_damage_bonus(f.hero, &weapon).unwrap_err();
+    assert!(format!("{error:?}").contains("another weapon"), "{error:?}");
+}
+
+#[test]
+fn an_attack_that_targets_only_trees_or_has_no_dice_is_not_covered() {
+    let weapon_column = |id: &[u8; 4], name: &str, kind: FieldKind, value: &str| {
+        column(id, SlkId::UnitWeapons, name, kind, value)
+    };
+    for (extra, covered) in [
+        (
+            weapon_column(b"W101", "targs1", FieldKind::Token, "tree"),
+            false,
+        ),
+        (
+            weapon_column(b"W101", "targs1", FieldKind::Token, "tree,tree"),
+            false,
+        ),
+        (
+            weapon_column(b"W101", "targs1", FieldKind::Token, "tree,wall"),
+            true,
+        ),
+        (
+            weapon_column(b"W101", "targs1", FieldKind::Token, "ground"),
+            true,
+        ),
+        (weapon_column(b"W009", "dice1", FieldKind::Int, "0"), false),
+    ] {
+        let mut f = open_with(&[extra]);
+        let aura = item(&mut f.h, b"ucmd", 0.0);
+        assert_eq!(add(&mut f.h, f.hero, aura), Ok(Value::Bool(true)));
+        assert_eq!(!buffs(&f.h, f.hero).is_empty(), covered);
+    }
+}

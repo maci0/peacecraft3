@@ -838,3 +838,17 @@ each, selected Legacy install, headless):
 `AIba` on `mnsf` appeared between the two (the first run after `AIad` was admitted) and is admitted as a
 third class of the same base. Not attempted: `AOac` (a damage-bonus aura on the attack damage path) and
 the sight occluder.
+
+## 2026-11-11 Command Aura `AIcd`, HumanX06 re-probe
+
+Same exe (SHA-256 `3f2ed012...0eed`). `AOac` (`AIcd` on `shhn`) is hosted with the held auras: decode in
+[passive-held-items.md](passive-held-items.md) ("Held auras", `AOac`). First refusal of
+`selected_install_locked_chapter_startup_probe` (`.scratch/chapter-sweep.sh`, headless):
+
+| Chapter | Before | After |
+|---|---|---|
+| TFT OrcX02 | `UnitAddItem`: unsupported passive ability `AIcd` (code `AOac`) on `shhn` | `SetDestructableAnimationSpeed` is unsupported by this host |
+| TFT OrcX03a | same `AIcd` on `shhn` | `UnitAddItem`: orb `AIft` enabled attack index is not 2 |
+| TFT HumanX06 | no refusal on current main, `executed_units=248` (the fatLOS footprint cleared the `DTrx` refusal) | unchanged, `executed_units=248` |
+
+Not attempted: the two new refusals.

@@ -1,5 +1,6 @@
-//! Held aura items (`AIau` Legion Doom-Horn, `AIad` Devotion Aura, `AIba` Brilliance Aura). The decoded rules and their
-//! evidence are in `docs/re-notes/passive-held-items.md`, "Held auras".
+//! Held aura items (`AIau` Legion Doom-Horn, `AIad` Devotion Aura, `AIba` Brilliance Aura, `AIcd`
+//! Command Aura). The decoded rules and their evidence are in
+//! `docs/re-notes/passive-held-items.md`, "Held auras".
 //!
 //! While an item is held its aura source runs two clocks from the pickup:
 //!
@@ -23,6 +24,7 @@
 //! allowed-target test `0x6adb90` (the shipped `targs1` tokens are read by name), the target-side
 //! veto chain `0x682180` (no recreated state has an ability that vetoes), and the armor shown in
 //! the unit panel.
+use super::combat::{Weapon, attack_class, weapon_slot};
 use super::unit_buff::{ActiveBuff, BuffTraits};
 use super::{Error, Failure, ObjectHost};
 use crate::inventory_powerup::{AuraEffect, HeldAura};
@@ -57,14 +59,34 @@ struct Source {
     report_stay: bool,
 }
 
+/// The attack damage a command buff added (`0xc25050` stores it per attack slot).
+#[derive(Clone, Copy)]
+struct DamageApplied {
+    amount: i32,
+    /// The weapon the amount was computed for; the client recomputes after an attack change
+    /// (event `0x80261`, 0.1 s later), which is not modelled.
+    weapon: Weapon,
+}
+
+/// What a buff's effect changed on its unit, to take back at the end.
+#[derive(Clone, Copy, Default)]
+struct Applied {
+    /// The amount added to the unit's speed multiplier, `None` when none.
+    speed: Option<f32>,
+    damage: Option<DamageApplied>,
+}
+
 /// The aura buff on one unit.
 struct AppliedBuff {
     effect: AuraEffect,
     expires_at: f64,
-    /// The amount the buff added to the unit's speed multiplier, `None` when it added none.
-    speed: Option<f32>,
+    applied: Applied,
     tolerance: f32,
 }
+
+/// Half: the rounding term and the die average of the client's damage arithmetic
+/// (`0x10db0a8`, read by `0xb1dbf0` and `0xc25050`).
+const HALF: f32 = 0.5;
 
 #[derive(Default)]
 pub(super) struct State {
@@ -192,7 +214,64 @@ impl ObjectHost {
         {
             return Ok(false);
         }
-        self.aura_covers(aura, &unit.definition)
+        if !self.aura_covers(aura, &unit.definition)? {
+            return Ok(false);
+        }
+        match aura.effect {
+            AuraEffect::Command { melee, ranged, .. } => self.aura_command_covers(
+                unit.combat.as_ref().and_then(|combat| combat.weapon),
+                &unit.definition,
+                melee,
+                ranged,
+            ),
+            _ => Ok(true),
+        }
+    }
+
+    /// The target test of the command aura (slot `0xc23be0`): the unit has an enabled, counted
+    /// attack of a weapon type the row covers (`DataB1` melee through `0xb211c0`, `DataC1` ranged
+    /// through `0xb21320`). A row that covers neither type matches no unit.
+    fn aura_command_covers(
+        &self,
+        weapon: Option<Weapon>,
+        definition: &Definition,
+        melee: bool,
+        ranged: bool,
+    ) -> Result<bool, Error> {
+        let Some(weapon) = weapon else {
+            return Ok(false);
+        };
+        let Some(slot) = weapon_slot(definition, &weapon) else {
+            return Err(
+                self.aura_error("a command aura target's weapon is not an attack of its type")
+            );
+        };
+        let class = attack_class(definition, slot, &weapon).map_err(|e| self.aura_error(e))?;
+        Ok(class.counted && ((melee && class.melee) || (ranged && class.ranged)))
+    }
+
+    /// The damage a command buff adds to `weapon` (`0xc25050`): `amount` points when `flat`, else
+    /// that fraction of the attack's average base damage (`0xb1dbf0`: base plus dice times the
+    /// average die) rounded half up, both truncated toward zero. A nonzero amount never rounds to
+    /// nothing, and a negative bonus stops at the attack's minimum damage.
+    fn command_damage(amount: f32, flat: bool, weapon: &Weapon) -> i32 {
+        let (base, dice) = (weapon.base, weapon.dice);
+        let raw = if flat {
+            amount
+        } else {
+            let average = base as f32 + dice as f32 * (weapon.sides as f32 * HALF + HALF);
+            amount * average + HALF
+        };
+        let value = match raw as i32 {
+            0 if amount > 0.0 => 1,
+            0 if amount < 0.0 => -1,
+            other => other,
+        };
+        if value < 0 {
+            value.max(-(base + dice))
+        } else {
+            value
+        }
     }
 
     /// One report of `target` to the source of `item`: applies or refreshes the buff.
@@ -254,7 +333,7 @@ impl ObjectHost {
                 }
                 self.aura_restart(&key, expires_at);
                 if amount > stored_amount && (amount - stored_amount) >= tolerance {
-                    self.aura_replace(target, &key, new, now)?;
+                    self.aura_replace(target, &key, stored.with_amount(amount), now)?;
                 }
             }
             _ => return Err(self.aura_error("one buff id names two aura classes")),
@@ -279,31 +358,47 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Adds the effect of `effect` to `unit` and returns the speed amount it added.
+    /// Adds the effect of `effect` to `unit` and returns what it changed.
     fn aura_apply_effect(
         &mut self,
         unit: HandleId,
         effect: AuraEffect,
         now: f64,
-    ) -> Result<Option<f32>, Error> {
+    ) -> Result<Applied, Error> {
         if self.executed_unit(unit)?.illusion.is_some() {
-            return Ok(None);
+            return Ok(Applied::default());
         }
         if effect.changes_regen() {
             self.aura_settle_regen(unit, now)?;
         }
-        let AuraEffect::Unholy { speed, .. } = effect else {
-            return Ok(None);
-        };
-        if speed == 0.0 {
-            return Ok(None);
+        match effect {
+            AuraEffect::Unholy { speed, .. } if speed != 0.0 => {
+                if self.unit_polymorphed(unit) {
+                    return Err(self.aura_error(
+                        "an aura speed on a polymorphed unit is not modelled: the speed writes of the polymorph type change are not decoded",
+                    ));
+                }
+                Ok(Applied {
+                    speed: self.shift_unit_speed(unit, speed, NAME)?.then_some(speed),
+                    damage: None,
+                })
+            }
+            AuraEffect::Command { amount, flat, .. } => {
+                let weapon = self
+                    .executed_unit(unit)?
+                    .combat
+                    .as_ref()
+                    .and_then(|combat| combat.weapon);
+                Ok(Applied {
+                    speed: None,
+                    damage: weapon.map(|weapon| DamageApplied {
+                        amount: Self::command_damage(amount, flat, &weapon),
+                        weapon,
+                    }),
+                })
+            }
+            _ => Ok(Applied::default()),
         }
-        if self.unit_polymorphed(unit) {
-            return Err(self.aura_error(
-                "an aura speed on a polymorphed unit is not modelled: the speed writes of the polymorph type change are not decoded",
-            ));
-        }
-        Ok(self.shift_unit_speed(unit, speed, NAME)?.then_some(speed))
     }
 
     fn aura_create(
@@ -314,8 +409,8 @@ impl ObjectHost {
         now: f64,
     ) -> Result<(), Error> {
         self.attach_unit_buff(target, ActiveBuff::new(aura.buff, BUFF_TRAITS))?;
-        let speed = match self.aura_apply_effect(target, aura.effect, now) {
-            Ok(speed) => speed,
+        let applied = match self.aura_apply_effect(target, aura.effect, now) {
+            Ok(applied) => applied,
             Err(error) => {
                 self.detach_unit_buff(target, aura.buff);
                 return Err(error);
@@ -326,7 +421,7 @@ impl ObjectHost {
             AppliedBuff {
                 effect: aura.effect,
                 expires_at,
-                speed,
+                applied,
                 tolerance: aura.timing.tolerance,
             },
         );
@@ -342,10 +437,10 @@ impl ObjectHost {
         now: f64,
     ) -> Result<(), Error> {
         self.aura_remove_effect(unit, key, now)?;
-        let speed = self.aura_apply_effect(unit, effect, now)?;
+        let applied = self.aura_apply_effect(unit, effect, now)?;
         if let Some(buff) = self.auras.buffs.get_mut(key) {
             buff.effect = effect;
-            buff.speed = speed;
+            buff.applied = applied;
         }
         Ok(())
     }
@@ -361,15 +456,15 @@ impl ObjectHost {
         let Some(buff) = self.auras.buffs.get(key) else {
             return Ok(());
         };
-        let (effect, speed) = (buff.effect, buff.speed);
+        let (effect, speed) = (buff.effect, buff.applied.speed);
         if effect.changes_regen() {
             self.aura_settle_regen(unit, now)?;
         }
         if let Some(speed) = speed {
             self.shift_unit_speed(unit, -speed, NAME)?;
-            if let Some(buff) = self.auras.buffs.get_mut(key) {
-                buff.speed = None;
-            }
+        }
+        if let Some(buff) = self.auras.buffs.get_mut(key) {
+            buff.applied = Applied::default();
         }
         Ok(())
     }
@@ -484,7 +579,9 @@ impl ObjectHost {
         self.aura_buffs_on(unit)
             .map(|buff| match buff.effect {
                 AuraEffect::Devotion { armor } => armor,
-                AuraEffect::Unholy { .. } | AuraEffect::Brilliance { .. } => 0.0,
+                AuraEffect::Unholy { .. }
+                | AuraEffect::Brilliance { .. }
+                | AuraEffect::Command { .. } => 0.0,
             })
             .sum()
     }
@@ -494,7 +591,9 @@ impl ObjectHost {
         self.aura_buffs_on(unit)
             .map(|buff| match buff.effect {
                 AuraEffect::Brilliance { mana } => f64::from(mana),
-                AuraEffect::Unholy { .. } | AuraEffect::Devotion { .. } => 0.0,
+                AuraEffect::Unholy { .. }
+                | AuraEffect::Devotion { .. }
+                | AuraEffect::Command { .. } => 0.0,
             })
             .sum()
     }
@@ -504,9 +603,34 @@ impl ObjectHost {
         self.aura_buffs_on(unit)
             .map(|buff| match buff.effect {
                 AuraEffect::Unholy { regen, .. } => f64::from(regen),
-                AuraEffect::Devotion { .. } | AuraEffect::Brilliance { .. } => 0.0,
+                AuraEffect::Devotion { .. }
+                | AuraEffect::Brilliance { .. }
+                | AuraEffect::Command { .. } => 0.0,
             })
             .sum()
+    }
+
+    /// Attack damage the command buffs on `source` add to `weapon`, which joins the flat item and
+    /// orb bonuses in one sum. A buff whose amount was computed for another weapon refuses: the
+    /// client recomputes it after an attack change, which is not modelled.
+    pub(crate) fn aura_damage_bonus(
+        &self,
+        source: HandleId,
+        weapon: &Weapon,
+    ) -> Result<f32, Error> {
+        let mut total = 0_i32;
+        for damage in self
+            .aura_buffs_on(source)
+            .filter_map(|buff| buff.applied.damage)
+        {
+            if damage.weapon != *weapon {
+                return Err(self.aura_error(
+                    "a command aura amount was computed for another weapon: the recompute after an attack change (event 0x80261) is not modelled",
+                ));
+            }
+            total = total.saturating_add(damage.amount);
+        }
+        Ok(total as f32)
     }
 
     /// The buffs whose effects count on `unit`: none on an illusion, which keeps the buff but
