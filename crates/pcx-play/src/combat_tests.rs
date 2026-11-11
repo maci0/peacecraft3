@@ -4765,6 +4765,40 @@ fn missile_weapon_without_shipped_missile_speed_refuses_only_at_launch() {
 }
 
 #[test]
+fn weapon_without_shipped_damage_point_refuses_only_at_swing() {
+    // `weapsOn` enables attack 1 and `dmgpt1` is an empty cell: creation and the
+    // attack order succeed, and the swing, which needs the damage point, refuses.
+    let mut fields = flee_fields_with("40", "normal", "1", "8");
+    let field = fields
+        .iter_mut()
+        .find(|(id, _)| id == b"W007")
+        .expect("synthetic dmgpt1 field");
+    field.1.value = Ok(FieldValue::Cell("-".into()));
+    let (mut vm, a, b) = flee_fixture_with_margin(&fields, 1.0);
+    set_life(&mut vm, b, 20.0);
+    vm.host().inner.enable_combat_trace(16);
+    issue_attack(&mut vm, a, b);
+    let mut error = None;
+    for _ in 0..256 {
+        let h = &mut vm.host().inner;
+        let next = h.timer_game_time().unwrap() + 1.0 / 64.0;
+        assert!(h.next_timer_expiry(next, &mut 100).unwrap().is_none());
+        if let Err(e) = h.advance_unit_activity(next, &mut 65536) {
+            error = Some(e.to_string());
+            break;
+        }
+        if let Err(e) = h.test_advance_combat() {
+            error = Some(e.to_string());
+            break;
+        }
+    }
+    let error = error.expect("the swing must refuse");
+    assert!(error.contains("dmgpt1"), "{error}");
+    assert_eq!(life(&mut vm, b), 20.0);
+    assert_eq!(damage_events(&mut vm), 0);
+}
+
+#[test]
 fn missile_impact_starts_the_route_and_traces_damage_once() {
     let mut fields = flee_fields_with("40", "missile", "1", "8");
     add_missile_speed(&mut fields);

@@ -23,7 +23,9 @@
 //! unit of a listed class in the area, allies and the shooter included, unless `notself`.
 //! This is a reading of the table, not an observed game.
 //! Destructables, trees and items in the area are not damaged.
-use super::combat::{ABSENT_MISSILE_SPEED, MissileSpeed, Splash, Weapon, distance};
+use super::combat::{
+    ABSENT_DAMAGE_POINT, ABSENT_MISSILE_SPEED, MissileSpeed, Splash, Weapon, distance,
+};
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, Value};
 
@@ -172,10 +174,13 @@ impl ObjectHost {
                     .atan2(point[0] - position[0])
                     .to_degrees()
                     .rem_euclid(360.0);
+                let Some(damage_point) = weapon.damage_point else {
+                    return Err(self.ground_fail(ABSENT_DAMAGE_POINT));
+                };
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     record.face = facing;
                     let combat = record.combat.as_mut().expect("combat");
-                    combat.ground_swing = Some(now + f64::from(weapon.damage_point / speed));
+                    combat.ground_swing = Some(now + f64::from(damage_point / speed));
                     combat.ready_at = now + f64::from(weapon.cooldown / speed);
                     combat.chase = None;
                     if let Some(animation) = &mut record.animation {

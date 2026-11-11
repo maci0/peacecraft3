@@ -41,6 +41,8 @@ const KILL: &str = "KillUnit";
 
 pub(super) const ABSENT_MISSILE_SPEED: &str =
     "missile launch needs Missilespeed, absent from the unit profile";
+pub(super) const ABSENT_DAMAGE_POINT: &str =
+    "attack swing needs dmgpt1, absent from the unit weapon";
 
 /// How a weapon's hit reaches its target.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,7 +61,8 @@ pub struct Weapon {
     pub range: f32,
     pub acquire: f32,
     pub cooldown: f32,
-    pub damage_point: f32,
+    /// `None` when the `dmgpt1` cell is empty. A swing refuses; creation and orders do not.
+    pub damage_point: Option<f32>,
     pub base: i32,
     pub dice: i32,
     pub sides: i32,
@@ -312,7 +315,7 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
             range: required(SlkId::UnitWeapons, "rangeN1")?,
             acquire: required(SlkId::UnitWeapons, "acquire")?,
             cooldown: required(SlkId::UnitWeapons, "cool1")?,
-            damage_point: required(SlkId::UnitWeapons, "dmgpt1")?,
+            damage_point: num(SlkId::UnitWeapons, "dmgpt1")?,
             base: required(SlkId::UnitWeapons, "dmgplus1")? as i32,
             dice: required(SlkId::UnitWeapons, "dice1")? as i32,
             sides: required(SlkId::UnitWeapons, "sides1")? as i32,
@@ -2007,10 +2010,15 @@ impl ObjectHost {
                             ),
                         ));
                     }
+                    let Some(damage_point) = weapon.damage_point else {
+                        return Err(self
+                            .inner
+                            .error(name, Failure::UnitActivity(ABSENT_DAMAGE_POINT.into())));
+                    };
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.face = facing;
                         let combat = record.combat.as_mut().expect("combat");
-                        combat.swing = Some((target, now + f64::from(weapon.damage_point / speed)));
+                        combat.swing = Some((target, now + f64::from(damage_point / speed)));
                         combat.ready_at = now + f64::from(weapon.cooldown / speed);
                         combat.chase = None;
                         if let Some(animation) = &mut record.animation {

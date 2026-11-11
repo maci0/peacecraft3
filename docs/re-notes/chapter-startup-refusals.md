@@ -44,6 +44,23 @@ Test (pcx-play `destructable_host_tests`): `placed_destructables_sharing_a_creat
 It failed before the fix at the first post-kill cell check (cell 100 still 0x02)
 and passes after.
 
+### Absent weapon damage point
+
+RoC Undead03 `war3map.j:1016` creates `nhem` (base `UnitWeapons` row `weapsOn` 0).
+The map's `war3map.w3u` entry sets `uaen` (`attackBits`, the weapon-enable mask)
+to 3 and sets attack 1 dice, sides, base damage, range, cooldown and target
+types. Neither the base row nor the map sets `dmgpt1`, so the cell is empty.
+`read_combat` required it at creation, and the nested order issued during
+`CreateUnit` refused.
+
+Fix: `dmgpt1` is read as an absent-capable number, like `Missilespeed`. Creation
+and orders succeed. A swing refuses with `ABSENT_DAMAGE_POINT`, at the unit swing
+and the ground-attack swing. The original's timing for an absent damage point is
+not established, so no default is used.
+
+Test (pcx-play `combat_tests`): `weapon_without_shipped_damage_point_refuses_only_at_swing`.
+It failed before the fix at creation with `unit field dmgpt1 is empty`.
+
 ## Open
 
 ### Odd-dimension pathing texture
@@ -111,6 +128,7 @@ on the selected install, before and after this batch.
 | RoC Undead06 | `CreateUnit`: `units\orc\HeroFarSeer\HeroFarSeer.mdx` invalid animation interval | unchanged: record 0 is genuinely inverted (see below) |
 | TFT NightElfX08Finale | `Blizzard.j:6913` `SetCampaignAvailable` unsupported | passes `SetCampaignAvailable`; `Blizzard.j:6915` `ForceCampaignSelectScreen` unsupported |
 | TFT UndeadX07c | `Blizzard.j:2128` `SetDoodadAnimationRect`: `ZZcd` unsupported `vertR` selector | passes the doodad; `Blizzard.j:4841` `SetPlayerAlliance` refused: arguments do not match the declaration |
+| RoC Undead03 | `CreateUnit` (`war3map.j:1016`): `unit field dmgpt1 is empty` | passes `CreateUnit`; `IssueImmediateOrder` `repairoff` (`war3map.j:1019`) unsupported by this host |
 
 `HeroFarSeer.mdx` (War3.mpq, 133,824 bytes) SEQS record 0 is named `nothing`,
 with interval start `0xFFFFFF59` (signed -167) and end `0`. Every other record
