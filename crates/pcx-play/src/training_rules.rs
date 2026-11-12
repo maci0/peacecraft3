@@ -211,10 +211,16 @@ impl Rules {
     }
 
     pub fn refund(&self, numeric: &NumericPolicy, cost: i32) -> Result<i32, String> {
+        if cost < 0 {
+            return Err("negative training refund cost".into());
+        }
         self.refund_at_rate(numeric, cost, self.refund_rate)
     }
 
     pub fn research_refund(&self, numeric: &NumericPolicy, cost: i32) -> Result<i32, String> {
+        if cost < 0 {
+            return Err("negative research refund cost".into());
+        }
         self.refund_at_rate(
             numeric,
             cost,
@@ -244,11 +250,6 @@ impl Rules {
                 *cost = cost.checked_sub(original).ok_or("upgrade cost overflow")?;
             }
         }
-        for cost in costs {
-            if cost < 0 {
-                return Err("negative upgrade cost is not qualified".into());
-            }
-        }
         Ok(costs)
     }
 
@@ -268,8 +269,8 @@ impl Rules {
     }
 
     fn refund_at_rate(&self, numeric: &NumericPolicy, cost: i32, rate: f32) -> Result<i32, String> {
-        if numeric.image_sha256() != &self.image_sha256 || cost < 0 {
-            return Err("training refund source identity or cost differs".into());
+        if numeric.image_sha256() != &self.image_sha256 {
+            return Err("training refund source identity differs".into());
         }
         let Value::Real(value) = numeric.binary(BinOp::Mul, numeric.integer(cost)?, rate)? else {
             return Err("training refund product is not real".into());
@@ -538,11 +539,9 @@ mod tests {
         assert_eq!(overridden.upgrade_policy().unwrap().refund_rate, 0.23);
         assert_eq!(overridden.refund_rate, 0.37);
         assert_eq!(overridden.research_refund_rate, Some(0.61));
-        assert!(
-            rules
-                .upgrade_costs(Some([75, 7]), [74, 23])
-                .unwrap_err()
-                .contains("negative")
+        assert_eq!(
+            rules.upgrade_costs(Some([75, 7]), [74, 23]).unwrap(),
+            [-1, 16]
         );
         assert!(
             rules
@@ -578,6 +577,45 @@ mod tests {
                 .upgrade_costs(Some([31, 7]), [74, 23])
                 .unwrap_err()
                 .contains("damage")
+        );
+    }
+
+    #[test]
+    fn signed_upgrade_refunds_keep_training_and_research_costs_independent() {
+        let (image, binding, budget) = crate::script_numeric::tests::fixture();
+        let numeric = NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        let mut rules = Rules::fixture(3, 0.37).with_upgrade_fixture(Some(UpgradePolicy {
+            refund_rate: 0.23,
+            relative_cost: false,
+            damage_penalty: false,
+        }));
+        assert!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::StructureUpgrade)
+                .is_err()
+        );
+        rules.image_sha256 = *numeric.image_sha256();
+        assert_eq!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::StructureUpgrade)
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            rules
+                .refund_for(&numeric, -1, RefundKind::StructureUpgrade)
+                .unwrap(),
+            0
+        );
+        assert!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::Training)
+                .is_err()
+        );
+        assert!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::Research)
+                .is_err()
         );
     }
 
