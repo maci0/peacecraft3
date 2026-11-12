@@ -245,6 +245,12 @@ pub fn read(
         full_timeout: window(0x7fbad0, 0xbe, true)?,
         active_elapsed: window(0x7fbb90, 0x34, true)?,
         inactive_elapsed: window(0x4fe470, 0x6f, true)?,
+        pause: window(0x4fe640, 0x46, true)?,
+        resume: window(0x4fe6b0, 0x38, true)?,
+        rearm: window(0x4fe5d0, 0x6a, true)?,
+        stop: window(0x7fbbd0, 0x3c, true)?,
+        dispatch: window(0x4fdf90, 0x4a, true)?,
+        expiry_dispatch: window(0x7fc390, 0x16b, true)?,
     };
     let numeric = script_numeric::NumericPolicy::read(
         image,

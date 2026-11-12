@@ -509,9 +509,7 @@ fn native_query_policy_preserves_pause_cache_restart_and_refusal_atomicity() {
     );
 }
 
-#[test]
-#[ignore = "requires explicit local selected image and replicated native query witness"]
-fn selected_native_timer_query_bits_match_public_lifecycle() {
+fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
     use crate::{
         camera_margins::SourceWindow,
         neutral_player::{RuleInputBudget, sha256},
@@ -519,27 +517,11 @@ fn selected_native_timer_query_bits_match_public_lifecycle() {
         script_numeric::{Binding, NumericPolicy, timer_query},
         scripts::AssetIdentity,
     };
-    use pcx_script::RealOps;
     let image =
         std::fs::read(std::env::var("PEACECRAFT3_QUERY_IMAGE").expect("explicit local image"))
             .unwrap();
-    let witness: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
     let image_sha256 = sha256(&image);
     assert_eq!(image_sha256, crate::menu_lighting::REVIEWED_IMAGE);
-    assert_eq!(
-        witness["source_sha256"],
-        image_sha256
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
-    assert_eq!(witness["identical_replicates"], true);
     let budget = RuleInputBudget {
         image_bytes: 32 << 20,
         profile_bytes: 64 << 10,
@@ -554,7 +536,7 @@ fn selected_native_timer_query_bits_match_public_lifecycle() {
             digest: sha256(bytes),
         }
     };
-    let numeric = NumericPolicy::read(
+    NumericPolicy::read(
         &image,
         Binding {
             origin: AssetIdentity {
@@ -594,10 +576,39 @@ fn selected_native_timer_query_bits_match_public_lifecycle() {
             full_timeout: window(0x7fbad0, 0xbe, true),
             active_elapsed: window(0x7fbb90, 0x34, true),
             inactive_elapsed: window(0x4fe470, 0x6f, true),
+            pause: window(0x4fe640, 0x46, true),
+            resume: window(0x4fe6b0, 0x38, true),
+            rearm: window(0x4fe5d0, 0x6a, true),
+            stop: window(0x7fbbd0, 0x3c, true),
+            dispatch: window(0x4fdf90, 0x4a, true),
+            expiry_dispatch: window(0x7fc390, 0x16b, true),
         },
         budget,
     )
+    .unwrap()
+}
+
+#[test]
+#[ignore = "requires explicit local selected image and replicated native query witness"]
+fn selected_native_timer_query_bits_match_public_lifecycle() {
+    use pcx_script::RealOps;
+    let numeric = selected_query_policy();
+    let witness: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
+        )
+        .unwrap(),
+    )
     .unwrap();
+    assert_eq!(
+        witness["source_sha256"],
+        numeric
+            .image_sha256()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(witness["identical_replicates"], true);
     let durations = ["2000.0", "240.47", "121.03", "0.47"].map(|s| numeric.literal(s).unwrap());
     let observations = [
         "0.02", "0.47", "1.03", "1.25", "2.0317", "119.97", "120.0", "120.02", "120.0317",
@@ -750,4 +761,295 @@ fn timer_query_policy_changes_refuse_without_rearming_existing_runs() {
             .is_err()
     );
     assert_eq!(legacy.next_timer_deadline(), Some(21.0));
+}
+
+#[test]
+#[ignore = "requires explicit local selected image and replicated native callback witness"]
+fn selected_native_timer_callback_matrix_matches_public_lifecycle() {
+    use pcx_script::RealOps;
+    let numeric = selected_query_policy();
+    let witness: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::env::var("PEACECRAFT3_CALLBACK_WITNESS")
+                .expect("explicit replicated callback witness"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        witness["source_sha256"],
+        numeric
+            .image_sha256()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(witness["identical_replicates"], true);
+    let duration = [
+        "2000.0", "128.0", "2.0", "2.0", "0.47", "0.47", "120.0", "120.0", "120.0", "120.0002",
+        "2.0", "3.0", "0.5", "1.0", "123.0", "125.0",
+    ]
+    .map(|s| numeric.literal(s).unwrap());
+    let replacement = numeric.literal("0.0317").unwrap();
+    let common = format!(
+        "{COMMON}native PauseTimer takes timer t returns nothing\nnative ResumeTimer takes timer t returns nothing\n"
+    );
+    let mut h = checked(
+        &common,
+        "function callback takes nothing returns nothing\nendfunction\n",
+    )
+    .with_script_numeric(numeric)
+    .with_timer_runtime(0.0)
+    .unwrap();
+    let handler = h.inner().program.function_id("callback").unwrap();
+    let kickoff = h.native("CreateTimer", &[]).unwrap();
+    start(&mut h, &kickoff, 1.0, false);
+    let first = h.next_timer_expiry(1.0, &mut 1).unwrap().unwrap();
+    let timers: Vec<_> = (0..16)
+        .map(|_| h.native("CreateTimer", &[]).unwrap())
+        .collect();
+    for i in 0..16 {
+        h.native(
+            "TimerStart",
+            &[
+                timers[i].clone(),
+                Value::Real(duration[i]),
+                Value::Bool(i == 3 || i == 4 || i == 6),
+                if i < 2 {
+                    Value::Null
+                } else {
+                    Value::Code(handler)
+                },
+            ],
+        )
+        .unwrap();
+    }
+    let mut at = 2;
+    let records = witness["records"].as_array().unwrap();
+    let check_query = |h: &mut ObjectHost, i: usize, phase: &str, at: &mut usize| {
+        let row = &records[*at];
+        assert_eq!(row["query"], i, "record{at}");
+        assert_eq!(row["phase"], phase);
+        for (name, key) in [
+            ("TimerGetElapsed", "elapsed_bits"),
+            ("TimerGetRemaining", "remaining_bits"),
+            ("TimerGetTimeout", "timeout_bits"),
+        ] {
+            assert_eq!(
+                u64::from(real_bits(&query(h, name, &timers[i]))),
+                row[key].as_u64().unwrap(),
+                "record{at} timer{i} {phase} {name}"
+            );
+        }
+        *at += 1;
+    };
+    check_query(&mut h, 6, "armed", &mut at);
+    check_query(&mut h, 7, "armed", &mut at);
+    h.finish_timer_expiry(first).unwrap();
+    let mut fires = [0; 16];
+    let mut events = 0;
+    while let Some(expiry) = h.next_timer_expiry(125.0, &mut 100).unwrap() {
+        let expired = h.native("GetExpiredTimer", &[]).unwrap();
+        let i = timers.iter().position(|t| *t == expired).unwrap();
+        if i == 14 {
+            h.finish_timer_expiry(expiry).unwrap();
+            break;
+        }
+        if i < 2 || expiry.callback.is_none() {
+            h.finish_timer_expiry(expiry).unwrap();
+            continue;
+        }
+        assert!(i < 14, "native watchdog must not fire");
+        fires[i] += 1;
+        events += 1;
+        let row = &records[at];
+        assert_eq!(row["event"], i, "record{at}");
+        assert_eq!(row["ordinal"], fires[i]);
+        assert_eq!(
+            u64::from(real_bits(&query(&mut h, "TimerGetElapsed", &timers[1]))),
+            row["short_bits"].as_u64().unwrap(),
+            "event{i}/{} shortclock",
+            fires[i]
+        );
+        assert_eq!(
+            u64::from(real_bits(&query(&mut h, "TimerGetElapsed", &timers[0]))),
+            row["long_bits"].as_u64().unwrap(),
+            "event{i}/{} longclock",
+            fires[i]
+        );
+        at += 1;
+        check_query(&mut h, i, "before", &mut at);
+        match (i, fires[i]) {
+            (3, 3) => {
+                h.native("PauseTimer", std::slice::from_ref(&expired))
+                    .unwrap();
+                check_query(&mut h, i, "after-pause", &mut at);
+            }
+            (4, 2) => {
+                h.native("PauseTimer", std::slice::from_ref(&expired))
+                    .unwrap();
+                check_query(&mut h, i, "after-pause", &mut at);
+                h.native("ResumeTimer", std::slice::from_ref(&expired))
+                    .unwrap();
+                check_query(&mut h, i, "after-resume", &mut at);
+            }
+            (4, 4) | (6, _) => {
+                h.native("PauseTimer", std::slice::from_ref(&expired))
+                    .unwrap();
+                check_query(&mut h, i, "after-stop", &mut at);
+            }
+            (5, 1) => {
+                h.native(
+                    "TimerStart",
+                    &[
+                        expired.clone(),
+                        Value::Real(replacement),
+                        Value::Bool(false),
+                        Value::Code(handler),
+                    ],
+                )
+                .unwrap();
+                check_query(&mut h, i, "after-restart", &mut at);
+            }
+            (5, 2) => {
+                h.native("DestroyTimer", std::slice::from_ref(&expired))
+                    .unwrap();
+                assert_eq!(records[at]["marker"], "destroy i=5");
+                at += 1;
+            }
+            (10, 1) => {
+                start(&mut h, &expired, replacement, false);
+                check_query(&mut h, i, "after-null-restart", &mut at);
+            }
+            (11, _) => {
+                for j in [2, 3, 4, 10] {
+                    check_query(&mut h, j, "observer", &mut at);
+                }
+            }
+            (12, _) => {
+                for j in [2, 3, 10] {
+                    h.native("PauseTimer", std::slice::from_ref(&timers[j]))
+                        .unwrap();
+                }
+                for j in [2, 3, 10] {
+                    check_query(&mut h, j, "after-pause", &mut at);
+                }
+            }
+            (13, _) => {
+                for j in [2, 3, 10] {
+                    h.native("ResumeTimer", std::slice::from_ref(&timers[j]))
+                        .unwrap();
+                }
+                for j in [2, 3, 10] {
+                    check_query(&mut h, j, "after-resume", &mut at);
+                }
+            }
+            _ => {}
+        }
+        h.finish_timer_expiry(expiry).unwrap();
+    }
+    assert_eq!(events, 18);
+    assert_eq!(at, records.len() - 1);
+    assert_eq!(records[at]["marker"], "end events=18");
+    assert_eq!(
+        (fires[2], fires[3], fires[4], fires[5], fires[6]),
+        (2, 2, 4, 2, 1)
+    );
+}
+
+#[test]
+fn vm_resumed_callbacks_rearm_once_and_respect_handler_replacement() {
+    for replace in [false, true] {
+        let common = format!(
+            "{COMMON}native PauseTimer takes timer t returns nothing\nnative ResumeTimer takes timer t returns nothing\n"
+        );
+        let replacement = if replace {
+            "call TimerStart(T,1.0/4.0,false,null)"
+        } else {
+            ""
+        };
+        let map = format!(
+            "globals\ntimer T = null\ninteger Calls = 0\nreal Elapsed = 0.0\nendglobals\nfunction callback takes nothing returns nothing\nset Calls = Calls+1\nset Elapsed = TimerGetElapsed(GetExpiredTimer())\n{replacement}\nendfunction\nfunction main takes nothing returns nothing\nset T = CreateTimer()\ncall TimerStart(T,2.0,true,function callback)\nendfunction\n"
+        );
+        let h = checked(&common, &map)
+            .with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125))
+            .with_timer_runtime(0.0)
+            .unwrap();
+        let shared = Arc::clone(&h.inner().program);
+        let callback = shared.function_id("callback").unwrap();
+        let mut vm = pcx_script::OwnedVm::new_owned(shared, h);
+        vm.init_globals().unwrap();
+        vm.call("main", &[]).unwrap();
+        let t = vm.global("T");
+        assert!(vm.host().next_timer_expiry(0.5, &mut 0).unwrap().is_none());
+        vm.host()
+            .native("PauseTimer", std::slice::from_ref(&t))
+            .unwrap();
+        assert!(vm.host().next_timer_expiry(1.0, &mut 0).unwrap().is_none());
+        vm.host()
+            .native("ResumeTimer", std::slice::from_ref(&t))
+            .unwrap();
+        let expiry = vm.host().next_timer_expiry(2.5, &mut 1).unwrap().unwrap();
+        assert_eq!(expiry.callback, Some(callback));
+        vm.call("callback", &[]).unwrap();
+        assert_eq!(vm.global("Elapsed"), Value::Real(0.5));
+        vm.host().finish_timer_expiry(expiry).unwrap();
+        let expiry = vm.host().next_timer_expiry(5.0, &mut 1).unwrap().unwrap();
+        assert_eq!(
+            vm.host().timer_game_time(),
+            Some(if replace { 2.75 } else { 4.5 })
+        );
+        if replace {
+            assert!(expiry.callback.is_none());
+        } else {
+            assert_eq!(expiry.callback, Some(callback));
+            vm.call("callback", &[]).unwrap();
+        }
+        vm.host().finish_timer_expiry(expiry).unwrap();
+        assert!(vm.host().next_timer_expiry(20.0, &mut 0).unwrap().is_none());
+        assert_eq!(vm.global("Calls"), Value::Int(if replace { 1 } else { 2 }));
+    }
+}
+
+#[test]
+fn vm_pause_resume_inside_periodic_callback_uses_minimum_then_full_oneshot() {
+    let common = format!(
+        "{COMMON}native PauseTimer takes timer t returns nothing\nnative ResumeTimer takes timer t returns nothing\n"
+    );
+    let map = "globals\ntimer T = null\ninteger Calls = 0\nendglobals\nfunction callback takes nothing returns nothing\nset Calls = Calls+1\nif Calls == 1 then\ncall PauseTimer(GetExpiredTimer())\ncall ResumeTimer(GetExpiredTimer())\nendif\nendfunction\nfunction main takes nothing returns nothing\nset T = CreateTimer()\ncall TimerStart(T,1.0/2.0,true,function callback)\nendfunction\n";
+    let h = checked(&common, map)
+        .with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125))
+        .with_timer_runtime(0.0)
+        .unwrap();
+    let shared = Arc::clone(&h.inner().program);
+    let callback = shared.function_id("callback").unwrap();
+    let mut vm = pcx_script::OwnedVm::new_owned(shared, h);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    for at in [0.5, 0.625, 1.125] {
+        let expiry = vm.host().next_timer_expiry(2.0, &mut 1).unwrap().unwrap();
+        assert_eq!(vm.host().timer_game_time(), Some(at));
+        assert_eq!(expiry.callback, Some(callback));
+        vm.call("callback", &[]).unwrap();
+        vm.host().finish_timer_expiry(expiry).unwrap();
+    }
+    assert!(vm.host().next_timer_expiry(20.0, &mut 0).unwrap().is_none());
+    assert_eq!(vm.global("Calls"), Value::Int(3));
+}
+
+#[test]
+fn source_minimum_residual_delays_exact_segment_expiry_without_early_delivery() {
+    let mut h = checked(COMMON, "")
+        .with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125))
+        .with_timer_runtime(1.0)
+        .unwrap();
+    let t = h.native("CreateTimer", &[]).unwrap();
+    start(&mut h, &t, 8.0, false);
+    assert!(h.next_timer_expiry(9.0625, &mut 0).unwrap().is_none());
+    assert_eq!(h.timer_game_time(), Some(9.0625));
+    assert!(h.next_timer_expiry(9.125, &mut 0).is_err());
+    assert_eq!(h.timer_game_time(), Some(9.0625));
+    let expiry = h.next_timer_expiry(9.125, &mut 1).unwrap().unwrap();
+    assert_eq!(h.timer_game_time(), Some(9.125));
+    h.finish_timer_expiry(expiry).unwrap();
 }
