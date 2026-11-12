@@ -497,7 +497,7 @@ impl ObjectHost {
             let record = self.executed_unit(unit)?;
             if record.cached
                 || record.summoned
-                || record.admitted_order.is_some()
+                || record.admitted_order.is_some_and(|(_, active)| active)
                 || record.paused_since.is_some()
                 || self.unit_has_effect_history(unit)
                 || record.combat.is_none()

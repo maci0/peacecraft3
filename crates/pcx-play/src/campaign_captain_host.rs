@@ -207,39 +207,38 @@ impl ObjectHost {
             )
         })?;
         let requested = kind.to_be_bytes();
-        let matches = |code| {
-            code == requested
-                || rules
-                    .alternates
-                    .iter()
-                    .any(|&(base, alternate)| base == requested && alternate == code)
-        };
+        let alternate = rules
+            .alternates
+            .iter()
+            .find_map(|&(base, alternate)| (base == requested).then_some(alternate));
         let mut remaining = quantity;
-        for &unit in self
-            .campaign_ai
-            .captain_members_for(player, attack)
-            .unwrap_or_default()
-        {
-            if self
-                .live(unit)
-                .is_some_and(|unit| unit.owner == owner && matches(unit.definition.rawcode))
+        for code in std::iter::once(requested).chain(alternate) {
+            for &unit in self
+                .campaign_ai
+                .captain_members_for(player, attack)
+                .unwrap_or_default()
             {
-                remaining = remaining.wrapping_add(rules.count_step);
-                if remaining == 0 {
-                    break;
+                if self
+                    .live(unit)
+                    .is_some_and(|unit| unit.owner == owner && unit.definition.rawcode == code)
+                {
+                    remaining = remaining.wrapping_add(rules.count_step);
+                    if remaining == 0 {
+                        break;
+                    }
                 }
             }
-        }
-        if remaining == 0 {
-            return Ok(true);
+            if remaining == 0 {
+                return Ok(true);
+            }
         }
 
         // shortcut: canonical creation order breaks equal-priority ties; qualify native controller ordering before matching formation details.
         let mut candidates = Vec::new();
-        for (unit, record) in self
-            .executed_units()
-            .filter(|(_, r)| r.owner == owner && matches(r.definition.rawcode))
-        {
+        for (unit, record) in self.executed_units().filter(|(_, r)| {
+            r.owner == owner
+                && (r.definition.rawcode == requested || Some(r.definition.rawcode) == alternate)
+        }) {
             if !record.shown
                 || record.combat.as_ref().is_some_and(|combat| combat.dead)
                 || record.vitals.is_some_and(|vitals| vitals.life <= 0.)
@@ -272,38 +271,47 @@ impl ObjectHost {
             candidates
                 .try_reserve(1)
                 .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-            candidates.push((unit, vitals.life / vitals.max_life >= rules.health_priority));
+            candidates.push((
+                unit,
+                record.definition.rawcode,
+                vitals.life / vitals.max_life >= rules.health_priority,
+            ));
         }
         let mut accepted = Vec::new();
         accepted
             .try_reserve(candidates.len())
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
         for healthy in [true, false] {
-            for &(unit, priority) in &candidates {
-                if priority != healthy {
-                    continue;
+            for code in std::iter::once(requested).chain(alternate) {
+                for &(unit, kind, priority) in &candidates {
+                    if kind != code || priority != healthy {
+                        continue;
+                    }
+                    let record = self.executed_unit(unit)?;
+                    if record.combat.is_none()
+                        || record.cached
+                        || record.summoned
+                        || record.paused_since.is_some()
+                        || record.admitted_order.is_some_and(|(_, active)| active)
+                        || self.unit_has_effect_history(unit)
+                        || self.harvest_owns_unit(unit)
+                        || self.summon_current_order(unit).is_some()
+                    {
+                        return Err(self.inner.error(
+                            name,
+                            Failure::UnitActivity(
+                                "defender creation, effect or activity state is unqualified".into(),
+                            ),
+                        ));
+                    }
+                    let guard = self.prepare_captain_guard(unit, owner, home, name)?;
+                    let route = self.prepare_captain_home(unit, home, name)?;
+                    accepted.push((unit, guard, route));
+                    remaining = remaining.wrapping_add(rules.count_step);
+                    if remaining == 0 {
+                        break;
+                    }
                 }
-                let record = self.executed_unit(unit)?;
-                if record.combat.is_none()
-                    || record.cached
-                    || record.summoned
-                    || record.paused_since.is_some()
-                    || record.admitted_order.is_some()
-                    || self.unit_has_effect_history(unit)
-                    || self.harvest_owns_unit(unit)
-                    || self.summon_current_order(unit).is_some()
-                {
-                    return Err(self.inner.error(
-                        name,
-                        Failure::UnitActivity(
-                            "defender creation, effect or activity state is unqualified".into(),
-                        ),
-                    ));
-                }
-                let guard = self.prepare_captain_guard(unit, owner, home, name)?;
-                let route = self.prepare_captain_home(unit, home, name)?;
-                accepted.push((unit, guard, route));
-                remaining = remaining.wrapping_add(rules.count_step);
                 if remaining == 0 {
                     break;
                 }
