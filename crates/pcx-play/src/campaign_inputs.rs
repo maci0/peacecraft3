@@ -66,6 +66,17 @@ pub fn prepare_new_game(
     }
     let local = i32::try_from(local.number()).map_err(|_| "local player number")?;
     let mut inputs = prepare(context, map_sources, reader, image, client.clone())?;
+    if let Some(source) = inputs.ai_source.as_mut() {
+        let players = context
+            .world
+            .info
+            .players
+            .iter()
+            .map(|player| i32::try_from(player.number()).map_err(|_| "AI player number"))
+            .collect::<Result<Vec<_>, _>>()?;
+        source.melee_difficulty =
+            Some(crate::campaign_ai::melee_difficulty::Rules::read(image)?.fresh_input(players)?);
+    }
     let settings = crate::campaign_client::fresh_settings(image, client.clone())?;
     let placement_rules = crate::campaign_client::placement_rules(image, client.clone())?;
     let weather = reader

@@ -177,7 +177,9 @@ impl ObjectHost {
             self.next_training_completion(until),
             self.next_construction_completion(until),
             self.next_mirror_boundary(until),
+            self.next_slow_boundary(until),
             self.next_morph_boundary(until),
+            self.next_autocast_boundary(until),
         ]
         .into_iter()
         .flatten()

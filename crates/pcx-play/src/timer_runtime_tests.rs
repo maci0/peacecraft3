@@ -509,6 +509,18 @@ fn native_query_policy_preserves_pause_cache_restart_and_refusal_atomicity() {
     );
 }
 
+fn bounded_local_input(path: impl AsRef<std::path::Path>, limit: u64) -> Vec<u8> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert!(bytes.len() as u64 <= limit, "local input exceeds budget");
+    bytes
+}
+
 fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
     use crate::{
         camera_margins::SourceWindow,
@@ -517,9 +529,10 @@ fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
         script_numeric::{Binding, NumericPolicy, timer_query},
         scripts::AssetIdentity,
     };
-    let image =
-        std::fs::read(std::env::var("PEACECRAFT3_QUERY_IMAGE").expect("explicit local image"))
-            .unwrap();
+    let image = bounded_local_input(
+        std::env::var("PEACECRAFT3_QUERY_IMAGE").expect("explicit local image"),
+        32 << 20,
+    );
     let image_sha256 = sha256(&image);
     assert_eq!(image_sha256, crate::menu_lighting::REVIEWED_IMAGE);
     let budget = RuleInputBudget {
@@ -593,12 +606,10 @@ fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
 fn selected_native_timer_query_bits_match_public_lifecycle() {
     use pcx_script::RealOps;
     let numeric = selected_query_policy();
-    let witness: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
-        )
-        .unwrap(),
-    )
+    let witness: serde_json::Value = serde_json::from_slice(&bounded_local_input(
+        std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
+        2 << 20,
+    ))
     .unwrap();
     assert_eq!(
         witness["source_sha256"],
@@ -768,13 +779,11 @@ fn timer_query_policy_changes_refuse_without_rearming_existing_runs() {
 fn selected_native_timer_callback_matrix_matches_public_lifecycle() {
     use pcx_script::RealOps;
     let numeric = selected_query_policy();
-    let witness: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            std::env::var("PEACECRAFT3_CALLBACK_WITNESS")
-                .expect("explicit replicated callback witness"),
-        )
-        .unwrap(),
-    )
+    let witness: serde_json::Value = serde_json::from_slice(&bounded_local_input(
+        std::env::var("PEACECRAFT3_CALLBACK_WITNESS")
+            .expect("explicit replicated callback witness"),
+        2 << 20,
+    ))
     .unwrap();
     assert_eq!(
         witness["source_sha256"],

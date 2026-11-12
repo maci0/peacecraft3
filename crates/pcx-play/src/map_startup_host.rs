@@ -440,6 +440,15 @@ impl MapStartupHost {
         self.inner.as_mut().expect("map world is not lent to AI")
     }
 
+    /// Per-player creation inputs; existing AI contexts retain their captured value.
+    pub fn with_ai_melee_difficulty(
+        mut self,
+        input: crate::campaign_ai::melee_difficulty::Input,
+    ) -> Self {
+        self.ai.set_melee_difficulty(input);
+        self
+    }
+
     pub fn with_ai_pause_rules(
         mut self,
         rules: Result<crate::campaign_ai_pause_policy::Rules, String>,

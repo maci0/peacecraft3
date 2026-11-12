@@ -15,6 +15,8 @@ use std::{
     sync::Arc,
 };
 
+#[path = "unit_group_count.rs"]
+pub(crate) mod group_count;
 #[path = "unit_group_range.rs"]
 pub(crate) mod group_range;
 
@@ -118,6 +120,7 @@ pub struct Rules {
     texture_policy: TexturePolicy,
     footprint: Option<FootprintGeometry>,
     group_range: Result<group_range::Rules, String>,
+    group_count: Result<group_count::Rules, String>,
 }
 
 impl Rules {
@@ -317,6 +320,14 @@ impl Rules {
             } else {
                 Err("unqualified group-range client image".into())
             },
+            group_count: if binding.image_sha256 == crate::menu_lighting::REVIEWED_IMAGE {
+                let used = windows.iter().map(|w| w.len as usize).sum::<usize>()
+                    + 24
+                    + group_range::INPUT_BYTES;
+                group_count::Rules::read(&pe, budget.profile_bytes.saturating_sub(used))
+            } else {
+                Err("unqualified group-count client image".into())
+            },
             binding: Arc::new(binding),
             exponent,
             initial,
@@ -338,6 +349,12 @@ impl Rules {
     /// (tile edge, world-height bias, raw indices per world-height unit).
     pub fn terrain_encoding(&self) -> [f32; 3] {
         [self.terrain_xy, self.height_bias, self.height_factor]
+    }
+
+    pub(crate) fn group_count(&self) -> Result<&group_count::Rules, Error> {
+        self.group_count
+            .as_ref()
+            .map_err(|detail| fail(format!("{}: {detail}", self.binding.origin.source)))
     }
 
     pub(crate) fn group_range(&self) -> Result<&group_range::Rules, Error> {
