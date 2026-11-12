@@ -6,6 +6,8 @@ use crate::{
     scripts::AssetIdentity,
 };
 
+#[path = "autocast_clock.rs"]
+pub mod clock;
 #[path = "autocast_slow_rules.rs"]
 pub mod slow;
 
@@ -52,6 +54,7 @@ pub struct Rules {
     pub alarm_code: Option<[u8; 4]>,
     /// Lower bound passed by CUnit's mana initialization; `None` when not admitted.
     pub mana_minimum: Option<f32>,
+    pub clock: Option<clock::Rules>,
     pub slow: Option<slow::Rules>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
@@ -122,6 +125,7 @@ impl Rules {
         let alarm_code = Self::alarm_code(&mut read)?;
         let slow = slow::Rules::read(&mut read)?;
         let mana_minimum = Self::mana_minimum(&mut read)?;
+        let clock = clock::Rules::read(&mut read)?;
         let mut rules = Self::decode(
             origin,
             sha256(image),
@@ -134,6 +138,7 @@ impl Rules {
         rules.alarm_code = Some(alarm_code);
         rules.slow = Some(slow);
         rules.mana_minimum = Some(mana_minimum);
+        rules.clock = Some(clock);
         Ok(rules)
     }
     fn mana_minimum(
@@ -375,6 +380,7 @@ impl Rules {
             groups,
             alarm_code: None,
             mana_minimum: None,
+            clock: None,
             slow: None,
         })
     }
@@ -506,17 +512,30 @@ fn bootstrap_real(
     global: u32,
     read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
 ) -> Result<f32, String> {
-    let init = read(initializer, 16, true)?;
-    shape(&init, 0, &[0x6a])?;
-    shape(&init, 2, &[0x68])?;
-    shape(&init, 7, &[0xe8])?;
-    shape(&init, 12, &[0x83, 0xc4, 0x08, 0xc3])?;
-    if global != word(&init, 3)?
-        || initializer.wrapping_add(12).wrapping_add(word(&init, 8)?) != 0x9a1620
+    let prefix = read(initializer, 2, true)?;
+    let immediate_bytes = match prefix.first() {
+        Some(0x6a) => 2,
+        Some(0x68) => 5,
+        _ => return Err("autocast real initializer operand changed".into()),
+    };
+    let init = read(initializer, immediate_bytes + 14, true)?;
+    shape(&init, immediate_bytes, &[0x68])?;
+    shape(&init, immediate_bytes + 5, &[0xe8])?;
+    shape(&init, immediate_bytes + 10, &[0x83, 0xc4, 0x08, 0xc3])?;
+    if global != word(&init, immediate_bytes + 1)?
+        || initializer
+            .wrapping_add(immediate_bytes as u32 + 10)
+            .wrapping_add(word(&init, immediate_bytes + 6)?)
+            != 0x9a1620
     {
         return Err("autocast real initialization differs".into());
     }
-    crate::script_random::real::from_i32(i32::from(init[1] as i8))
+    let operand = if immediate_bytes == 2 {
+        i32::from(init[1] as i8)
+    } else {
+        word(&init, 1)? as i32
+    };
+    crate::script_random::real::from_i32(operand)
         .map(f32::from_bits)
         .map_err(|e| format!("autocast real initialization conversion: {e}"))
 }

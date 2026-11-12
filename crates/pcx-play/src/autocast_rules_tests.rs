@@ -530,6 +530,13 @@ fn selected_original_autocast_classes_bind() {
     }
     assert_eq!(rules.alarm_code, Some(*b"Aalr"));
     assert!(rules.mana_minimum.is_some_and(f32::is_finite));
+    let clock = rules.clock.expect("selected simple timer clock");
+    assert!(
+        clock
+            .deadline(0., class(b"Ahea").tick.unwrap().retry)
+            .unwrap()
+            > 0.
+    );
     assert_eq!(class(b"Ainf").enable.unwrap().group, 1);
     assert_eq!(class(b"Ambt").enable.unwrap().group, 1);
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);

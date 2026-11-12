@@ -1,20 +1,9 @@
-//! The text-resolution seam: `TRIGSTR_<n>`, `war3map.wts` and `^^` code tags.
+//! Raw script text and the selected native map-string boundary.
 //!
-//! Three different things land here, and all three are the map's own text
-//! rather than something this crate should own:
-//!
-//! - The editor writes player-visible trigger strings as the *string literal*
-//!   `"TRIGSTR_374"` and as the *identifier* `TRIGSTR_374` once a trigger
-//!   graph is desugared to JASS. Footman Frenzy ships 862 of the literal form
-//!   and the corpus carries 34,634 of them, so both spellings have to resolve.
-//! - The body for that id lives in the map's `war3map.wts`, which
-//!   [`crate`] deliberately does not depend on: `pcx-trig` owns that file
-//!   (`Wts::body(id)`). The caller supplies a table through
-//!   [`crate::eval::Host::table_string`] and the VM asks it for a body.
-//! - A paired `^^…^^` in a string is a code tag. What the engine substitutes
-//!   for it is a frame-string question, so it goes through
-//!   [`crate::eval::Host::code_tag`] and is refused when the host has no
-//!   answer. Guessing here would silently corrupt every tooltip that uses one.
+//! Evaluation retains trigger tokens and paired tag markers. Map WTS lookup is
+//! native-specific; UI dictionaries and text formatting are separate consumers.
+//! The host distinguishes a missing map source from an absent entry in an
+//! admitted source, and this module performs no recursive substitutions.
 
 /// The id a `TRIGSTR_<n>` spelling refers to, or `None` if the text is not
 /// that form. Both spellings resolve through this one check, so a string
@@ -35,7 +24,7 @@ pub fn trigstr_id(text: &str) -> Option<u32> {
 
 /// Native trigger lookup differs from the editor's exact identifier syntax.
 /// Selected 1.29.2.9231: 0x708dc0 -> 0x434390; -1 means no lookup.
-pub(crate) fn native_trigstr_id(text: &str) -> Option<u32> {
+pub fn native_trigstr_id(text: &str) -> Option<u32> {
     let suffix = text.strip_prefix("TRIGSTR_")?;
     let (negative, digits) = match suffix.strip_prefix('-') {
         Some(digits) => (true, digits),
@@ -55,9 +44,66 @@ pub(crate) fn native_trigstr_id(text: &str) -> Option<u32> {
     (id != u32::MAX).then_some(id)
 }
 
+/// Native consumer access to the selected map table. Missing source is an error;
+/// `Ok(None)` means that an admitted table has no entry with this id.
+pub type NativeStringLookup<'a> = dyn Fn(u32) -> Result<Option<String>, String> + 'a;
+
+/// The selected native map-string wrapper: C text and at most one WTS lookup.
+/// No UI dictionary lookup or tag substitution happens at this boundary.
+pub fn native_map_string<'a>(
+    text: &'a str,
+    source: Option<&NativeStringLookup<'_>>,
+) -> Result<std::borrow::Cow<'a, str>, String> {
+    let text = text
+        .split('\0')
+        .next()
+        .expect("split has an initial segment");
+    let Some(id) = native_trigstr_id(text) else {
+        return Ok(std::borrow::Cow::Borrowed(text));
+    };
+    let source = source.ok_or_else(|| format!("TRIGSTR_{id}: map string source unavailable"))?;
+    let mut body = source(id)
+        .map_err(|why| format!("TRIGSTR_{id}: {why}"))?
+        .unwrap_or_default();
+    if let Some(end) = body.find('\0') {
+        body.truncate(end);
+    }
+    Ok(std::borrow::Cow::Owned(body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_map_source_distinguishes_missing_entry_from_missing_or_broken_source() {
+        assert!(
+            native_map_string("TRIGSTR_7", None)
+                .unwrap_err()
+                .contains("source unavailable")
+        );
+        let absent = |_| Ok(None);
+        assert_eq!(native_map_string("TRIGSTR_7", Some(&absent)).unwrap(), "");
+        let unavailable = |_| Err("selected map/WTS source absent".into());
+        assert!(
+            native_map_string("TRIGSTR_7", Some(&unavailable))
+                .unwrap_err()
+                .contains("selected map/WTS source absent")
+        );
+        let malformed = |_| Err("fixture.wts entry7 invalid UTF8".into());
+        assert!(
+            native_map_string("TRIGSTR_7", Some(&malformed))
+                .unwrap_err()
+                .contains("fixture.wts entry7 invalid UTF8")
+        );
+        let body = |_| Ok(Some("TRIGSTR_8\0tail".into()));
+        assert_eq!(
+            native_map_string("TRIGSTR_7", Some(&body)).unwrap(),
+            "TRIGSTR_8"
+        );
+        assert_eq!(native_map_string("literal\0tail", None).unwrap(), "literal");
+        assert_eq!(native_map_string("TRIGSTR_-1", None).unwrap(), "TRIGSTR_-1");
+    }
 
     #[test]
     fn native_trigger_ids_use_wrapping_prefix_integer_semantics() {

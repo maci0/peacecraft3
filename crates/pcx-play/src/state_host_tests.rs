@@ -560,3 +560,53 @@ fn timer_dialogs_retain_executed_state_and_refuse_unestablished_uses() {
     assert!(call(&mut h, "DestroyTimerDialog", &[]).is_err());
     assert!(call(&mut h, "IsTimerDialogDisplayed", &[]).is_err());
 }
+
+#[test]
+fn native_string_timer_titles_and_cinematic_fields_use_distinct_lookups() {
+    use std::cell::RefCell;
+    let mut h = host().with_timer_dialogs().unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let dialog = h.native("CreateTimerDialog", &[timer]).unwrap();
+    let calls = RefCell::new(Vec::new());
+    let source = |id| {
+        calls.borrow_mut().push(id);
+        Ok(Some(if id == 7 { "TRIGSTR_23" } else { "^^x^^" }.into()))
+    };
+    assert!(
+        h.native_with_strings(
+            "TimerDialogSetTitle",
+            &[Value::Null, Value::Str("TRIGSTR_7".into())],
+            &source
+        )
+        .is_err()
+    );
+    assert!(calls.borrow().is_empty());
+    h.native_with_strings(
+        "TimerDialogSetTitle",
+        &[dialog, Value::Str("TRIGSTR_7".into())],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(
+        h.timer_dialogs().next().unwrap().1.title.as_deref(),
+        Some("TRIGSTR_23")
+    );
+    let color = h.native("ConvertPlayerColor", &[Value::Int(0)]).unwrap();
+    h.native_with_strings(
+        "SetCinematicScene",
+        &[
+            Value::Int(17),
+            color,
+            Value::Str("TRIGSTR_7".into()),
+            Value::Str("TRIGSTR_8".into()),
+            Value::Real(2.),
+            Value::Real(1.),
+        ],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(*calls.borrow(), [7, 7, 8]);
+    let scene = h.cinematic_scene().unwrap();
+    assert_eq!(scene.speaker, "TRIGSTR_23");
+    assert_eq!(scene.text, "^^x^^");
+}

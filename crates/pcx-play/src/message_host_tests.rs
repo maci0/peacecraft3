@@ -296,3 +296,77 @@ fn a_published_message_layout_cannot_be_rebound() {
     };
     assert!(error.to_string().contains("layout already admitted"));
 }
+
+#[test]
+fn native_string_messages_filter_remote_before_lookup_and_budget_decoded_bytes() {
+    use std::cell::RefCell;
+    let mut h = host("// map", 2, 4);
+    let remote = player(&mut h, 1);
+    let local = player(&mut h, 2);
+    let calls = RefCell::new(Vec::new());
+    let source = |id| {
+        calls.borrow_mut().push(id);
+        if id == 7 {
+            Ok(Some("é".into()))
+        } else {
+            Err("fixture.wts invalid record".into())
+        }
+    };
+    let args = |p| {
+        [
+            p,
+            Value::Real(0.),
+            Value::Real(0.),
+            Value::Real(4.),
+            Value::Str("TRIGSTR_7".into()),
+        ]
+    };
+    h.native_with_strings("DisplayTimedTextToPlayer", &args(remote), &source)
+        .unwrap();
+    assert!(calls.borrow().is_empty());
+    h.native_with_strings("DisplayTimedTextToPlayer", &args(local.clone()), &source)
+        .unwrap();
+    assert_eq!(*calls.borrow(), [7]);
+    assert_eq!(h.messages().unwrap().visible(0.).next().unwrap().text, "é");
+    let revision = h.messages().unwrap().revision();
+    let mut broken = args(local);
+    broken[4] = Value::Str("TRIGSTR_8".into());
+    assert!(
+        h.native_with_strings("DisplayTimedTextToPlayer", &broken, &source)
+            .unwrap_err()
+            .contains("fixture.wts invalid record")
+    );
+    assert_eq!(h.messages().unwrap().revision(), revision);
+}
+
+#[test]
+fn native_string_player_names_resolve_once_after_player_identity() {
+    use std::cell::Cell;
+    let mut h = host("// names", 1, 32);
+    let p = player(&mut h, 2);
+    let calls = Cell::new(0);
+    let source = |_| {
+        calls.set(calls.get() + 1);
+        Ok(Some("é".into()))
+    };
+    assert!(
+        h.native_with_strings(
+            "SetPlayerName",
+            &[Value::Null, Value::Str("TRIGSTR_7".into())],
+            &source
+        )
+        .is_err()
+    );
+    assert_eq!(calls.get(), 0);
+    h.native_with_strings(
+        "SetPlayerName",
+        &[p.clone(), Value::Str("TRIGSTR_7".into())],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        h.native("GetPlayerName", &[p]).unwrap(),
+        Value::Str("é".into())
+    );
+}

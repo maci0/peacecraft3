@@ -1932,6 +1932,7 @@ fn killed_unattended_site_has_no_completion_wake_or_finish_benefits() {
     )]);
     let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
     register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    point_build(&mut vm.host().inner, worker);
     let site = site(&mut vm, worker);
     let host = &mut vm.host().inner;
     assert!(host.next_construction_completion(100.).is_some());
@@ -1948,8 +1949,15 @@ fn killed_unattended_site_has_no_completion_wake_or_finish_benefits() {
 }
 
 #[test]
-fn incomplete_site_owner_transfer_refuses_before_detaching_or_refunding() {
-    let (mut vm, worker, _) = public_fixture();
+fn unattended_site_owner_transfer_still_refuses_before_mutation() {
+    let (mut vm, worker, _) = public_fixture_with(&[column(
+        b"C002",
+        SlkId::UnitData,
+        "race",
+        FieldKind::Token,
+        "other-fixture",
+    )]);
+    point_build(&mut vm.host().inner, worker);
     let site = site(&mut vm, worker);
     let host = &mut vm.host().inner;
     let owner = host.executed_unit(site).unwrap().owner;
@@ -1968,6 +1976,157 @@ fn incomplete_site_owner_transfer_refuses_before_detaching_or_refunding() {
     assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
     step(&mut vm, 9.);
     assert!(vm.host().inner.unit_construction(site).unwrap().is_none());
+}
+
+#[test]
+fn human_site_transfer_revalidates_the_old_worker_and_resumes_paid_work() {
+    let (mut vm, worker, _) = public_fixture();
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    let Value::Handle(other) = vm.host().inner.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("new owner")
+    };
+    register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    register(&mut vm, other, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    let site = site(&mut vm, worker);
+    step(&mut vm, 2.);
+    let host = &mut vm.host().inner;
+    let paid = [owner, other].map(|player| {
+        ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"]
+            .map(|resource| bank(host, player, resource))
+    });
+    let before = host.unit_construction(site).unwrap().unwrap();
+    let life = host.executed_unit(site).unwrap().vitals.unwrap().life;
+    host.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(site),
+            Value::Handle(other),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(host.executed_unit(site).unwrap().owner, other);
+    assert_eq!(host.executed_unit(site).unwrap().vitals.unwrap().life, life);
+    assert_eq!(host.unit_construction(site).unwrap(), Some(before));
+    assert_eq!(
+        host.unit_construction_order(worker).unwrap().unwrap().site,
+        Some(site)
+    );
+    assert_eq!(host.next_construction_completion(100.), None);
+    step(&mut vm, 3.);
+    let host = &mut vm.host().inner;
+    assert_eq!(host.unit_construction(site).unwrap().unwrap().worker, None);
+    assert_eq!(
+        host.unit_construction(site).unwrap().unwrap().elapsed,
+        before.elapsed
+    );
+    assert_eq!(host.executed_unit(site).unwrap().vitals.unwrap().life, life);
+    assert!(host.unit_construction_order(worker).unwrap().is_none());
+    assert_eq!(
+        host.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(worker),
+                Value::Str("repair".into()),
+                Value::Handle(site)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(false)
+    );
+    host.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(worker),
+            Value::Handle(other),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        host.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(worker),
+                Value::Str("repair".into()),
+                Value::Handle(site)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    for tick in 1..=6400 {
+        step(&mut vm, 3. + f64::from(tick) / 64.);
+        if vm
+            .host()
+            .inner
+            .unit_construction(site)
+            .unwrap()
+            .unwrap()
+            .worker
+            == Some(worker)
+        {
+            break;
+        }
+    }
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.unit_construction(site).unwrap().unwrap().worker,
+        Some(worker)
+    );
+    assert!(host.take_fired_event().is_none());
+    let until = host.timer_game_time().unwrap() + before.duration;
+    step(&mut vm, until);
+    let host = &mut vm.host().inner;
+    assert!(host.unit_construction(site).unwrap().is_none());
+    let event = host.take_fired_event().expect("new owner's completion");
+    host.begin_fired_event(&event).unwrap().expect("enabled");
+    assert_eq!(
+        host.native("GetTriggerPlayer", &[]).unwrap(),
+        Value::Handle(other)
+    );
+    assert_eq!(
+        host.native("GetConstructedStructure", &[]).unwrap(),
+        Value::Handle(site)
+    );
+    host.finish_fired_event();
+    assert!(host.take_fired_event().is_none());
+    assert_eq!(
+        [owner, other].map(|player| {
+            ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"]
+                .map(|resource| bank(host, player, resource))
+        }),
+        paid
+    );
+}
+
+#[test]
+fn transferred_human_site_death_clears_the_old_worker_without_refund_or_finish() {
+    let (mut vm, worker, _) = public_fixture();
+    let owner = vm.host().inner.executed_unit(worker).unwrap().owner;
+    let site = site(&mut vm, worker);
+    let Value::Handle(other) = vm.host().inner.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("new owner")
+    };
+    register(&mut vm, other, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    let host = &mut vm.host().inner;
+    let paid = bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    host.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(site),
+            Value::Handle(other),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    host.native("KillUnit", &[Value::Handle(site)]).unwrap();
+    assert!(host.unit_construction_order(worker).unwrap().is_none());
+    assert_eq!(host.next_construction_completion(100.), None);
+    step(&mut vm, 20.);
+    let host = &mut vm.host().inner;
+    assert!(host.take_fired_event().is_none());
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
 }
 
 #[test]

@@ -133,7 +133,10 @@ pub fn create_host(
                 host.admit_preloader(rules, Arc::clone(&reader))
                     .map_err(MapStartupError::Observation)?;
             }
-            if let Some(names) = ai_source {
+            if let Some(mut names) = ai_source {
+                if let Some(input) = names.melee_difficulty.take() {
+                    host = host.with_ai_melee_difficulty(input);
+                }
                 host = host.with_ai_pause_rules(names.pause.clone());
                 let ai_reader = Arc::clone(&reader);
                 let ai_context = Arc::clone(host.context());

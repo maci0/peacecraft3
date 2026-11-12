@@ -358,7 +358,7 @@ fn payload_extents_are_checked_for_both_members() {
 fn unused_non_utf8_wts_is_preserved_and_only_requested_body_is_refused() {
     let mut script = SCRIPT.to_vec();
     script.extend_from_slice(
-        b"function message takes nothing returns string\nreturn \"TRIGSTR_1\"\nendfunction\n",
+        b"native StringLength takes string text returns integer\nfunction message takes nothing returns integer\nreturn StringLength(\"TRIGSTR_1\")\nendfunction\n",
     );
     let bytes = fixture(&[
         ("war3map.j", &script),

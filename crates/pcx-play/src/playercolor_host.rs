@@ -12,6 +12,8 @@ pub const NATIVE: &str = "ConvertPlayerColor";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Failure {
+    #[error("script string source: {0}")]
+    ScriptString(String),
     #[error("script random admission or arguments: {0}")]
     RandomSetup(&'static str),
     #[error("script random: {0}")]

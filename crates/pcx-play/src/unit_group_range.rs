@@ -9,13 +9,14 @@ pub(crate) struct Rules {
     minimum_radius: f32,
 }
 
+pub(super) const INPUT_BYTES: usize = 7 + 4 + 3 * (6 + 5) + 2 * 5 + 6;
+
 impl Rules {
     pub(super) fn exponent(&self) -> i32 {
         ((self.adjustment as i32).unsigned_abs() / (1 << 23)) as i32
     }
     pub(super) fn read(pe: &Pe<'_>, budget: usize) -> Result<Self, String> {
         // Opcode/operand widths of the bounded instruction grammar below.
-        const INPUT_BYTES: usize = 7 + 4 + 3 * (6 + 5) + 2 * 5 + 6;
         if budget < INPUT_BYTES {
             return Err("group range source budget exceeded".into());
         }
@@ -268,6 +269,17 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(Rules::read(&pe, 0).is_err());
+        let count_rules = crate::unit_placement::group_count::Rules::read(&pe, 4096).unwrap();
+        assert!(crate::unit_placement::group_count::Rules::read(&pe, 0).is_err());
+        let mut count = count_rules.cursor(Some(2));
+        assert!(!count.full());
+        count.insert();
+        assert!(!count.full());
+        count.insert();
+        assert!(count.full());
+        for limit in [0, -1, i32::MIN] {
+            assert!(!count_rules.cursor(Some(limit)).full());
+        }
         let rules = Rules::read(&pe, 4096).unwrap();
         let query = rules.prepare([16., 16.], 32., [0., 0.]).unwrap();
         assert!(query.contains([48., 16.]).unwrap());

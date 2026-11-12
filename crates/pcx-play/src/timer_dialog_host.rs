@@ -94,15 +94,21 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         if !self.timer_dialogs || !NATIVES.iter().any(|(native, ..)| *native == name) {
             return None;
         }
         self.inner.program.natives().get(name)?;
-        Some(self.apply_timer_dialog(name, args))
+        Some(self.apply_timer_dialog(name, args, strings))
     }
 
-    fn apply_timer_dialog(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn apply_timer_dialog(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         if name == CREATE {
             let [Value::Handle(timer)] = args else {
                 return Err(self.inner.error(
@@ -133,6 +139,24 @@ impl ObjectHost {
                 Failure::UnitState("a null dialog's behavior is not established"),
             ));
         };
+        if name == "TimerDialogSetTitle" {
+            match self.inner.entry(*id)? {
+                Entry::TimerDialog(Some(_)) => {}
+                Entry::TimerDialog(None) => return Err(self.inner.error(name, Failure::Identity)),
+                _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+            }
+            let [_, Value::Str(title)] = args else {
+                return Err(self.inner.error(name, Failure::Signature));
+            };
+            let title = pcx_script::text::native_map_string(title, strings)
+                .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?
+                .into_owned();
+            let Entry::TimerDialog(Some(dialog)) = self.inner.entry_mut(*id)? else {
+                unreachable!("validated timer dialog")
+            };
+            dialog.title = Some(title);
+            return Ok(Value::Null);
+        }
         let Entry::TimerDialog(slot) = self.inner.entry_mut(*id)? else {
             return Err(self.inner.error(name, Failure::WrongFamily));
         };
@@ -152,7 +176,6 @@ impl ObjectHost {
             Some([*r, *g, *b, *a])
         };
         match (name, &args[1..]) {
-            ("TimerDialogSetTitle", [Value::Str(title)]) => dialog.title = Some(title.clone()),
             ("TimerDialogSetTitleColor", tail) if color(tail).is_some() => {
                 dialog.title_color = color(tail)
             }

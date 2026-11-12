@@ -124,14 +124,16 @@ fn alt_minimap_icon_refuses_trigger_strings_and_bad_arguments_without_a_write() 
     let host = &mut s.vm.host().inner;
     host.native("SetAltMinimapIcon", &[Value::Str("keep".into())])
         .unwrap();
+    host.native("SetAltMinimapIcon", &[Value::Str("trigstr_12".into())])
+        .unwrap();
     let trigger = host
-        .native("SetAltMinimapIcon", &[Value::Str("trigstr_12".into())])
+        .native("SetAltMinimapIcon", &[Value::Str("TRIGSTR_12".into())])
         .unwrap_err();
-    assert!(trigger.contains("map string table"), "{trigger}");
+    assert!(trigger.contains("map string source"), "{trigger}");
     for args in [&[][..], &[Value::Int(1)][..]] {
         assert!(host.native("SetAltMinimapIcon", args).is_err());
     }
-    assert_eq!(host.alt_minimap_icon(), Some("keep"));
+    assert_eq!(host.alt_minimap_icon(), Some("trigstr_12"));
 }
 
 const CREEP_GUARD: &str = "native SetUnitCreepGuard takes unit whichUnit, boolean creepGuard returns nothing\nnative RemoveUnit takes unit u returns nothing\n";
@@ -429,4 +431,39 @@ fn set_camera_field_refuses_bad_calls_without_a_write() {
         panic!("field")
     };
     assert_eq!(host.camera_field(id).unwrap(), Some(1650.));
+}
+
+#[test]
+fn native_string_alt_icon_resolves_once_and_empty_entry_does_not_clear() {
+    use std::cell::RefCell;
+    let mut state = open_extra(ALT_ICON);
+    state.vm.init_globals().unwrap();
+    let host = &mut state.vm.host().inner;
+    let calls = RefCell::new(Vec::new());
+    let source = |id| {
+        calls.borrow_mut().push(id);
+        Ok(if id == 7 {
+            Some("TRIGSTR_23".into())
+        } else {
+            None
+        })
+    };
+    host.native_with_strings("SetAltMinimapIcon", &[Value::Null], &source)
+        .unwrap();
+    assert!(calls.borrow().is_empty());
+    host.native_with_strings(
+        "SetAltMinimapIcon",
+        &[Value::Str("TRIGSTR_7".into())],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(host.alt_minimap_icon(), Some("TRIGSTR_23"));
+    host.native_with_strings(
+        "SetAltMinimapIcon",
+        &[Value::Str("TRIGSTR_8".into())],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(host.alt_minimap_icon(), Some("TRIGSTR_23"));
+    assert_eq!(*calls.borrow(), [7, 8]);
 }

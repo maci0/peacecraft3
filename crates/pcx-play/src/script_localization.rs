@@ -167,20 +167,23 @@ impl Bank {
         })
     }
     pub fn localized_string(&self, key: &str) -> Result<Option<String>, String> {
-        if key.contains('\0') {
-            return Err(format!("{}: embedded NUL in lookup", self.strings.label));
-        }
         if key.is_empty() {
             return Ok(None);
         }
-        if key
-            .get(..8)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("TRIGSTR_"))
-        {
+        if pcx_script::text::native_trigstr_id(key).is_some() {
             return Err(format!(
                 "{}: native dynamic TRIGSTR lookup requires the selected map WTS context",
                 self.strings.label
             ));
+        }
+        self.localized_string_after_map_lookup(key)
+    }
+    pub(crate) fn localized_string_after_map_lookup(
+        &self,
+        key: &str,
+    ) -> Result<Option<String>, String> {
+        if key.contains('\0') {
+            return Err(format!("{}: embedded NUL in lookup", self.strings.label));
         }
         let value = self
             .labels

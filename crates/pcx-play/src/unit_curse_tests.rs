@@ -327,6 +327,7 @@ fn host_with(config: &Config) -> ObjectHost {
         groups: vec![],
         alarm_code: None,
         mana_minimum: config.mana_minimum,
+        clock: None,
         slow: Some(crate::autocast_rules::slow::Rules {
             class: *b"Aslo",
             data_column: "DataC".into(),

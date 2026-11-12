@@ -160,6 +160,7 @@ fn open_setup_vm_with_code(
         groups: vec![(code, GROUP), (*b"X003", GROUP)],
         alarm_code: Some(*b"X005"),
         mana_minimum: None,
+        clock: None,
         slow: None,
     };
     let mut rules = hero_rules().0;

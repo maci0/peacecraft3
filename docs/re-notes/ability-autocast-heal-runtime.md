@@ -231,3 +231,48 @@ initializer operands, relocated proxy/helper/global addresses, changed component
 argument, descriptor, forwarding and clamp roles, and truncated initialization
 have explicit regressions. This rule binding alone does not implement Heal
 payment or its retained cast lifecycle.
+
+## Simple-timer arithmetic qualification
+
+Autocast's embedded timer uses vtable `0xe6e238`, virtual `+0x08` `0x7fb700`.
+The wrapper `0x7fbe90` reaches that virtual. It is a different path from the
+extended JASS timer's `0x7fb940` schedule routine in the paired-clock audit.
+`0x7fb700` selects the game queue at AGILE_DATA `+0x44` for its zero final
+argument. When a requested delay reaches queue `+0x48`, it replaces the delay
+with that queue bound minus the image epsilon. It then clamps to the image
+minimum, software-adds queue `+0x40`, and inserts the resulting deadline.
+
+Queue construction `0x7f3390` sets `+0x40` from its source initial-value global,
+sets cycle count `+0x44` to zero, and sets `+0x48` from its first argument.
+Manager initialization at `0x7f73cc` supplies the global initialized through
+`0x401570`, then stores the constructed queue at AGILE_DATA `+0x44`.
+The bootstrap's integer operand derives the cycle length; it must not be copied
+into a production constant or confused with the extended timer's segment length.
+`0x7fac80` handles reaching that cycle bound by draining, shifting deadlines
+through `0x7f9360`, and advancing the cycle count.
+
+The new `autocast_rules::clock::Rules` input checks those dispatch, operand,
+constructor, clamp and numeric-call relationships. Its deadline helper uses the
+existing source-derived software-real add/subtract, rather than host `f64`
+addition or a measured grid. It currently admits only exact binary32 canonical
+time in the first native queue cycle and refuses a crossing or non-progressing
+deadline. That explicit boundary avoids inventing a conversion from the host's
+wider clock or a native queue epoch. First-evaluation creation/ON arithmetic is
+still the earlier `f64` path; connecting a qualified family must account for that
+remaining debt instead of silently coercing a nonrepresentable evaluation time.
+This helper alone does not execute a retry or establish timer-query parity.
+
+Nonstock cycle/minimum/epsilon operands, relocated scalar globals, integer32
+bootstrap conversion, delay clamps, invalid numeric states, unsupported time
+domains, queue crossing and changed virtual/queue/arithmetic roles have explicit
+regressions. The selected-image class gate also admits this clock input. Retained
+dossiers in the local bundle include simple scheduling
+`ev_ada2b47fb26aa6a77db8c07c357ce5d0b4dd8ac31495c2d0ab859851a9601a73`,
+queue construction
+`ev_cc8620929c9e0e8f8bf120962f538bd2f67995be73c571b205718bdfca2b445c`,
+manager initialization
+`ev_d107ee3d3bfac0db43bba8a9b5f653e15bf2d7e355fd659acb5ad951b772e21a`,
+queue advance
+`ev_96491da1580587231d8c920e4923798dbe70cd6f0667fa35ccb8a28fa2e3ba19`,
+and queue wrap
+`ev_90bcc4d8428a2f0af949eea390ae7d3383d2e304a5397d419ffc6849f5b8e8ce`.
