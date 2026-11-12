@@ -58,7 +58,31 @@ pub(super) struct State {
 
 pub(super) struct TrainingDeath {
     producer: HandleId,
-    credit: super::players::TrainingDebit,
+    credit: Option<super::players::TrainingDebit>,
+    upgrade: Option<UpgradeReplacement>,
+}
+
+struct UpgradeReplacement {
+    form: super::unit_morph::Form,
+    abilities: Option<super::UnitAbilities>,
+    vitals: super::unit_vitals::Vitals,
+    decay: Option<crate::unit_decay::State>,
+    placement: crate::unit_placement::Prepared,
+    revision: u64,
+    radius: Result<f32, &'static str>,
+    death_animation: Option<bool>,
+}
+
+impl TrainingDeath {
+    pub(super) fn upgraded_decay(&self) -> Option<Option<crate::unit_decay::State>> {
+        self.upgrade.as_ref().map(|upgrade| upgrade.decay.clone())
+    }
+
+    pub(super) fn upgraded_death_animation(&self) -> Option<bool> {
+        self.upgrade
+            .as_ref()
+            .and_then(|upgrade| upgrade.death_animation)
+    }
 }
 
 pub(super) struct GuardBinding {
@@ -567,6 +591,21 @@ impl ObjectHost {
             .any(|job| job.producer == producer)
     }
 
+    pub(super) fn producer_is_upgrading(&self, producer: HandleId) -> bool {
+        self.training
+            .jobs
+            .iter()
+            .any(|job| job.producer == producer && job.structure_upgrade)
+    }
+
+    pub(super) fn transfer_structure_upgrade(&mut self, producer: HandleId, owner: HandleId) {
+        for job in &mut self.training.jobs {
+            if job.producer == producer && job.structure_upgrade {
+                job.owner = owner;
+            }
+        }
+    }
+
     /// Cancel one queue entry; public script order strings are not cancellation commands.
     pub fn cancel_unit_training(&mut self, producer: HandleId, slot: usize) -> Result<bool, Error> {
         let record = self.executed_unit(producer)?;
@@ -661,10 +700,27 @@ impl ObjectHost {
         &mut self,
         producer: HandleId,
     ) -> Result<Option<TrainingDeath>, Error> {
+        self.prepare_training_loss(producer, true)
+    }
+
+    pub(super) fn prepare_training_removal(
+        &mut self,
+        producer: HandleId,
+    ) -> Result<Option<TrainingDeath>, Error> {
+        self.prepare_training_loss(producer, false)
+    }
+
+    fn prepare_training_loss(
+        &mut self,
+        producer: HandleId,
+        dying: bool,
+    ) -> Result<Option<TrainingDeath>, Error> {
         let current_owner = self.executed_unit(producer)?.owner;
         let mut owner = None;
         let mut refund = [0_i32; 2];
         let mut food = 0_i32;
+        let mut upgrading = None;
+        let mut ordinary = false;
         for job in self
             .training
             .jobs
@@ -675,6 +731,11 @@ impl ObjectHost {
                 return Err(self.training_error("queue owners differ"));
             }
             owner = Some(job.owner);
+            if job.structure_upgrade {
+                upgrading = Some(job.kind);
+                continue;
+            }
+            ordinary = true;
             for (sum, cost) in refund.iter_mut().zip([job.gold, job.lumber]) {
                 *sum = sum
                     .checked_add(self.training_refund(cost, job.refund_kind())?)
@@ -689,17 +750,82 @@ impl ObjectHost {
         let Some(owner) = owner else {
             return Ok(None);
         };
-        let credit = self
-            .prepare_training_change(owner, refund, -food, 0)?
-            .ok_or_else(|| self.training_error("death refund refused"))?;
-        Ok(Some(TrainingDeath { producer, credit }))
+        if upgrading.is_some() && ordinary {
+            return Err(self.training_error("mixed upgrade and training queue is not qualified"));
+        }
+        let upgrade = if dying && let Some(kind) = upgrading {
+            let mut upgrade = self.prepare_upgrade_replacement(producer, kind)?;
+            let record = self.executed_unit(producer)?;
+            let levels = |abilities: &Option<super::UnitAbilities>| {
+                abilities.as_ref().map(|a| a.levels().collect::<Vec<_>>())
+            };
+            if !super::unit_types::structure(&record.definition)
+                .map_err(|e| self.training_error(e))?
+                || !super::unit_types::structure(&upgrade.form.definition)
+                    .map_err(|e| self.training_error(e))?
+                || super::unit_types::flying(&record.definition)
+                    != super::unit_types::flying(&upgrade.form.definition)
+                || record.abilities.as_ref().is_some_and(|a| a.hero.is_some())
+                || upgrade.abilities.as_ref().is_some_and(|a| a.hero.is_some())
+                || levels(&record.abilities) != levels(&upgrade.abilities)
+                || super::combat::column(&record.definition, SlkId::UnitBalance, "level")
+                    .map_err(|e| self.training_error(e))?
+                    != super::combat::column(&upgrade.form.definition, SlkId::UnitBalance, "level")
+                        .map_err(|e| self.training_error(e))?
+            {
+                return Err(self.training_error(
+                    "upgrade death changes an unqualified award, ability or movement class",
+                ));
+            }
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| self.training_error("upgrade death clock is not admitted"))?;
+            if let Some(decay) = &mut upgrade.decay {
+                decay.begin(now).map_err(|e| self.training_error(e))?;
+            }
+            let mut exploded = false;
+            if let Some(animation) = &mut upgrade.form.animation {
+                exploded = self.unit_exploded(producer) == Some(true)
+                    && animation.has_sequence("death explode");
+                let sequence = if exploded { "death explode" } else { "death" };
+                let selected = if !exploded && let Some(decay) = &upgrade.decay {
+                    animation.select_for_duration(sequence, now, decay.death)
+                } else {
+                    animation.select_engine(sequence, now, None)
+                };
+                selected.map_err(|e| self.training_error(e))?;
+            }
+            upgrade.death_animation = Some(exploded);
+            upgrade.placement.deactivate();
+            Some(upgrade)
+        } else {
+            None
+        };
+        let credit = if ordinary {
+            Some(
+                self.prepare_training_change(owner, refund, -food, 0)?
+                    .ok_or_else(|| self.training_error("death refund refused"))?,
+            )
+        } else {
+            None
+        };
+        Ok(Some(TrainingDeath {
+            producer,
+            credit,
+            upgrade,
+        }))
     }
 
     pub(super) fn commit_training_death(&mut self, death: TrainingDeath) {
         self.training
             .jobs
             .retain(|job| job.producer != death.producer);
-        self.commit_training_debit(death.credit);
+        if let Some(upgrade) = death.upgrade {
+            self.commit_upgrade_replacement(death.producer, upgrade);
+        }
+        if let Some(credit) = death.credit {
+            self.commit_training_debit(credit);
+        }
     }
 
     /// FIFO entries with a completion clock only for the active head.
@@ -742,6 +868,9 @@ impl ObjectHost {
     /// caller compares the producer's live owner with its selection.
     pub fn unit_train_options(&self, producer: HandleId) -> Result<Vec<TrainOption>, Error> {
         let record = self.executed_unit(producer)?;
+        if self.producer_is_upgrading(producer) {
+            return Err(self.training_error("training during a structure upgrade is not qualified"));
+        }
         let owner = record.owner;
         if !live(record) {
             return Ok(Vec::new());
@@ -1222,8 +1351,8 @@ impl ObjectHost {
             // site (the counters at `+0x3c` and `+0x40` are not decoded). The
             // target's `Requires` stands in for check slot `0x328`. Source cost
             // mode prices the job; its source upgrade rate controls refunds.
-            // Completion sets the new type's base pools; researched bonuses are
-            // not rebased onto that base.
+            // Completion retains the life percentage in the target's base pool;
+            // researched bonuses are not rebased onto that base.
             if requested == *b"ugol" || !self.training_prerequisites_met(&definition, owner)? {
                 return Ok(false);
             }
@@ -1282,6 +1411,7 @@ impl ObjectHost {
                         Failure::UnitActivity("structure upgrade deadline cannot advance".into()),
                     ));
                 }
+                self.prepare_upgrade_vitals(producer, &definition)?;
                 let Some(debit) = self.prepare_training_debit(owner, gold, lumber, 0, 0)? else {
                     return Ok(false);
                 };
@@ -1325,6 +1455,9 @@ impl ObjectHost {
         definition: Definition,
     ) -> Result<bool, Error> {
         self.require_ordinary_training(kind)?;
+        if self.producer_is_upgrading(producer) {
+            return Err(self.training_error("training during a structure upgrade is not qualified"));
+        }
         if !self.training_prerequisites_met(&definition, owner)? {
             return Ok(false);
         }
@@ -1771,58 +1904,125 @@ impl ObjectHost {
                 index += 1;
                 continue;
             }
-            let handicap = record.health_handicap;
-            let kind = job.kind.to_be_bytes();
-            let definition = self.resolve_form_definition(kind)?;
-            let vitals = self.prepare_unit_vitals(&definition, handicap)?;
-            let has_loader = self.has_unit_model_loader();
-            if has_loader {
-                let form = self.prepare_form(
-                    job.producer,
-                    definition,
-                    super::unit_creation::FormChange::Replacement,
-                )?;
-                let abilities = self.prepare_unit_abilities(&form.definition)?;
-                self.commit_morph_form(job.producer, &form, false)?;
-                let Entry::Unit { record } = self.inner.entry_mut(job.producer)? else {
-                    unreachable!("checked unit")
-                };
-                record.animation = form.animation;
-                record.abilities = abilities;
-                if let Some(vitals) = vitals {
-                    record.vitals = Some(vitals);
-                }
-            } else {
-                let abilities = self.prepare_unit_abilities(&definition)?;
-                let activity = self.prepare_unit_activity(&definition)?;
-                let combat = self.prepare_unit_combat(&definition)?;
-                self.commit_morph_placement(job.producer, &definition)?;
-                let next = self
-                    .executed_unit(job.producer)?
-                    .definition_revision
-                    .checked_add(1)
-                    .ok_or_else(|| self.training_error("definition revision exhausted"))?;
-                let radius = Self::catalog_collision_radius(&definition);
-                let Entry::Unit { record } = self.inner.entry_mut(job.producer)? else {
-                    unreachable!("checked unit")
-                };
-                record.definition = definition;
-                record.definition_revision = next;
-                record.collision_radius = radius;
-                record.abilities = abilities;
-                if let (Some(current), Some(profile)) = (&mut record.activity, &activity) {
-                    current.replace_form_profile(profile);
-                }
-                if let (Some(current), Some(profile)) = (&mut record.combat, &combat) {
-                    current.replace_form_profile(profile);
-                }
-                if let Some(vitals) = vitals {
-                    record.vitals = Some(vitals);
-                }
-            }
+            let upgrade = self.prepare_upgrade_replacement(job.producer, job.kind)?;
+            self.commit_upgrade_replacement(job.producer, upgrade);
             self.training.jobs.remove(index);
         }
         Ok(())
+    }
+
+    fn prepare_upgrade_vitals(
+        &self,
+        producer: HandleId,
+        definition: &Definition,
+    ) -> Result<super::unit_vitals::Vitals, Error> {
+        let record = self.executed_unit(producer)?;
+        let old = record
+            .vitals
+            .ok_or_else(|| self.training_error("upgrade requires live pools"))?;
+        let mut next = self
+            .prepare_unit_vitals(definition, record.health_handicap)?
+            .ok_or_else(|| self.training_error("upgrade requires target pools"))?;
+        for pools in [&old, &next] {
+            if let Some(problem) = Self::projected_pool_problem(pools) {
+                return Err(self.training_error(problem));
+            }
+        }
+        if old.max_mana != 0. || next.max_mana != 0. {
+            return Err(self.training_error("upgrade mana transition is not qualified"));
+        }
+        next.life = if old.max_life == next.max_life {
+            old.life
+        } else if old.life == old.max_life {
+            next.max_life
+        } else {
+            let rounding = self
+                .health_rounding()
+                .ok_or_else(|| self.training_error("upgrade life rounding is not admitted"))?;
+            let life = rounding.round(next.max_life * (old.life / old.max_life));
+            if old.life > 0. {
+                life.max(1.).min(next.max_life)
+            } else {
+                0.
+            }
+        };
+        Ok(next)
+    }
+
+    fn prepare_upgrade_replacement(
+        &mut self,
+        producer: HandleId,
+        kind: i32,
+    ) -> Result<UpgradeReplacement, Error> {
+        let definition = self.resolve_form_definition(kind.to_be_bytes())?;
+        let vitals = self.prepare_upgrade_vitals(producer, &definition)?;
+        let form = if self.has_unit_model_loader() {
+            self.prepare_form(
+                producer,
+                definition,
+                super::unit_creation::FormChange::Replacement,
+            )?
+        } else {
+            let activity = self.prepare_unit_activity(&definition)?;
+            let combat = self.prepare_unit_combat(&definition)?;
+            super::unit_morph::Form {
+                definition,
+                animation: None,
+                activity,
+                combat,
+            }
+        };
+        let abilities = self.prepare_unit_abilities(&form.definition)?;
+        let placement = self.prepare_morph_placement(producer, &form.definition)?;
+        let record = self.executed_unit(producer)?;
+        let revision = record
+            .definition_revision
+            .checked_add(1)
+            .ok_or_else(|| self.training_error("definition revision exhausted"))?;
+        let radius = Self::catalog_collision_radius(&form.definition);
+        let mut target = record.clone();
+        target.definition = form.definition.clone();
+        target.animation = form.animation.clone();
+        target.abilities = abilities.clone();
+        target.vitals = Some(vitals);
+        let decay = self.prepare_unit_decay(&target)?;
+        Ok(UpgradeReplacement {
+            form,
+            abilities,
+            vitals,
+            decay,
+            placement,
+            revision,
+            radius,
+            death_animation: None,
+        })
+    }
+
+    fn commit_upgrade_replacement(&mut self, producer: HandleId, upgrade: UpgradeReplacement) {
+        let Entry::Unit { record } = self
+            .inner
+            .entry_mut(producer)
+            .expect("prepared upgrade unit")
+        else {
+            unreachable!("prepared upgrade unit")
+        };
+        record.definition = upgrade.form.definition;
+        record.definition_revision = upgrade.revision;
+        record.collision_radius = upgrade.radius;
+        record.animation = upgrade.form.animation;
+        record.abilities = upgrade.abilities;
+        record.vitals = Some(upgrade.vitals);
+        record.decay = upgrade.decay;
+        if let (Some(current), Some(profile)) = (&mut record.activity, &upgrade.form.activity) {
+            current.replace_form_profile(profile);
+        }
+        if let (Some(current), Some(profile)) = (&mut record.combat, &upgrade.form.combat) {
+            current.replace_form_profile(profile);
+        }
+        self.unit_placement
+            .as_mut()
+            .expect("prepared upgrade placement")
+            .commit(producer, upgrade.placement);
     }
 
     pub(crate) fn next_training_completion(&self, until: f64) -> Option<f64> {

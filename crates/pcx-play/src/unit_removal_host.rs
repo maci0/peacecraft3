@@ -68,7 +68,7 @@ impl ObjectHost {
         // training events. Mirrors the qualified producer-death path; explicit
         // removal is not a UI cancellation.
         if self.producer_has_training(unit)
-            && let Some(cleanup) = self.prepare_training_death(unit)?
+            && let Some(cleanup) = self.prepare_training_removal(unit)?
         {
             self.commit_training_death(cleanup);
         }

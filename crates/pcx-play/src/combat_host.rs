@@ -1602,6 +1602,10 @@ impl ObjectHost {
         if !eligible {
             return Ok(());
         }
+        let training = self.prepare_training_death(unit)?;
+        let upgrade_animation = training
+            .as_ref()
+            .and_then(|plan| plan.upgraded_death_animation());
         self.restore_linked_mine_on_death(unit)?;
         let Some(record) = self
             .executed_unit(unit)
@@ -1613,7 +1617,10 @@ impl ObjectHost {
         self.require_morph_interruption(unit, "unit death")?;
         self.require_black_arrow_unmarked(unit)?;
         let reincarnation = self.plan_reincarnation(unit)?;
-        let mut decay = record.decay.clone();
+        let mut decay = training
+            .as_ref()
+            .and_then(|plan| plan.upgraded_decay())
+            .unwrap_or_else(|| record.decay.clone());
         if let Some(state) = &mut decay {
             state
                 .begin(self.timer_game_time().unwrap_or(0.))
@@ -1627,7 +1634,6 @@ impl ObjectHost {
         self.forget_aura_unit(unit)?;
         self.forget_purge_unit(unit)?;
         self.forget_mirror_unit(unit);
-        let training = self.prepare_training_death(unit)?;
         let now = self.timer_game_time().unwrap_or(0.0);
         if let Some(plan) = reincarnation {
             self.commit_reincarnation(unit, plan)?;
@@ -1661,7 +1667,9 @@ impl ObjectHost {
             if let Some(vitals) = &mut record.vitals {
                 vitals.life = 0.0;
             }
-            if let Some(animation) = &mut record.animation {
+            if let Some(prepared) = upgrade_animation {
+                exploded_presented = prepared;
+            } else if let Some(animation) = &mut record.animation {
                 exploded_presented = exploded && animation.has_sequence("death explode");
                 let sequence = if exploded_presented {
                     "death explode"
