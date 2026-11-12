@@ -7070,3 +7070,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   automatic `Ainf` refusal remains; no completed horizon, original-client fog
   comparison or native tick parity is claimed. See
   [vision boundary](docs/re-notes/script-world-fog-boundary.md).
+
+- 2026-11-13: Instant weapon release now uses the existing source-derived Mirror
+  Image damage factors before retreat planning, life steal and HP commit.
+  Traveling weapons retain impact-time scaling, avoiding a second multiplier.
+  Public-order regressions cover outgoing/incoming/product/zero factors, one
+  impact, unchanged RNG consumption and refused-hit retry preserving swing,
+  life and RNG state. Both named new regressions pass within main's independent
+  gameplay suite: 2,991 passed, 108 explicit ignores. Strict native/WASM Clippy,
+  both library builds, formatting and the native campaign-probe rebuild pass.
+  This corrects an existing canonical consumer; no matched original-client duel,
+  native damage-event nesting or tick/RNG parity is claimed. See
+  [weapon damage](docs/re-notes/weapon-invulnerability.md#illusion-weapon-damage-at-melee-release).
