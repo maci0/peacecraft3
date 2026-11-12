@@ -178,3 +178,22 @@ The local disassemblies are `/tmp/pc3-sol09-heal-effect.asm` and
 `/tmp/pc3-sol09-common-postcast-delay.asm`; full retained Heal effect dossier
 `ev_20c69a4aeb2e1756d457f245f0d49a12e297778539564799445e7c371b853731`
 is in `/tmp/pc3-sol04-slow-native-evidence.json`.
+
+## Mandatory evaluation boundary
+
+The session's existing mandatory-activity wake selection now includes each live
+unit's pending automatic evaluation. A large requested clock advance therefore
+stops at the first pending evaluation rather than observing its refusal only at
+the caller's later horizon. Unsupported acquisition still refuses at that
+boundary and retains its deadline. OFF and unit removal stop forcing that wake.
+The activity phase order is unchanged; no moving-target or positive-cast phase
+ordering is inferred by this hook. Public creation, OFF, removal and clock
+regressions cover the boundary and unchanged unit state on refusal.
+
+The printed event times above were sampled with a long-running 2000-second
+clock. The independent paired-clock audit in
+`/tmp/pc3-sol02-clock-audit/report.txt` demonstrates elapsed-query reconstruction
+bias for such a clock while the paired short clock tracks the requested delays
+at the diagnostic precision. These printed increments must not become a
+universal 8192-based scheduling grid. Timer-query arithmetic and actual spell
+queue deadlines remain separate fidelity questions.
