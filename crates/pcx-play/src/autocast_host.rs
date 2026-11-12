@@ -416,6 +416,16 @@ impl ObjectHost {
         );
         Ok(())
     }
+    pub(crate) fn next_autocast_boundary(&self, until: f64) -> Option<f64> {
+        let now = self.timer_game_time()?;
+        self.autocast_ticks
+            .iter()
+            .filter(|(unit, _, _)| matches!(self.inner.entry(*unit), Ok(Entry::Unit { .. })))
+            .map(|(_, _, due)| due.max(now))
+            .filter(|due| *due <= until)
+            .min_by(f64::total_cmp)
+    }
+
     /// Refuses once an armed automatic-cast evaluation falls due: the target acquisition and
     /// cast of the periodic tick (`ability-autocast-on.md`) are not implemented.
     pub(crate) fn advance_autocast(&mut self, now: f64) -> Result<(), Error> {
