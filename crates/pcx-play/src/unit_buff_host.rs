@@ -149,6 +149,12 @@ pub(super) struct State {
     active: BTreeMap<HandleId, Vec<ActiveBuff>>,
 }
 
+pub(crate) struct PreparedBuffReplacement {
+    unit: HandleId,
+    remove: Vec<[u8; 4]>,
+    buff: ActiveBuff,
+}
+
 impl ObjectHost {
     pub(super) fn unit_buff_declarations(&self, source: &str) -> Result<(), Error> {
         for (name, args, result) in NATIVES {
@@ -202,13 +208,13 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Replace producer-owned rawcodes only after all fallible admission has succeeded.
-    pub(crate) fn replace_unit_buff(
+    /// Reserve replacement before the producer publishes effects or consumes identities.
+    pub(crate) fn prepare_buff_replacement(
         &mut self,
         unit: HandleId,
         remove: &[[u8; 4]],
         buff: ActiveBuff,
-    ) -> Result<(), Error> {
+    ) -> Result<PreparedBuffReplacement, Error> {
         if self.unit_liveness("unit buff", unit)?.is_none() {
             return Err(self
                 .inner
@@ -227,8 +233,23 @@ impl ObjectHost {
         active
             .try_reserve(1)
             .map_err(|_| self.inner.error("unit buff", Failure::Capacity))?;
+        let mut removals = Vec::new();
+        removals
+            .try_reserve_exact(remove.len())
+            .map_err(|_| self.inner.error("unit buff", Failure::Capacity))?;
+        removals.extend_from_slice(remove);
+        Ok(PreparedBuffReplacement {
+            unit,
+            remove: removals,
+            buff,
+        })
+    }
+
+    /// No callbacks or buff mutations may occur between preparation and commit.
+    pub(crate) fn commit_buff_replacement(&mut self, prepared: PreparedBuffReplacement) {
+        let PreparedBuffReplacement { unit, remove, buff } = prepared;
         for rawcode in remove {
-            self.detach_unit_buff(unit, *rawcode);
+            self.detach_unit_buff(unit, rawcode);
         }
         self.unit_buffs
             .active
@@ -239,7 +260,6 @@ impl ObjectHost {
             unit,
             crate::ai_placement::PlacementEventKind::BuffApplied(buff.rawcode),
         );
-        Ok(())
     }
 
     /// Whether a live buff has an unqualified movement-vector contribution.

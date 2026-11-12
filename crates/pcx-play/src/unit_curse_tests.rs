@@ -1508,6 +1508,68 @@ fn slow_effect_handle_exhaustion_preserves_payment_and_previous_target_state() {
 }
 
 #[test]
+fn slow_full_buff_capacity_refuses_before_art_identity_or_target_mutation() {
+    use crate::playercolor_host::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};
+    let (mut vm, [caster, _, enemy, _]) = open_with(Config {
+        script: SLOW_CALLBACKS,
+        forms: true,
+        ..Config::default()
+    });
+    vm.call("prime", &[]).unwrap();
+    vm.call("SlowWatch", &[Value::Int(0), Value::Handle(enemy)])
+        .unwrap();
+    assert_eq!(vm.call("SlowIssue", &[]).unwrap(), Value::Bool(true));
+    step(&mut vm, CAST_POINT);
+    for _ in 0..MAX_BUFFS_PER_UNIT {
+        vm.host()
+            .inner
+            .attach_unit_buff(enemy, ActiveBuff::new(*b"Xcap", BuffTraits::default()))
+            .unwrap();
+    }
+    let record = vm.host().inner.executed_unit(enemy).unwrap();
+    let before = (record.activity.clone(), record.animation.clone());
+    let handles = vm.host().inner.inner().handles();
+    let before_buffs = buffs(&mut vm, enemy);
+    let before_speed = speed(&mut vm, enemy);
+    assert_eq!(effect_count(&mut vm), 0, "no preexisting effect history");
+    let event = vm.host().inner.take_fired_event().unwrap();
+    let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+    vm.run_thread(&delivery.actions).unwrap();
+    vm.host().inner.finish_fired_event();
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+    assert_eq!(
+        effect_count(&mut vm),
+        0,
+        "failed art must not leave even a destroyed identity"
+    );
+    assert_eq!(vm.host().inner.unit_effects().count(), 0);
+    let record = vm.host().inner.executed_unit(enemy).unwrap();
+    assert_eq!((record.activity.clone(), record.animation.clone()), before);
+    assert_eq!(buffs(&mut vm, enemy), before_buffs);
+    assert_eq!(speed(&mut vm, enemy), before_speed);
+    assert_eq!(vm.host().inner.curse_attack_penalty(enemy), 0.);
+    assert_eq!(mana(&mut vm, caster), 200.);
+    assert_eq!(slow_cooldown(&mut vm, caster), 0.);
+    assert!(vm.host().inner.take_fired_event().is_none());
+    assert!(
+        vm.host()
+            .inner
+            .next_timer_expiry(1., &mut 100)
+            .unwrap()
+            .is_none()
+    );
+    let error = vm
+        .host()
+        .inner
+        .advance_unit_activity(1., &mut 65536)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unit buff capacity"), "{error}");
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+    assert_eq!(mana(&mut vm, caster), 200.);
+}
+
+#[test]
 fn slow_effect_stop_or_caster_death_keeps_payment_without_buff_cooldown_or_finish() {
     for mode in [1, 4] {
         let (mut vm, caster, enemy, _) = slow_callbacks(mode);

@@ -1344,29 +1344,29 @@ impl ObjectHost {
             .as_ref()
             .and_then(|s| s.slows.get(&target))
             .map(|s| (s.buff, s.movement, s.art));
+        let remove = [previous.map_or(buff, |s| s.0), buff];
+        let replacement = self.prepare_buff_replacement(target, &remove, Self::curse_buff(buff))?;
         let record = self.executed_unit(target)?;
         let original = (record.activity.clone(), record.animation.clone());
-        let art = self.show_buff_art(target, buff, expires_at)?;
         let result = (|| {
             if let Some((_, Some(movement), _)) = previous {
                 self.shift_unit_speed(target, movement, NATIVE)?;
             }
             let applied = self.shift_unit_speed(target, -movement, NATIVE)?;
-            let remove = [previous.map_or(buff, |s| s.0), buff];
-            self.replace_unit_buff(target, &remove, Self::curse_buff(buff))?;
-            Ok(applied)
+            let art = self.show_buff_art(target, buff, expires_at)?;
+            Ok((applied, art))
         })();
-        let applied = match result {
-            Ok(applied) => applied,
+        let (applied, art) = match result {
+            Ok(prepared) => prepared,
             Err(error) => {
                 if let Entry::Unit { record } = self.inner.entry_mut(target)? {
                     record.activity = original.0;
                     record.animation = original.1;
                 }
-                self.kill_effect(art);
                 return Err(error);
             }
         };
+        self.commit_buff_replacement(replacement);
         if let Some((_, _, art)) = previous {
             self.kill_effect(art);
         }
