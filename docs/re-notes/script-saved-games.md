@@ -402,3 +402,30 @@ The full-save root therefore needs family-specific native-job projections as
 well as parked map/AI continuations. Keeping a live retained payment for ordinary
 callback completion and deciding its saved projection are separate operations.
 No recreation SaveGame/LoadGame or menu route is enabled by these observations.
+
+### Resident spawned-thread boundaries
+
+The VM's existing native Spawn path now uses its ordinary activation driver
+instead of recursively driving a child while retaining the caller stack in Rust
+locals. Parent activations stay resident. Each active spawn records the child's
+stack boundary, the caller's depth, remaining callbacks and native call span.
+Its return expression retains a native-spawn zipper. A sleeping child moves only
+its own activation slice and callback tail into the existing host-ticket thread;
+the caller continues through its retained expression. Nested spawns use this same
+path. Finishing or parking leaves the spawned host context once, and invokes its
+follow-up once; an execution error uses the existing abort path without running
+that follow-up.
+
+Eight new synthetic VM regressions cover nested spawns, retained locals/arrays
+and expression operands, sleep/repark and callback tails, error source/span,
+invalid tail signatures, maximum depth, leave/follow-up failure, reused tickets,
+empty callbacks and global initializers. The existing work-exhaustion regression
+also checks follow-up/leave counts and subsequent VM reuse. The affected script
+suite passes 146 tests with four explicit local-input ignores.
+
+This is used execution ownership, not a durable snapshot interface. The current
+statement still temporarily lends its frame until the activation driver restores
+it, and top-level thread/session work queues need explicit checkpoint ownership.
+No whole-world checkpoint barrier, persisted VM codec or full-save route is
+provided by this refactor. A future barrier must stop after restoring the current
+activation and collect the complete map, AI, host and application graph.

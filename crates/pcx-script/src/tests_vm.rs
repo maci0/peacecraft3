@@ -1854,6 +1854,8 @@ fn sequential_spawn_followups_spend_fuel_without_growing_the_rust_stack() {
     struct Followups {
         function: Option<crate::value::FunctionId>,
         followups: usize,
+        leaves: usize,
+        aborts: usize,
     }
     impl crate::Host for Followups {
         fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
@@ -1877,7 +1879,11 @@ fn sequential_spawn_followups_spend_fuel_without_growing_the_rust_stack() {
             ])))
         }
         fn leave_thread(&mut self) -> Result<(), String> {
+            self.leaves += 1;
             Ok(())
+        }
+        fn abort_script_calls(&mut self) {
+            self.aborts += 1;
         }
     }
     let program = program_of(
@@ -1893,6 +1899,10 @@ endfunction
     let error = vm.call("main", &[]).unwrap_err();
     assert!(error.to_string().contains("steps"), "{error}");
     assert!(vm.host().followups > 0);
+    let host = vm.host();
+    assert_eq!(host.followups, host.leaves);
+    assert_eq!(vm.host().aborts, 1);
+    assert_eq!(vm.call("empty", &[]).unwrap(), Value::Null);
     assert!(
         vm.host().followups as u64 <= MAX_STEPS,
         "the fuel check bounds sequential follow-ups: {}",
@@ -1944,6 +1954,304 @@ fn spawned_threads_park_alone_and_resume_with_their_remaining_callbacks() {
     let mut plain = Vm::new(&program, Probe::default());
     plain.init_globals().unwrap();
     assert!(plain.run_thread(&[id("b")]).is_ok());
+}
+
+#[derive(Default)]
+struct SpawnProbe {
+    observed: Vec<i32>,
+    next: u64,
+    starts: usize,
+    leaves: usize,
+    followups: usize,
+    aborts: usize,
+    fail_leave: bool,
+    fail_followup: bool,
+    reuse_ticket: bool,
+}
+
+impl crate::Host for SpawnProbe {
+    fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        match (name, args) {
+            ("Observe", [Value::Int(value)]) => {
+                self.observed.push(*value);
+                Ok(Value::Null)
+            }
+            ("Boom", []) => Err("synthetic child failure".into()),
+            _ => Err(format!("unexpected native {name}")),
+        }
+    }
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<crate::ScriptCall>, String> {
+        if name != "Spawn" {
+            return Ok(None);
+        }
+        self.starts += 1;
+        let functions = args
+            .iter()
+            .filter_map(|v| match v {
+                Value::Code(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        Ok(Some(crate::ScriptCall::Spawn(functions)))
+    }
+    fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
+        name == "Sleep"
+    }
+    fn park_thread(&mut self) -> Result<u64, String> {
+        self.next += 1;
+        Ok(if self.reuse_ticket { 1 } else { self.next })
+    }
+    fn resume_thread(&mut self, _: u64) -> Result<(), String> {
+        Ok(())
+    }
+    fn leave_thread(&mut self) -> Result<(), String> {
+        self.leaves += 1;
+        if self.fail_leave {
+            Err("synthetic leave failure".into())
+        } else {
+            Ok(())
+        }
+    }
+    fn after_script_spawn(&mut self) -> Result<Option<crate::ScriptCall>, String> {
+        self.followups += 1;
+        if self.fail_followup {
+            Err("synthetic followup failure".into())
+        } else {
+            Ok(Some(crate::ScriptCall::Return(Value::Int(5))))
+        }
+    }
+    fn abort_script_calls(&mut self) {
+        self.aborts += 1;
+    }
+}
+
+const SPAWN_PROBE: &str = "\
+native Spawn takes code first, code tail returns integer
+native Sleep takes real seconds returns nothing
+native Observe takes integer value returns nothing
+native Boom takes nothing returns nothing
+function empty takes nothing returns nothing
+endfunction
+function tail takes nothing returns nothing
+call Observe(4)
+endfunction
+function safe takes nothing returns integer
+return 71
+endfunction
+";
+
+#[test]
+fn nested_spawn_boundaries_keep_parent_expression_and_reparked_child_tails() {
+    let source = format!(
+        "{SPAWN_PROBE}\
+globals
+integer result = 0
+endglobals
+function grand_tail takes nothing returns nothing
+call Observe(14)
+endfunction
+function grand takes nothing returns nothing
+local integer retained = 477
+call Observe(11)
+call Sleep(1.0)
+call Observe(retained)
+call Sleep(2.0)
+call Observe(retained+1)
+endfunction
+function child takes nothing returns nothing
+local integer retained = 701
+call Observe(1)
+call Spawn(function grand,function grand_tail)
+call Observe(retained)
+call Sleep(3.0)
+call Observe(retained+1)
+endfunction
+function main takes nothing returns integer
+local integer retained = 701
+local integer array values
+set values[2] = 13
+set result = 11 + Spawn(function child,function tail)*3
+return retained + values[2] + result
+endfunction
+"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    assert_eq!(vm.call("main", &[]).unwrap(), Value::Int(740));
+    assert_eq!(vm.global("result"), Value::Int(26));
+    assert_eq!(vm.host().observed, [1, 11, 701]);
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1, 2]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (2, 2));
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [2, 3]);
+    vm.resume_thread(2).unwrap();
+    vm.resume_thread(3).unwrap();
+    assert_eq!(vm.host().observed, [1, 11, 701, 477, 702, 4, 478, 14]);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (5, 2, 0)
+    );
+    assert_eq!(vm.parked_threads().count(), 0);
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+}
+
+#[test]
+fn spawn_boundary_child_error_keeps_source_and_skips_parent_followup() {
+    let prelude =
+        "function child takes nothing returns nothing\ncall Observe(1)\ncall Boom()\nendfunction\n";
+    let source = format!(
+        "{SPAWN_PROBE}function main takes nothing returns nothing\ncall Spawn(function child,function tail)\ncall Observe(9)\nendfunction\n"
+    );
+    let prelude_ast = parse(prelude).unwrap();
+    let map_ast = parse(&source).unwrap();
+    let program =
+        resolve_with(&map_ast, &[Prelude::new("synthetic/child.j", &prelude_ast)]).unwrap();
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    let error = vm.call("main", &[]).unwrap_err();
+    let at = prelude.find("call Boom()").unwrap();
+    assert_eq!(error.span, crate::Span::new(at, at + 11));
+    assert_eq!(vm.error_source(), Some("synthetic/child.j"));
+    assert_eq!(vm.host().observed, [1]);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (0, 0, 1)
+    );
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+}
+
+#[test]
+fn spawn_boundary_invalid_tail_keeps_native_caller_span() {
+    let source = format!(
+        "{SPAWN_PROBE}function bad takes integer value returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Spawn(function tail,function bad)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    let error = vm.call("main", &[]).unwrap_err();
+    let at = source
+        .find("call Spawn(function tail,function bad)")
+        .unwrap();
+    assert_eq!(
+        error.span,
+        crate::Span::new(at, at + "call Spawn(function tail,function bad)".len())
+    );
+    assert_eq!(vm.error_source(), Some("the map script"));
+    assert!(error.message.contains("callback must take nothing"));
+    assert_eq!(vm.host().observed, [4]);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (0, 0, 1)
+    );
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+}
+
+#[test]
+fn spawn_boundary_nesting_limit_unwinds_and_vm_can_run_again() {
+    let source = format!(
+        "{SPAWN_PROBE}function recurse takes nothing returns nothing\ncall Spawn(function recurse,function empty)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    let error = vm.call("recurse", &[]).unwrap_err();
+    assert!(error.message.contains("spawns"), "{error}");
+    assert_eq!(vm.host().starts, crate::eval::MAX_SPAWN_DEPTH as usize + 1);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (0, 0, 1)
+    );
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+}
+
+#[test]
+fn spawn_boundary_leave_and_followup_failures_do_not_repeat_child_effects() {
+    let source = format!(
+        "{SPAWN_PROBE}function main takes nothing returns nothing\ncall Spawn(function tail,function empty)\ncall Observe(9)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    for fail_leave in [false, true] {
+        let mut vm = Vm::new(
+            &program,
+            SpawnProbe {
+                fail_leave,
+                fail_followup: !fail_leave,
+                ..SpawnProbe::default()
+            },
+        );
+        let error = vm.call("main", &[]).unwrap_err();
+        let at = source
+            .find("call Spawn(function tail,function empty)")
+            .unwrap();
+        assert_eq!(
+            error.span,
+            crate::Span::new(at, at + "call Spawn(function tail,function empty)".len())
+        );
+        assert_eq!(vm.host().observed, [4]);
+        assert_eq!(
+            (vm.host().leaves, vm.host().followups, vm.host().aborts),
+            (1, usize::from(!fail_leave), 1)
+        );
+        assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+        assert_eq!(vm.host().observed, [4]);
+    }
+}
+
+#[test]
+fn spawn_boundary_reused_ticket_preserves_the_previously_parked_thread() {
+    let source = format!(
+        "{SPAWN_PROBE}function child takes nothing returns nothing\nlocal integer retained=477\ncall Sleep(1.0)\ncall Observe(retained)\nendfunction\nfunction main takes nothing returns nothing\ncall Spawn(function child,function tail)\ncall Spawn(function child,function tail)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(
+        &program,
+        SpawnProbe {
+            reuse_ticket: true,
+            ..SpawnProbe::default()
+        },
+    );
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(error.message.contains("reused a parked thread ticket"));
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (1, 1, 1)
+    );
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.host().observed, [477, 4]);
+    assert_eq!(vm.parked_threads().count(), 0);
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+}
+
+#[test]
+fn empty_spawn_boundary_returns_through_parent_expression_once() {
+    let source = format!(
+        "{SPAWN_PROBE}function main takes nothing returns integer\nreturn 11+Spawn(null,null)*3\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    assert_eq!(vm.call("main", &[]).unwrap(), Value::Int(26));
+    assert_eq!(
+        (vm.host().starts, vm.host().leaves, vm.host().followups),
+        (1, 1, 1)
+    );
+}
+
+#[test]
+fn global_initializer_spawn_preserves_return_expression_and_parked_tail() {
+    let source = format!(
+        "{SPAWN_PROBE}globals\ninteger result=3+Spawn(function child,function tail)*2\nendglobals\nfunction child takes nothing returns nothing\nlocal integer retained=477\ncall Sleep(1.0)\ncall Observe(retained)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    vm.init_globals().unwrap();
+    assert_eq!(vm.global("result"), Value::Int(13));
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (1, 1));
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.host().observed, [477, 4]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (2, 1));
 }
 
 #[test]
