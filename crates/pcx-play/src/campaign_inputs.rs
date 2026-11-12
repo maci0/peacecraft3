@@ -103,7 +103,19 @@ pub fn prepare_new_game(
         image,
         client.clone(),
     )?);
-    let activity = crate::campaign_client::unit_activity(image, client.clone(), &orders)?;
+    let activity = crate::campaign_client::unit_activity(image, client.clone(), &orders)?
+        .with_heading(
+            image,
+            inputs
+                .numeric
+                .as_ref()
+                .ok_or("unit heading numeric policy missing")?,
+            crate::neutral_player::RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 64 << 10,
+                sections: 96,
+            },
+        )?;
     let group_orders = crate::group_order_rules::Rules::reviewed_legacy(image, client.clone())?;
     let game_type = launch
         .route
