@@ -202,6 +202,46 @@ impl ObjectHost {
         Ok(())
     }
 
+    /// Replace producer-owned rawcodes only after all fallible admission has succeeded.
+    pub(crate) fn replace_unit_buff(
+        &mut self,
+        unit: HandleId,
+        remove: &[[u8; 4]],
+        buff: ActiveBuff,
+    ) -> Result<(), Error> {
+        if self.unit_liveness("unit buff", unit)?.is_none() {
+            return Err(self
+                .inner
+                .error("unit buff", Failure::UnitState("unit removed")));
+        }
+        let active = self.unit_buffs.active.entry(unit).or_default();
+        let retained = active
+            .iter()
+            .filter(|b| !remove.contains(&b.rawcode))
+            .count();
+        if retained >= MAX_BUFFS_PER_UNIT {
+            return Err(self
+                .inner
+                .error("unit buff", Failure::Budget("unit buff capacity")));
+        }
+        active
+            .try_reserve(1)
+            .map_err(|_| self.inner.error("unit buff", Failure::Capacity))?;
+        for rawcode in remove {
+            self.detach_unit_buff(unit, *rawcode);
+        }
+        self.unit_buffs
+            .active
+            .get_mut(&unit)
+            .expect("prepared buff list")
+            .push(buff);
+        self.record_placement_event(
+            unit,
+            crate::ai_placement::PlacementEventKind::BuffApplied(buff.rawcode),
+        );
+        Ok(())
+    }
+
     /// Whether a live buff has an unqualified movement-vector contribution.
     pub(crate) fn has_unqualified_motion_buff(&self, unit: HandleId) -> bool {
         self.unit_buffs.active.get(&unit).is_some_and(|buffs| {

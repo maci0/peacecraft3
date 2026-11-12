@@ -756,9 +756,11 @@ impl ObjectHost {
         {
             return Ok(false);
         }
-        if kind == Kind::Slow {
-            self.prepare_slow_windup(caster)?;
-        }
+        let acceptance = if kind == Kind::Slow {
+            Some(self.prepare_slow_acceptance(caster)?)
+        } else {
+            None
+        };
         self.unit_ordered(caster);
         self.cancel_inventory_order(caster);
         self.clear_combat_target(caster);
@@ -775,7 +777,7 @@ impl ObjectHost {
                 },
             );
         }
-        self.step_curse_cast(caster, now)?;
+        self.walk_curse_cast(caster, target, alias, kind, now, acceptance)?;
         self.cancel_patrol(caster);
         Ok(true)
     }
@@ -927,7 +929,7 @@ impl ObjectHost {
             return Ok(());
         }
         match stage {
-            None => self.walk_curse_cast(caster, target, alias, kind, now),
+            None => self.walk_curse_cast(caster, target, alias, kind, now, None),
             Some(Some(effect_at)) if now >= effect_at => {
                 self.apply_curse_cast(caster, target, alias, kind, now)
             }
@@ -979,6 +981,7 @@ impl ObjectHost {
         alias: [u8; 4],
         kind: Kind,
         now: f64,
+        acceptance: Option<slow::Acceptance>,
     ) -> Result<(), Error> {
         let spell = self.curse_spell(caster, alias, kind)?;
         let usable = match &spell {
@@ -1007,9 +1010,14 @@ impl ObjectHost {
             self.steer_unit(caster, None, NATIVE)?;
         }
         let delay = self.curse_cast_point(caster)?;
-        if kind == Kind::Slow {
-            self.prepare_slow_windup(caster)?;
-        }
+        let acceptance = if kind == Kind::Slow {
+            Some(match acceptance {
+                Some(prepared) => prepared,
+                None => self.prepare_slow_acceptance(caster)?,
+            })
+        } else {
+            None
+        };
         let facing = (to[1] - from[1])
             .atan2(to[0] - from[0])
             .to_degrees()
@@ -1040,8 +1048,9 @@ impl ObjectHost {
                 effect_at: now + delay,
             };
         }
-        if kind == Kind::Slow {
-            return self.begin_slow_windup(caster, now);
+        if let Some(acceptance) = acceptance {
+            self.begin_slow_windup(caster, acceptance);
+            return Ok(());
         }
         if delay <= 0.0 {
             return self.apply_curse_cast(caster, target, alias, kind, now);
@@ -1330,17 +1339,37 @@ impl ObjectHost {
         {
             return Err(self.curse_error(POLYMORPH_SPEED_REFUSAL));
         }
-        self.end_slow(target)?;
-        self.detach_unit_buff(target, buff);
-        self.attach_unit_buff(target, Self::curse_buff(buff))?;
-        let applied = match self.shift_unit_speed(target, -movement, NATIVE) {
+        let previous = self
+            .curses
+            .as_ref()
+            .and_then(|s| s.slows.get(&target))
+            .map(|s| (s.buff, s.movement, s.art));
+        let record = self.executed_unit(target)?;
+        let original = (record.activity.clone(), record.animation.clone());
+        let art = self.show_buff_art(target, buff, expires_at)?;
+        let result = (|| {
+            if let Some((_, Some(movement), _)) = previous {
+                self.shift_unit_speed(target, movement, NATIVE)?;
+            }
+            let applied = self.shift_unit_speed(target, -movement, NATIVE)?;
+            let remove = [previous.map_or(buff, |s| s.0), buff];
+            self.replace_unit_buff(target, &remove, Self::curse_buff(buff))?;
+            Ok(applied)
+        })();
+        let applied = match result {
             Ok(applied) => applied,
             Err(error) => {
-                self.detach_unit_buff(target, buff);
+                if let Entry::Unit { record } = self.inner.entry_mut(target)? {
+                    record.activity = original.0;
+                    record.animation = original.1;
+                }
+                self.kill_effect(art);
                 return Err(error);
             }
         };
-        let art = self.show_buff_art(target, buff, expires_at)?;
+        if let Some((_, _, art)) = previous {
+            self.kill_effect(art);
+        }
         if let Some(state) = &mut self.curses {
             state.slows.insert(
                 target,

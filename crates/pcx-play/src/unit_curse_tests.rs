@@ -1267,6 +1267,12 @@ call SetUnitState(H,UNIT_STATE_MANA,40.0)
 elseif SlowMode==9 then
 set SlowAction=UnitRemoveAbility(H,'Aslo')
 set SlowAction=UnitAddAbility(H,'Aslo')
+elseif SlowMode>=10 then
+loop
+exitwhen SlowMode==10
+call CreateTimer()
+set SlowMode=SlowMode-1
+endloop
 endif
 set SlowActionMana=GetUnitState(H,UNIT_STATE_MANA)
 endfunction
@@ -1304,6 +1310,10 @@ call TriggerAddAction(t,function SlowEnd)
 endfunction
 function SlowIssue takes nothing returns boolean
 return IssueTargetOrder(H,"alpha",E)
+endfunction
+function SlowFillOnEffect takes integer count returns nothing
+set SlowMode=count+10
+set SlowEvents=0
 endfunction
 "#;
 
@@ -1389,6 +1399,112 @@ fn slow_public_order_effect_callback_precedes_payment_and_source_timed_finish() 
     assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
     assert_eq!(speed(&mut vm, enemy), clamped(base, MOVEMENT_FACTOR));
     assert_eq!(current_order(&mut vm, caster), 0);
+}
+
+#[test]
+fn slow_event_capacity_refuses_public_order_before_cast_publication() {
+    let (mut vm, [caster, _, enemy, _]) = open_with(Config {
+        script: SLOW_CALLBACKS,
+        forms: true,
+        ..Config::default()
+    });
+    vm.call("prime", &[]).unwrap();
+    vm.call("SlowWatch", &[Value::Int(0), Value::Handle(enemy)])
+        .unwrap();
+    let Value::Handle(trigger) = vm.global("SlowEffectTrigger") else {
+        panic!("trigger")
+    };
+    let before = vm
+        .host()
+        .inner
+        .executed_unit(caster)
+        .unwrap()
+        .animation
+        .clone();
+    let base = speed(&mut vm, enemy);
+    // The shared synthetic position host admits 256 handles/pending game events.
+    for _ in 0..256 {
+        vm.host().inner.push_reserved_event(
+            trigger,
+            None,
+            crate::playercolor_host::EventSubject::default(),
+            None,
+        );
+    }
+    let error = vm.call("SlowIssue", &[]).unwrap_err().to_string();
+    assert!(error.contains("pending game events"), "{error}");
+    assert_eq!(vm.global("SlowEvents"), Value::Int(0));
+    assert_eq!(
+        vm.host().inner.executed_unit(caster).unwrap().animation,
+        before
+    );
+    assert_eq!(current_order(&mut vm, caster), 0);
+    let mut count = 0;
+    while let Some(event) = vm.host().inner.take_fired_event() {
+        assert_eq!(event.subject.spell_ability, None);
+        count += 1;
+    }
+    assert_eq!(count, 256);
+    step(&mut vm, CAST_POINT + 1.);
+    assert_eq!(mana(&mut vm, caster), 200.);
+    assert_eq!(speed(&mut vm, enemy), base);
+    assert!(buffs(&mut vm, enemy).is_empty());
+    assert_eq!(slow_cooldown(&mut vm, caster), 0.);
+    assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+#[test]
+fn slow_effect_handle_exhaustion_preserves_payment_and_previous_target_state() {
+    for refreshing in [false, true] {
+        let (mut vm, caster, enemy, _) = slow_callbacks(0);
+        if refreshing {
+            slow_advance_and_deliver(&mut vm, 3.);
+        }
+        let before_speed = speed(&mut vm, enemy);
+        let before_mana = mana(&mut vm, caster);
+        let before_buffs = buffs(&mut vm, enemy);
+        let before_effects = effect_count(&mut vm);
+        let remaining = 256 - vm.host().inner.inner().handles();
+        vm.call("SlowFillOnEffect", &[Value::Int(remaining as i32)])
+            .unwrap();
+        let start = vm.host().inner.timer_game_time().unwrap();
+        if refreshing {
+            assert_eq!(vm.call("SlowIssue", &[]).unwrap(), Value::Bool(true));
+        }
+        step(&mut vm, start + CAST_POINT);
+        let event = vm.host().inner.take_fired_event().unwrap();
+        let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+        vm.run_thread(&delivery.actions).unwrap();
+        vm.host().inner.finish_fired_event();
+        assert_eq!(vm.global("SlowMode"), Value::Int(10));
+        assert_eq!(vm.host().inner.inner().handles(), 256);
+        assert_eq!(mana(&mut vm, caster), before_mana);
+        assert_eq!(speed(&mut vm, enemy), before_speed);
+        assert_eq!(buffs(&mut vm, enemy), before_buffs);
+        assert_eq!(effect_count(&mut vm), before_effects);
+        assert_eq!(slow_cooldown(&mut vm, caster), 0.);
+        assert!(vm.host().inner.take_fired_event().is_none());
+        for until in [start + 1., start + 2.] {
+            assert!(
+                vm.host()
+                    .inner
+                    .next_timer_expiry(until, &mut 100)
+                    .unwrap()
+                    .is_none()
+            );
+            let error = vm
+                .host()
+                .inner
+                .advance_unit_activity(until, &mut 65536)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("capacity"), "{error}");
+            assert_eq!(mana(&mut vm, caster), before_mana);
+            assert_eq!(speed(&mut vm, enemy), before_speed);
+            assert_eq!(buffs(&mut vm, enemy), before_buffs);
+            assert_eq!(effect_count(&mut vm), before_effects);
+        }
+    }
 }
 
 #[test]
