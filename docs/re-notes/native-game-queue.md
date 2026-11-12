@@ -6,6 +6,10 @@ This joins the bounded code observations in
 [legacy-simulation-clock](legacy-simulation-clock.md) to a campaign consumer.
 It does not establish complete simulation, scheduler, heading or spell parity.
 
+Normal-campaign adoption of this candidate is held until both script and AI wake
+families carry source-qualified raw points and callback scopes. The called timer
+and timed-event tests below do not qualify those other continuation families.
+
 ## Producer and arithmetic
 
 The initializer at `0x406730` converts its two integer immediates through
@@ -96,7 +100,11 @@ replacement interval for that partial step.
 Driver choice is one-way. A fresh session can choose native paced execution or
 the existing caller-time API. A legacy call that advances time or consumes a due
 legacy request chooses Legacy; a genuine zero-work same-time call leaves it
-fresh. A native session rejects an arbitrary legacy horizon before mutation, and
+fresh. An explicit finite initial caller time whose bits differ from the source
+origin, including negative zero, selects Legacy during admission. Its value is
+preserved; no native point is inferred from it. Missing or invalid initial clocks
+and malformed source policies still refuse. A native session rejects an arbitrary
+legacy horizon before mutation, and
 a legacy session rejects later native pacing before mutation. Startup requests
 are retained in both cases. In particular, timed-event native metadata is
 prepared atomically at the first paced call, so choosing Legacy preserves the
@@ -140,6 +148,13 @@ extra time, and session replacement. Parser checks and these synthetic effects
 are not original-client ability or heading parity.
 
 ## Remaining fidelity work
+
+Parked script and AI wake records still carry caller-time deadlines. Their native
+queue/domain/phase and selected wake scope require separate qualification; a
+resume must not inherit the enclosing outer point or reconstruct a point from
+`f64`. Native adoption is held until those actual callers are connected. A strict
+preflight refusal can prevent corruption while a family is unbound, but is not a
+completed wake implementation.
 
 The generic equal-expiry heap comparator, source queue sequence rollover and
 ordering across timer, automatic-cast and physics consumers remain open. The

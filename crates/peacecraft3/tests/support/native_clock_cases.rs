@@ -449,3 +449,80 @@ fn native_callback_error_restores_outer_cursor_and_runtime_does_not_replay() {
     assert!(runtime.advance_ticks(&mut session, 1).is_err());
     assert_eq!(session.global("fired"), Some(Value::Int(1)));
 }
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn explicit_initial_caller_clocks_preserve_legacy_factory_behavior() {
+    for initial in [20., 0.1, -1., -0.] {
+        let mut app = timer_app();
+        deliver_timer_with(&mut app, LONG, 1, "", |inputs| {
+            inputs.timer_time = Some(initial);
+            inputs.numeric = Some(numeric(false));
+        });
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_none(),
+            "{:?}",
+            app.world().resource::<CampaignStartup>().last_error
+        );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+            initial.to_bits()
+        );
+        assert_eq!(session.host().unwrap().objects().native_game_point(), None);
+        assert!(
+            pcx_play::campaign_host::advance_paced_tick(
+                &mut session,
+                Duration::from_millis(125),
+                initial + 0.125,
+                8
+            )
+            .is_err()
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+            initial.to_bits()
+        );
+        assert_eq!(session.host().unwrap().objects().native_game_point(), None);
+        assert_eq!(session.global("fired"), Some(Value::Int(0)));
+        assert_eq!(session.advance_timers(initial + 40., 8).unwrap(), 1);
+        assert_eq!(session.global("fired"), Some(Value::Int(1)));
+    }
+    let mut app = timer_app();
+    publish(&mut app, LONG, 1, false);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session.advance_timers(-0., 8).unwrap();
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .timer_game_time()
+            .unwrap()
+            .to_bits(),
+        (-0f64).to_bits()
+    );
+    assert!(
+        pcx_play::campaign_host::advance_paced_tick(&mut session, Duration::ZERO, 0., 8).is_err()
+    );
+    assert_eq!(session.advance_timers(40., 8).unwrap(), 1);
+}

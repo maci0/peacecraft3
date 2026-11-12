@@ -8,8 +8,16 @@ impl ObjectHost {
         let Some(rules) = self.numeric.as_ref().and_then(|p| p.native_game_clock()) else {
             return Ok(());
         };
+        let initial = self
+            .timer_game_time()
+            .filter(|now| now.is_finite())
+            .ok_or_else(|| {
+                self.inner.error(
+                    "native game clock",
+                    Failure::GameClock("initial timer clock is missing or invalid".into()),
+                )
+            })?;
         if self.native_game_clock.is_some()
-            || self.timer_game_time() != Some(f64::from(rules.simple.origin))
             || self.inner.timer_slots.iter().any(|&index| {
                 matches!(
                     self.inner.arena[index],
@@ -26,10 +34,14 @@ impl ObjectHost {
                 ),
             ));
         }
-        self.native_game_clock = Some(
-            State::new(rules)
-                .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?,
-        );
+        let mut clock = State::new(rules)
+            .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
+        if initial.to_bits() != f64::from(rules.simple.origin).to_bits() {
+            clock
+                .select_legacy(true)
+                .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
+        }
+        self.native_game_clock = Some(clock);
         Ok(())
     }
 
@@ -47,7 +59,9 @@ impl ObjectHost {
     ) -> Result<(), Error> {
         self.validate_timer_target(until)?;
         let advances = advances_clock
-            && (Some(until) != self.timer_game_time()
+            && (self
+                .timer_game_time()
+                .is_none_or(|now| until.to_bits() != now.to_bits())
                 || self.next_timer_deadline().is_some_and(|at| at <= until));
         if let Some(clock) = &mut self.native_game_clock {
             clock
