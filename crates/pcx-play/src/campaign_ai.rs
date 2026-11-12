@@ -6,6 +6,9 @@ use pcx_script::{Host, OwnedVm, ScriptCall, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+#[path = "campaign_melee_difficulty.rs"]
+pub mod melee_difficulty;
+
 const MAX_PLAYERS: usize = 32;
 const MAX_SLEEPERS: usize = 128;
 
@@ -15,6 +18,7 @@ pub struct SourceNames {
     pub(crate) ai_common: String,
     pub(crate) fallback_prefix: String,
     pub(crate) pause: Result<crate::campaign_ai_pause_policy::Rules, String>,
+    pub(crate) melee_difficulty: Option<melee_difficulty::Input>,
 }
 
 impl SourceNames {
@@ -87,6 +91,7 @@ impl SourceNames {
             ai_common: read(ai_common)?,
             fallback_prefix: read(prefix)?,
             pause: Err("PauseCompAI client rules are not admitted".into()),
+            melee_difficulty: None,
         };
         for name in [&names.common, &names.ai_common] {
             AssetPath::new(name).map_err(|e| format!("StartCampaignAI image source: {e}"))?;
@@ -731,6 +736,7 @@ pub(crate) struct Runtime<W: AiWorld> {
     pending_retirement: BTreeSet<i32>,
     remaining_loads: usize,
     pause_rules: Result<crate::campaign_ai_pause_policy::Rules, String>,
+    melee_difficulty: Option<melee_difficulty::Input>,
 }
 
 impl<W: AiWorld> Default for Runtime<W> {
@@ -741,11 +747,16 @@ impl<W: AiWorld> Default for Runtime<W> {
             pending_retirement: BTreeSet::new(),
             remaining_loads: 64,
             pause_rules: Err("PauseCompAI client rules are not admitted".into()),
+            melee_difficulty: None,
         }
     }
 }
 
 impl<W: AiWorld> Runtime<W> {
+    pub(crate) fn set_melee_difficulty(&mut self, input: melee_difficulty::Input) {
+        self.melee_difficulty = Some(input);
+    }
+
     pub(crate) fn set_pause_rules(
         &mut self,
         rules: Result<crate::campaign_ai_pause_policy::Rules, String>,
@@ -836,7 +847,13 @@ impl<W: AiWorld> Runtime<W> {
                 return Err(format!("StartCampaignAI player {player}: {error}"));
             }
         };
-        let mut vm = OwnedVm::new_owned(scripts.shared_program(), AiHost::new(player, inner));
+        let mut host = AiHost::new(player, inner);
+        host.melee_difficulty = self
+            .melee_difficulty
+            .as_ref()
+            .ok_or_else(|| "MeleeDifficulty source input is not admitted".to_owned())
+            .and_then(|input| input.for_player(player));
+        let mut vm = OwnedVm::new_owned(scripts.shared_program(), host);
         let result = vm.init_globals().and_then(|()| {
             let main = vm.program().function_id("main").expect("admitted AI main");
             vm.run_thread(&[main])
@@ -1139,6 +1156,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
         }
     }
     for (name, params, result) in [
+        ("MeleeDifficulty", &[][..], "integer"),
         ("CaptainGroupSize", &[][..], "integer"),
         ("CaptainIsEmpty", &[][..], "boolean"),
         ("CaptainInCombat", &["boolean"][..], "boolean"),
@@ -1178,6 +1196,7 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
 
 pub(crate) struct AiHost<W: AiWorld> {
     player: i32,
+    melee_difficulty: Result<i32, String>,
     world: Option<W>,
     pending_sleep: Option<f64>,
     pause_depth: Option<i32>,
@@ -1189,6 +1208,7 @@ impl<W: AiWorld> AiHost<W> {
     fn new(player: i32, world: W) -> Self {
         Self {
             player,
+            melee_difficulty: Err("MeleeDifficulty source input is not admitted".into()),
             world: Some(world),
             pending_sleep: None,
             pause_depth: None,
@@ -1281,6 +1301,15 @@ impl<W: AiWorld> Host for AiHost<W> {
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         match name {
+            "MeleeDifficulty" => {
+                if !args.is_empty() {
+                    return Err("MeleeDifficulty: expected no arguments".into());
+                }
+                self.melee_difficulty
+                    .as_ref()
+                    .map(|&value| Value::Int(value))
+                    .map_err(Clone::clone)
+            }
             "ReturnGuardPosts" => {
                 if !args.is_empty() {
                     return Err("ReturnGuardPosts: expected no arguments".into());
@@ -1712,6 +1741,10 @@ mod tests {
     use pcx_script::HandleId;
     use std::num::NonZeroU64;
     use std::sync::Mutex;
+
+    mod melee_difficulty_tests {
+        include!("campaign_melee_difficulty_host_tests.rs");
+    }
 
     #[derive(Clone, Debug, Default, PartialEq)]
     struct State {
