@@ -133,6 +133,11 @@ pub trait Host {
             .ok_or_else(|| "war3map.wts source or missing-entry semantics unavailable".into())
     }
 
+    /// Source-qualified StringHash on raw C-string bytes, without map lookup.
+    fn string_hash(&self, _bytes: &[u8]) -> Result<i32, String> {
+        Err("StringHash source policy is not admitted".into())
+    }
+
     /// Optional callback dispatch. `None` uses ordinary native dispatch.
     /// A callback takes no arguments; its return reaches `continue_script_call`.
     fn begin_script_call(
@@ -320,6 +325,9 @@ enum Zip {
     ScriptCall {
         span: Span,
     },
+    ScriptSpawn {
+        span: Span,
+    },
     Unary {
         op: UnOp,
         span: Span,
@@ -376,6 +384,19 @@ struct Thread {
     remaining: std::collections::VecDeque<crate::value::FunctionId>,
 }
 
+struct ThreadEntry {
+    remaining: std::collections::VecDeque<crate::value::FunctionId>,
+    span: Span,
+    leave_on_finish: bool,
+}
+
+struct Spawn {
+    base: usize,
+    caller_depth: u32,
+    remaining: std::collections::VecDeque<crate::value::FunctionId>,
+    span: Span,
+}
+
 struct Activation {
     name: String,
     source: String,
@@ -415,7 +436,8 @@ pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
     suspended_span: Option<Span>,
     /// Parked threads by host ticket.
     parked: BTreeMap<u64, Thread>,
-    spawn_depth: u32,
+    spawns: Vec<Spawn>,
+    thread_entry: Option<ThreadEntry>,
     #[cfg(test)]
     copied_argument_expressions: usize,
 }
@@ -460,7 +482,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             busy: false,
             suspended_span: None,
             parked: BTreeMap::new(),
-            spawn_depth: 0,
+            spawns: Vec::new(),
+            thread_entry: None,
             #[cfg(test)]
             copied_argument_expressions: 0,
         }
@@ -619,8 +642,17 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         &mut self,
         functions: &[crate::value::FunctionId],
     ) -> Result<(), crate::Error> {
+        let mut remaining = std::collections::VecDeque::new();
+        remaining.try_reserve(functions.len()).map_err(|_| {
+            crate::Error::run(Span::EMPTY, "script thread callback allocation failed")
+        })?;
+        remaining.extend(functions.iter().copied());
         self.enter_thread()?;
-        let result = self.run_functions(functions.iter().copied().collect(), Span::EMPTY);
+        let result = self.run_functions(ThreadEntry {
+            remaining,
+            span: Span::EMPTY,
+            leave_on_finish: false,
+        });
         self.exit_thread(result)
     }
 
@@ -644,13 +676,11 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         if let Some(top) = self.stack.last_mut() {
             top.incoming = Some(Value::Null);
         }
-        let result = self
-            .run_functions(thread.remaining, Span::EMPTY)
-            .and_then(|()| {
-                self.host
-                    .leave_thread()
-                    .map_err(|why| crate::Error::run(Span::EMPTY, why))
-            });
+        let result = self.run_functions(ThreadEntry {
+            remaining: thread.remaining,
+            span: Span::EMPTY,
+            leave_on_finish: true,
+        });
         self.exit_thread(result)
     }
 
@@ -678,6 +708,14 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     fn exit_thread(&mut self, result: Result<(), crate::Error>) -> Result<(), crate::Error> {
         self.busy = false;
         if result.is_err() {
+            if self.error_source.is_none() {
+                self.error_source = self.stack.last().map(|a| a.source.clone());
+            }
+            self.stack.clear();
+            self.spawns.clear();
+            self.thread_entry = None;
+            self.depth = 0;
+            self.suspended_span = None;
             self.host.abort_script_calls();
         }
         result
@@ -685,24 +723,39 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
 
     /// Drive the current stack, then each remaining callback, until the thread
     /// finishes or parks. A park moves the whole stack into `parked`.
-    fn run_functions(
-        &mut self,
-        mut remaining: std::collections::VecDeque<crate::value::FunctionId>,
-        span: Span,
-    ) -> Result<(), crate::Error> {
+    fn run_functions(&mut self, entry: ThreadEntry) -> Result<(), crate::Error> {
+        if self.thread_entry.is_some() {
+            return Err(broken(entry.span, "script thread entry is already active"));
+        }
+        self.thread_entry = Some(entry);
+        let result = self.drive_thread();
+        let entry = self
+            .thread_entry
+            .take()
+            .expect("active script thread entry");
+        result.and_then(|()| {
+            if entry.leave_on_finish {
+                self.host
+                    .leave_thread()
+                    .map_err(|why| crate::Error::run(entry.span, why))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn drive_thread(&mut self) -> Result<(), crate::Error> {
         loop {
+            let entry = self
+                .thread_entry
+                .as_mut()
+                .expect("active script thread entry");
+            let span = entry.span;
             if self.stack.is_empty() {
-                let Some(id) = remaining.pop_front() else {
+                let Some(id) = entry.remaining.pop_front() else {
                     return Ok(());
                 };
-                let function = self.program.functions().get(id.index()).ok_or_else(|| {
-                    crate::Error::run(span, "thread callback is not in the loaded program")
-                })?;
-                if !function.params.is_empty() {
-                    return Err(crate::Error::run(span, "thread callback must take nothing"));
-                }
-                let name = function.name.clone();
-                self.push_activation(&name, Vec::new(), span)?;
+                self.push_thread_callback(id, span)?;
             }
             if let Exec::Suspended = self.drive_until(0)? {
                 let at = self.suspended_span.unwrap_or(span);
@@ -716,12 +769,33 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 let thread = Thread {
                     stack: std::mem::take(&mut self.stack),
                     depth: std::mem::replace(&mut self.depth, 0),
-                    remaining,
+                    remaining: std::mem::take(
+                        &mut self
+                            .thread_entry
+                            .as_mut()
+                            .expect("active script thread entry")
+                            .remaining,
+                    ),
                 };
                 self.parked.insert(ticket, thread);
                 return Ok(());
             }
         }
+    }
+
+    fn push_thread_callback(
+        &mut self,
+        id: crate::value::FunctionId,
+        span: Span,
+    ) -> Result<(), crate::Error> {
+        let function = self.program.functions().get(id.index()).ok_or_else(|| {
+            crate::Error::run(span, "thread callback is not in the loaded program")
+        })?;
+        if !function.params.is_empty() {
+            return Err(crate::Error::run(span, "thread callback must take nothing"));
+        }
+        let name = function.name.clone();
+        self.push_activation(&name, Vec::new(), span)
     }
 
     fn refuse_reentry(&self) -> Result<(), crate::Error> {
@@ -741,6 +815,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         if result.is_err() {
             self.host.abort_script_calls();
             self.stack.clear();
+            self.spawns.clear();
             self.depth = 0;
             self.suspended_span = None;
         }
@@ -899,6 +974,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         let result = self.drive_loop(base);
         if result.is_err() && base == 0 {
             self.stack.clear();
+            self.spawns.clear();
             self.depth = 0;
             self.suspended_span = None;
         }
@@ -915,11 +991,63 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 return Ok(Exec::Finished(Value::Null));
             }
             match self.run_top()? {
-                TopStop::Suspended => return Ok(Exec::Suspended),
+                TopStop::Suspended => {
+                    let Some(spawn) = self.spawns.last() else {
+                        return Ok(Exec::Suspended);
+                    };
+                    let at = self.suspended_span.unwrap_or(spawn.span);
+                    let mut stack = Vec::new();
+                    stack
+                        .try_reserve(self.stack.len() - spawn.base)
+                        .map_err(|_| crate::Error::run(at, "parked spawn allocation failed"))?;
+                    let ticket = self
+                        .host
+                        .park_thread()
+                        .map_err(|why| crate::Error::run(at, why))?;
+                    if self.parked.contains_key(&ticket) {
+                        return Err(crate::Error::run(at, "host reused a parked thread ticket"));
+                    }
+                    let spawn = self.spawns.pop().expect("selected spawn");
+                    stack.extend(self.stack.drain(spawn.base..));
+                    self.parked.insert(
+                        ticket,
+                        Thread {
+                            stack,
+                            depth: self.depth,
+                            remaining: spawn.remaining,
+                        },
+                    );
+                    self.depth = spawn.caller_depth;
+                    self.suspended_span = None;
+                    if self.stack.len() == base {
+                        return Ok(Exec::Finished(Value::Null));
+                    }
+                    self.deliver_return(Value::Null)?;
+                }
                 TopStop::Switched => {}
                 TopStop::Finished(value) => {
                     self.stack.pop();
                     self.depth = self.depth.saturating_sub(1);
+                    if let Some(spawn) = self.spawns.last_mut()
+                        && self.stack.len() == spawn.base
+                    {
+                        if let Some(id) = spawn.remaining.pop_front() {
+                            let span = spawn.span;
+                            if let Err(error) = self.push_thread_callback(id, span) {
+                                if self.error_source.is_none() {
+                                    self.error_source = self.stack.last().map(|a| a.source.clone());
+                                }
+                                return Err(error);
+                            }
+                            continue;
+                        }
+                        self.depth = self.spawns.pop().expect("completed spawn").caller_depth;
+                        if self.stack.len() == base {
+                            return Ok(Exec::Finished(Value::Null));
+                        }
+                        self.deliver_return(Value::Null)?;
+                        continue;
+                    }
                     if self.stack.len() == base {
                         return Ok(Exec::Finished(value));
                     }
@@ -2044,20 +2172,35 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     return Ok(ExprOut::Push(outer));
                 }
                 ScriptCall::Spawn(functions) => {
-                    if self.spawn_depth >= MAX_SPAWN_DEPTH {
+                    if self.spawns.len() >= MAX_SPAWN_DEPTH as usize {
                         return Err(crate::Error::run(
                             span,
                             format!("threads nested past {MAX_SPAWN_DEPTH} spawns"),
                         ));
                     }
-                    let caller = std::mem::take(&mut self.stack);
-                    let depth = std::mem::replace(&mut self.depth, 0);
-                    self.spawn_depth += 1;
-                    let result = self.run_functions(functions.into(), span);
-                    self.spawn_depth -= 1;
-                    self.stack = caller;
-                    self.depth = depth;
-                    result?;
+                    let mut remaining: std::collections::VecDeque<_> = functions.into();
+                    if let Some(first) = remaining.pop_front() {
+                        self.spawns.try_reserve(1).map_err(|_| {
+                            crate::Error::run(span, "script spawn boundary allocation failed")
+                        })?;
+                        outer.try_reserve(1).map_err(|_| {
+                            crate::Error::run(span, "script spawn return allocation failed")
+                        })?;
+                        let base = self.stack.len();
+                        let caller_depth = std::mem::replace(&mut self.depth, 0);
+                        if let Err(error) = self.push_thread_callback(first, span) {
+                            self.depth = caller_depth;
+                            return Err(error);
+                        }
+                        self.spawns.push(Spawn {
+                            base,
+                            caller_depth,
+                            remaining,
+                            span,
+                        });
+                        outer.push(Zip::ScriptSpawn { span });
+                        return Ok(ExprOut::Push(outer));
+                    }
                     self.host
                         .leave_thread()
                         .map_err(|why| crate::Error::run(span, why))?;
@@ -2179,6 +2322,19 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     ) -> Result<ExprOut, crate::Error> {
         while let Some(top) = zip.pop() {
             match top {
+                Zip::ScriptSpawn { span } => {
+                    self.host
+                        .leave_thread()
+                        .map_err(|why| crate::Error::run(span, why))?;
+                    if let Some(call) = self
+                        .host
+                        .after_script_spawn()
+                        .map_err(|why| crate::Error::run(span, why))?
+                    {
+                        return self.dispatch_script_call(call, span, frame, zip);
+                    }
+                    value = Value::Null;
+                }
                 Zip::ScriptCall { span } => {
                     let call = self
                         .host
@@ -2420,6 +2576,25 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     })?
                     .real_to_string(value, width_precision)
                     .map(Value::Str)
+                    .map_err(|why| crate::Error::run(span, why))
+            }
+            NativeImpl::StringHash => {
+                let bytes = match &args[0] {
+                    Value::Null => return Ok(Value::Int(0)),
+                    Value::Str(text) => crate::text::native_c_bytes(text.as_bytes()),
+                    value => {
+                        return Err(crate::Error::run(
+                            span,
+                            format!("StringHash takes a string, got {}", value.type_name()),
+                        ));
+                    }
+                };
+                if bytes.is_empty() {
+                    return Ok(Value::Int(0));
+                }
+                self.host
+                    .string_hash(bytes)
+                    .map(Value::Int)
                     .map_err(|why| crate::Error::run(span, why))
             }
             NativeImpl::StringLength => {

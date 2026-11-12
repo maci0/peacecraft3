@@ -274,6 +274,29 @@ fn ambiguous_or_malformed_source_refuses() {
     m.last_mut().unwrap().1[56] ^= 1;
     assert!(decode(&m).is_err());
 }
+#[test]
+fn executable_getter_pointer_coincidence_keeps_true_data_ambiguity_strict() {
+    let mut memory = fixture(0, 0x40);
+    let name = memory
+        .iter()
+        .find(|entry| !entry.2 && entry.1 == format!("{}\0", CLASS_NAMES[0]).as_bytes())
+        .unwrap()
+        .0;
+    let getter = memory
+        .iter()
+        .find(|entry| entry.2 && entry.1 == constant(name))
+        .unwrap()
+        .0;
+    let pointer = getter.to_le_bytes().to_vec();
+    memory.push((0x700000, pointer.clone(), true));
+    assert_eq!(decode(&memory).unwrap().classes.len(), CLASS_NAMES.len());
+    memory.push((0x710000, pointer, false));
+    assert!(
+        decode(&memory)
+            .unwrap_err()
+            .contains("source anchor ambiguous")
+    );
+}
 fn timing_fixture(shift: u32, retry: i8, minimum: i8) -> Memory {
     let table = shift + 0x30000;
     let mut memory = Vec::new();
@@ -510,7 +533,7 @@ fn selected_original_autocast_classes_bind() {
     let codes: Vec<[u8; 4]> = rules.classes.iter().map(|c| c.code).collect();
     for code in [
         b"Aweb", b"Afae", b"Aren", b"Ablo", b"AUfu", b"Arst", b"ANms", b"AEim", b"Arep", b"ANba",
-        b"Acrs", b"Ambt", b"Anhe",
+        b"Acrs", b"Ambt", b"Anhe", b"Asps", b"Afak",
     ] {
         assert!(codes.contains(code), "missing autocast class {code:?}");
     }
@@ -518,7 +541,7 @@ fn selected_original_autocast_classes_bind() {
     // Inner Fire, Web, Raise Dead, Black Arrow and Heal share the decoded ON handler;
     // Mana Shield and Immolation override the update hook and stay undecoded.
     for code in [
-        b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt", b"Anhe",
+        b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt", b"Anhe", b"Asps", b"Afak",
     ] {
         assert!(class(code).enable.is_some(), "no ON decode for {code:?}");
     }
@@ -540,12 +563,24 @@ fn selected_original_autocast_classes_bind() {
     assert_eq!(class(b"Ainf").enable.unwrap().group, 1);
     assert_eq!(class(b"Ambt").enable.unwrap().group, 1);
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);
-    assert_eq!(class(b"Ainf").enable.unwrap().first_tick, 0.02);
+    assert_eq!(
+        class(b"Ainf").enable.unwrap().first_tick,
+        class(b"Ahea").enable.unwrap().first_tick
+    );
     assert_eq!(class(b"Anhe").enable, class(b"Ahea").enable);
+    assert_eq!(class(b"Asps").enable, class(b"Ahea").enable);
+    let orb = class(b"Afak").enable.unwrap();
+    assert_eq!(orb.group, class(b"ANba").enable.unwrap().group);
+    assert_eq!(orb.first_tick, class(b"Ahea").enable.unwrap().first_tick);
+    for code in [b"Asps", b"Afak"] {
+        assert_ne!(class(code).on, class(b"Ahea").on);
+        assert_ne!(class(code).off, class(b"Ahea").off);
+    }
+
     let timing = class(b"Ahea").tick.expect("selected Heal tick timing");
     assert!(timing.retry > timing.minimum_after_cast);
     assert!(timing.minimum_after_cast > 0.);
-    for code in [b"Aslo", b"Anhe"] {
+    for code in [b"Aslo", b"Anhe", b"Asps", b"Afak"] {
         assert_eq!(class(code).tick, Some(timing));
     }
     assert_ne!(class(b"Anhe").on, class(b"Ahea").on);

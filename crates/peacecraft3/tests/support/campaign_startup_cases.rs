@@ -677,6 +677,7 @@ pub(crate) fn host_inputs(
         random: None,
         terrain_pathing: None,
         numeric: None,
+        script_hash: None,
         destructable_restore: None,
         experience_handicap: None,
         health_handicap: None,

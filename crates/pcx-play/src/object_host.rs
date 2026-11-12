@@ -70,6 +70,7 @@ pub struct ObjectHost {
     )>,
     order_queue: Option<order_queue::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
+    script_hash: Option<script_hash::Policy>,
     unit_ids: Option<unit_id::UnitIds>,
     inner: EnumHost,
     group_limit: Option<usize>,
@@ -221,6 +222,11 @@ impl ObjectHost {
         self.placed_sources.get(&id).copied()
     }
 
+    pub fn with_script_hash(mut self, policy: ScriptHashPolicy) -> Self {
+        self.script_hash = Some(policy);
+        self
+    }
+
     pub fn with_script_numeric(mut self, policy: crate::script_numeric::NumericPolicy) -> Self {
         self.numeric = Some(policy);
         self
@@ -325,6 +331,7 @@ impl ObjectHost {
             destructables: None,
             units: None,
             order_registry: None,
+            script_hash: None,
             unit_ids: None,
             unit_activity: None,
             harvest: None,
@@ -984,6 +991,18 @@ impl Host for ObjectHost {
     fn leave_thread(&mut self) -> Result<(), String> {
         self.leave_thread_now().map_err(|e| e.to_string())
     }
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.script_hash
+            .as_ref()
+            .ok_or_else(|| {
+                format!(
+                    "{}: StringHash source policy is not admitted",
+                    self.inner.source_context
+                )
+            })?
+            .hash(bytes)
+            .map_err(|e| e.to_string())
+    }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)
     }
@@ -1573,6 +1592,10 @@ pub use trigger_runtime::{TriggerDelivery, TriggerRuntimeInput};
 
 #[path = "order_registry_host.rs"]
 mod order_registry;
+
+#[path = "script_hash.rs"]
+mod script_hash;
+pub use script_hash::{Binding as ScriptHashBinding, Policy as ScriptHashPolicy};
 
 #[path = "unit_id_host.rs"]
 mod unit_id;

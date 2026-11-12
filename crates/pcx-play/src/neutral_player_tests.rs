@@ -1267,6 +1267,13 @@ fn discovery_refuses_missing_ambiguous_changed_and_over_budget_inputs() {
 pub(crate) fn native_string_world_fixture(
     wts: Option<&[u8]>,
 ) -> crate::map_startup_host::NeutralStack {
+    native_hash_world_fixture(wts, None)
+}
+
+pub(crate) fn native_hash_world_fixture(
+    wts: Option<&[u8]>,
+    hash: Option<crate::playercolor_host::ScriptHashPolicy>,
+) -> crate::map_startup_host::NeutralStack {
     use crate::playercolor_host::{EnumHost, Limits, MapConfigBudget, ObjectHost};
     let common = "type agent extends handle
 type timer extends agent
@@ -1275,6 +1282,7 @@ native CreateTimer takes nothing returns timer
 native DestroyTimer takes timer t returns nothing
 native GetPlayerNeutralPassive takes nothing returns integer
 native StringLength takes string s returns integer
+native StringHash takes string s returns integer
 native SetMapName takes string s returns nothing
 native SetMapDescription takes string s returns nothing
 native SetPlayers takes integer n returns nothing
@@ -1287,7 +1295,7 @@ native DefineStartLocation takes integer n, real x, real y returns nothing
 constant native GetStartLocationX takes integer n returns real
 constant native GetStartLocationY takes integer n returns real
 ";
-    let map = "function length takes nothing returns integer\nreturn StringLength(\"TRIGSTR_7\")\nendfunction\n";
+    let map = "function length takes nothing returns integer\nreturn StringLength(\"TRIGSTR_7\")\nendfunction\nfunction hash takes string s returns integer\nreturn StringHash(s)\nendfunction\n";
     let context = context_with_wts(257, common, map, "native-string-context", wts);
     let enums = EnumHost::checked_selected(
         context.scripts.shared_program(),
@@ -1308,6 +1316,10 @@ constant native GetStartLocationY takes integer n returns real
             start_locations: 0,
         })
         .unwrap();
+    let object = match hash {
+        Some(policy) => object.with_script_hash(policy),
+        None => object,
+    };
     let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), object).unwrap();
     let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();
     let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();

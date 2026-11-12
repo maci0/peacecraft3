@@ -16,6 +16,8 @@ pub struct Rules {
     pub initial_life_fraction: f32,
     pub human_build_ability: [u8; 4],
     pub undead_build_ability: [u8; 4],
+    pub repair_ability: [u8; 4],
+    pub assistant_debit: i32,
     pub refund_rate: f32,
     pub damage_refund_penalty: bool,
     /// Retained source setting; the qualified Human stop observation does not apply it.
@@ -192,11 +194,15 @@ impl Rules {
             {
                 return Err("construction numeric multiplication window differs".into());
             }
-            let fraction = initial_fraction(&mut read, common, multiplication.va)?;
+            let (fraction, progress_table) =
+                initial_fraction(&mut read, common, multiplication.va)?;
+            let assistant_debit = assistant_debit(&read, progress_table)?;
             let human_build_ability = build_class(&mut read, b"CAbilityHumanBuild\0")
                 .map_err(|error| format!("Human build class: {error}"))?;
             let undead_build_ability = build_class(&mut read, b"CAbilityUndeadBuild\0")
                 .map_err(|error| format!("Undead build class: {error}"))?;
+            let repair_ability = build_class(&mut read, b"CAbilityRepair\0")
+                .map_err(|error| format!("Repair class: {error}"))?;
             let ([refund, penalty, drain], profile_sources) =
                 pcx_objects::editor::misc::misc_scalars(
                     profiles,
@@ -230,6 +236,8 @@ impl Rules {
                 initial_life_fraction: fraction,
                 human_build_ability,
                 undead_build_ability,
+                repair_ability,
+                assistant_debit,
                 refund_rate,
                 damage_refund_penalty,
                 life_drain_rate,
@@ -265,7 +273,7 @@ fn initial_fraction(
     read: &mut Reader<'_>,
     common: &[u8],
     multiplication: u32,
-) -> Result<f32, String> {
+) -> Result<(f32, u32), String> {
     let common = std::str::from_utf8(common).map_err(|_| "construction common is not UTF-8")?;
     let mut states = common.lines().filter_map(|line| {
         let words: Vec<_> = line.split_whitespace().collect();
@@ -402,7 +410,43 @@ fn initial_fraction(
     if !fraction.is_finite() || fraction <= 0.0 || fraction >= 1.0 {
         return Err("construction initial fraction range".into());
     }
-    Ok(fraction)
+    Ok((fraction, vtable))
+}
+
+fn assistant_debit(read: &Reader<'_>, table: u32) -> Result<i32, String> {
+    let event = read.word(
+        table
+            .checked_add(0xc)
+            .ok_or("construction event slot overflow")?,
+        false,
+    )?;
+    let body = read.bytes(event, 96, true)?;
+    let mut handlers = Vec::new();
+    for prefix in [&[0x6a, 0, 0x6a, 1, 0xe8][..], &[0x6a, 1, 0x6a, 0, 0xe8][..]] {
+        let at = one_position(body, prefix)?;
+        handlers.push(
+            read.call(
+                event
+                    .checked_add(at as u32 + 4)
+                    .ok_or("construction cost call overflow")?,
+            )?,
+        );
+    }
+    if handlers[0] != handlers[1] {
+        return Err("construction resource event handlers differ".into());
+    }
+    let body = read.bytes(handlers[0], 256, true)?;
+    let mut debits = body
+        .windows(15)
+        .filter(|w| {
+            w.starts_with(&[0x6a, 0, 0x6a, 0, 0x6a, 0, 0x6a]) && w[8..11] == [0x8b, 0xce, 0xe8]
+        })
+        .map(|w| -i32::from(w[7] as i8));
+    let debit = debits.next().ok_or("missing construction resource debit")?;
+    if debit <= 0 || debits.next() != Some(debit) || debits.next().is_some() {
+        return Err("construction gold/lumber debit operands differ".into());
+    }
+    Ok(debit)
 }
 
 fn one_position(bytes: &[u8], needle: &[u8]) -> Result<usize, String> {
