@@ -1139,5 +1139,29 @@ qualifies zero for fresh elapsed/remaining/timeout queries. The shared query
 correction passes the gameplay library suite (2,988 passed, 108 explicit
 ignores), strict native/WASM Clippy, the affected builds and the unchanged
 Orc02 300-second post-control horizon. The baseline counts above precede that
-correction and all ten parallel implementation lanes; the isolated Orc02 replay
+correction and subsequent implementation changes; the isolated Orc02 replay
 passed separately and does not rewrite the retained baseline results.
+
+### Unchanged Undead replay after recruitment and default-autocast scheduling
+
+The 2026-11-13 recreation replay uses the same selected local Legacy install
+and unchanged RoC chapter members. The rebuilt native test executable has SHA-256
+`6e647553d57d2cee908e6898f1c4e61297fd2957c092c484c56583f7f5e6ea01`.
+Private Xvfb and null audio were verified before each run. All three commands
+exit 101; none proves a completed five-minute horizon:
+
+- Undead04 publishes 212 units, then refuses automatic `Ahea` acquisition/casting
+  at its source-derived first deadline, `0.019999999552965164`. This occurs
+  before the older guard-return frontier and does not demonstrate a successful
+  campaign guard-return replay.
+- Undead02 publishes 123 units, then refuses `IsUnitInGroup` in the opening
+  script at `war3map.j:2311`, span `134602..134642`.
+- Undead05 refuses startup `CreateUnit` at `war3map.j:909`, span `52063..52112`:
+  default activation for `Anh2` is not admitted.
+
+The retained command, executable hash, exit and log receipts are in
+`/tmp/pc3-ai-horizon-main/`. These are recreation script frontiers, not
+original-client observations. Correctly scheduling default work exposes
+unsupported behavior; it does not establish automatic-cast fidelity or improve
+these chapters' horizon result by itself. The full baseline sweep above remains
+unchanged.
