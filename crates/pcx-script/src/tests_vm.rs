@@ -1967,6 +1967,8 @@ struct SpawnProbe {
     fail_leave: bool,
     fail_followup: bool,
     reuse_ticket: bool,
+    park_capacity: Option<usize>,
+    sleepers: std::collections::BTreeSet<u64>,
 }
 
 impl crate::Host for SpawnProbe {
@@ -2002,10 +2004,21 @@ impl crate::Host for SpawnProbe {
         name == "Sleep"
     }
     fn park_thread(&mut self) -> Result<u64, String> {
+        if self
+            .park_capacity
+            .is_some_and(|limit| self.sleepers.len() >= limit)
+        {
+            return Err("synthetic park capacity exceeded".into());
+        }
         self.next += 1;
-        Ok(if self.reuse_ticket { 1 } else { self.next })
+        let ticket = if self.reuse_ticket { 1 } else { self.next };
+        self.sleepers.insert(ticket);
+        Ok(ticket)
     }
-    fn resume_thread(&mut self, _: u64) -> Result<(), String> {
+    fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
+        if !self.sleepers.remove(&ticket) {
+            return Err("synthetic unknown sleeper".into());
+        }
         Ok(())
     }
     fn leave_thread(&mut self) -> Result<(), String> {
@@ -2284,6 +2297,105 @@ fn root_thread_entry_tail_failure_aborts_without_running_leave_or_followup() {
             .unwrap();
         assert_eq!(vm.host().observed, [1, 4]);
     }
+}
+
+#[test]
+fn root_park_failure_clears_aborted_frames_and_preserves_older_threads() {
+    let source = format!(
+        "{SPAWN_PROBE}function old takes nothing returns nothing\ncall Sleep(1.0)\ncall Observe(4)\nendfunction\nfunction failing takes nothing returns nothing\ncall Sleep(2.0)\ncall Observe(9)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    for duplicate in [false, true] {
+        let mut vm = Vm::new(
+            &program,
+            SpawnProbe {
+                park_capacity: if duplicate { None } else { Some(1) },
+                reuse_ticket: duplicate,
+                ..SpawnProbe::default()
+            },
+        );
+        vm.run_thread(&[program.function_id("old").unwrap()])
+            .unwrap();
+        let error = vm
+            .run_thread(&[program.function_id("failing").unwrap()])
+            .unwrap_err();
+        assert!(error.message.contains(if duplicate {
+            "reused a parked thread ticket"
+        } else {
+            "park capacity"
+        }));
+        let at = source.find("call Sleep(2.0)").unwrap();
+        assert_eq!(
+            error.span,
+            crate::Span::new(at, at + "call Sleep(2.0)".len())
+        );
+        assert_eq!(vm.error_source(), Some("the map script"));
+        assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+        assert_eq!(vm.host().sleepers.iter().copied().collect::<Vec<_>>(), [1]);
+        assert!(
+            vm.resume(Value::Null)
+                .unwrap_err()
+                .message
+                .contains("not suspended")
+        );
+        assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+        assert!(vm.host().observed.is_empty());
+        assert_eq!(
+            (vm.host().aborts, vm.host().leaves, vm.host().followups),
+            (1, 0, 0)
+        );
+        vm.resume_thread(1).unwrap();
+        assert_eq!(vm.host().observed, [4]);
+        assert_eq!(vm.parked_threads().count(), 0);
+        assert_eq!((vm.host().aborts, vm.host().leaves), (1, 1));
+    }
+}
+
+#[test]
+fn root_repark_failure_clears_only_the_aborted_resumed_execution() {
+    let source = format!(
+        "{SPAWN_PROBE}function old takes nothing returns nothing\ncall Sleep(1.0)\ncall Observe(4)\nendfunction\nfunction repark takes nothing returns nothing\ncall Sleep(2.0)\ncall Observe(7)\ncall Sleep(3.0)\ncall Observe(9)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(
+        &program,
+        SpawnProbe {
+            park_capacity: Some(2),
+            ..SpawnProbe::default()
+        },
+    );
+    vm.run_thread(&[program.function_id("old").unwrap()])
+        .unwrap();
+    vm.run_thread(&[program.function_id("repark").unwrap()])
+        .unwrap();
+    vm.host().park_capacity = Some(1);
+    let error = vm.resume_thread(2).unwrap_err();
+    assert!(error.message.contains("park capacity"));
+    let at = source.find("call Sleep(3.0)").unwrap();
+    assert_eq!(
+        error.span,
+        crate::Span::new(at, at + "call Sleep(3.0)".len())
+    );
+    assert_eq!(vm.error_source(), Some("the map script"));
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!(vm.host().sleepers.iter().copied().collect::<Vec<_>>(), [1]);
+    assert!(
+        vm.resume(Value::Null)
+            .unwrap_err()
+            .message
+            .contains("not suspended")
+    );
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+    assert_eq!(vm.host().observed, [7]);
+    assert_eq!(
+        (vm.host().aborts, vm.host().leaves, vm.host().followups),
+        (1, 0, 0)
+    );
+    assert!(vm.resume_thread(2).is_err());
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.host().observed, [7, 4]);
+    assert_eq!(vm.parked_threads().count(), 0);
+    assert_eq!((vm.host().aborts, vm.host().leaves), (1, 1));
 }
 
 #[test]

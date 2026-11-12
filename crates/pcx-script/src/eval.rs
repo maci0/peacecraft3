@@ -708,6 +708,14 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     fn exit_thread(&mut self, result: Result<(), crate::Error>) -> Result<(), crate::Error> {
         self.busy = false;
         if result.is_err() {
+            if self.error_source.is_none() {
+                self.error_source = self.stack.last().map(|a| a.source.clone());
+            }
+            self.stack.clear();
+            self.spawns.clear();
+            self.thread_entry = None;
+            self.depth = 0;
+            self.suspended_span = None;
             self.host.abort_script_calls();
         }
         result
