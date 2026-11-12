@@ -7333,3 +7333,51 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Every new current-handler case executes in both application targets. Final
   source hashes are unchanged and focused review finds no remaining actionable
   defect in this scope. Receipts: `/tmp/pc3-callback-music-final-validation/`.
+
+
+- 2026-11-13: Source-derived `StringHash` is connected through the VM, all
+  production host decorators and campaign startup. All 38 captured native hash
+  expressions match. Runtime string bytes keep their existing UTF-8 storage
+  contract; byte-valued Case/SubString, locale provenance and unsafe substring
+  bounds remain separate work. See [string natives](docs/re-notes/script-string-natives.md).
+
+- 2026-11-13: Script Spawn boundaries and root callback entries now reside in
+  the execution state used by the existing driver. A failed root park/repark
+  clears only the aborted execution, preserves earlier parked threads and host
+  tickets, and allows later callbacks. Full checkpoint/root codecs, durable
+  desktop/browser storage and Save/Load publication remain unfinished; these
+  foundations do not enable partial saves. See
+  [continuation evidence](docs/re-notes/script-saved-games.md).
+
+- 2026-11-13: Public Human construction supports independent assistants,
+  source-derived work/resource operands, funding exhaustion and primary-worker
+  reclamation. Forecasting uses the same admitted speed as projection and rounds
+  a positive completion deadline outward when needed. A published-session test
+  reproduced the former WakeBudget loop and now completes at clocks 10000 and
+  2^40 with budget eight and exactly one finish. Native pooled charging phase,
+  reclamation cadence and ordinary repair remain open. See
+  [construction](docs/re-notes/unit-construction.md).
+
+- 2026-11-13: Stock structure upgrades preserve damaged life percentage,
+  grant no death/removal refund and continue under a new owner. Target-form
+  death preparation precedes cleanup; unsupported changes to death-award,
+  ability or flight classes refuse before mutation. The actual campaign recipe
+  selects Melee_V0 tables matching the controlled original-client witness.
+  Damage penalties, negative credits, upgrade events and exact tick parity
+  remain open. See [production queues](docs/re-notes/player-production-queues.md).
+
+- 2026-11-13: Source-qualified Asps/Afak default activation is admitted.
+  Class discovery separates executable sections from data while retaining true
+  data-ambiguity errors. Casting and acquisition remain unsupported where not
+  qualified. See [autocast defaults](docs/re-notes/ability-autocast-on.md).
+
+  Independent combined validation passes 3,550 package tests, zero failed,
+  170 explicit ignores; fourteen explicit source/native-witness gates, strict
+  native/WASM core checks and library builds pass. Application session,
+  delivery, startup and audio checks pass 349 test executions, including the
+  actual null-sink seek. Both review findings are closed, and all frozen Rust
+  source hashes match the staged files. Receipts:
+  `/tmp/pc3-resident-lifecycle-main-validation/`. This does not establish full
+  saves, complete missions, rendered/audio parity or tick-identical execution.
+  Native queue pacing adoption is held until script and AI wake points are
+  qualified and connected; timer-only callback qualification is insufficient.

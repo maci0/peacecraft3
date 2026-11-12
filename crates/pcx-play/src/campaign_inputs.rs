@@ -787,6 +787,7 @@ pub fn prepare(
             max_secondary: 256,
         }),
         numeric: Some(source.numeric),
+        script_hash: Some(source.script_hash),
         destructable_restore: Some(source.destructable_restore),
         experience_handicap: Some(source.experience),
         health_handicap: Some(source.health),
@@ -1270,4 +1271,249 @@ mod tests {
         );
         assert!(super::conversion_global(&program, "ConvertGameDifficulty", 1).is_err());
     }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires PCX_CAMPAIGN_INSTALL, PCX_CAMPAIGN_IMAGE, PCX_CAMPAIGN_COMMON and PCX_UPGRADE_QUALIFICATION_DIR"]
+fn local_original_upgrade_catalog_and_policy_match_the_roc_runtime_witness() {
+    use crate::{
+        campaign_data_set::{CampaignRecipe, ImageRules},
+        neutral_player::RuleInputBudget,
+    };
+    use pcx_sim::world::ObjectCatalog;
+    use std::path::PathBuf;
+    fn bounded(path: impl AsRef<std::path::Path>, limit: u64) -> Vec<u8> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .unwrap()
+            .take(limit + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(
+            bytes.len() as u64 <= limit,
+            "local upgrade input exceeds budget"
+        );
+        bytes
+    }
+    let required = |key| std::env::var(key).expect(key);
+    let install = PathBuf::from(required("PCX_CAMPAIGN_INSTALL"));
+    let image_path = required("PCX_CAMPAIGN_IMAGE");
+    let image = bounded(&image_path, 32 << 20);
+    let common = bounded(required("PCX_CAMPAIGN_COMMON"), 4 << 20);
+    let witness = PathBuf::from(required("PCX_UPGRADE_QUALIFICATION_DIR"));
+    let json = |name| -> serde_json::Value {
+        serde_json::from_slice(&bounded(witness.join(name), 512 << 10)).unwrap()
+    };
+    let manifest = json("manifest.json");
+    let receipt = json("runtime-status.json");
+    assert_eq!(receipt["complete"], true);
+    assert_eq!(receipt["isolation_verified"], true);
+    assert_eq!(receipt["stopped_verified"], true);
+    let raw = bounded(receipt["trace"].as_str().unwrap(), 4 << 20);
+    assert!(raw.len() <= 4 << 20);
+    let trace_hex: String = crate::neutral_player::sha256(&raw)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(receipt["trace_sha256"], trace_hex);
+    let prefix = format!(
+        "PCX_UPGRADEQ {} stock ",
+        manifest["nonce"].as_str().unwrap()
+    );
+    let rows: Vec<serde_json::Value> = std::str::from_utf8(&raw)
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("call Preload("))
+        .map(|line| {
+            let line = line
+                .trim()
+                .strip_prefix("call Preload( \"")
+                .unwrap()
+                .strip_suffix("\" )")
+                .unwrap()
+                .strip_prefix(&prefix)
+                .unwrap();
+            let mut tokens = line.split_whitespace();
+            let tag = tokens.next().unwrap();
+            let mut fields = serde_json::Map::new();
+            fields.insert("tag".into(), tag.into());
+            if tag == "action" {
+                assert_eq!(tokens.next(), Some("cancel"));
+            }
+            for token in tokens {
+                let (key, value) = token.split_once('=').unwrap();
+                assert!(fields.insert(key.into(), value.into()).is_none());
+            }
+            serde_json::Value::Object(fields)
+        })
+        .collect();
+    assert_eq!(Some(rows.len() as u64), receipt["records"].as_u64());
+    assert_eq!(rows.last().unwrap()["tag"], "end");
+    let row = |tag: &str, phase: &str, unit: Option<&str>| {
+        rows.iter()
+            .find(|r| r["tag"] == tag && r["phase"] == phase && unit.is_none_or(|i| r["i"] == i))
+            .unwrap()
+    };
+    let integer = |value: &serde_json::Value| value.as_str().unwrap().parse::<i32>().unwrap();
+    let real = |value: &serde_json::Value| {
+        let fields: Vec<_> = value
+            .as_str()
+            .unwrap()
+            .split(':')
+            .map(|s| s.parse::<i32>().unwrap())
+            .collect();
+        let [sign, exponent, mantissa] = fields.as_slice() else {
+            panic!("real bit witness")
+        };
+        if *sign == 0 {
+            assert_eq!((*exponent, *mantissa), (0, 0));
+            0.
+        } else {
+            assert!(
+                matches!(*sign, -1 | 1)
+                    && (-126..=127).contains(exponent)
+                    && (1 << 23..1 << 24).contains(mantissa)
+            );
+            f64::from(*sign) * f64::from(*mantissa) * 2_f64.powi(exponent - 23)
+        }
+    };
+    assert_eq!(rows[0]["expansion"], "0");
+    let map_path = manifest["arms"][0]["map"].as_str().unwrap();
+    let map_bytes = bounded(map_path, 64 << 20);
+    let origin = client_identity(&image, &image_path);
+    let image_hex: String = crate::neutral_player::sha256(&image)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(receipt["source_image_sha256"], image_hex);
+    let map_hex: String = crate::neutral_player::sha256(&map_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(manifest["arms"][0]["map_sha256"], map_hex);
+    let rules = ImageRules::read(&image, origin.clone()).unwrap();
+    let recipe = CampaignRecipe::pin(
+        &install,
+        pcx_assets::GameMode::default(),
+        rules,
+        &image,
+        Some(&common),
+        "VERSION_REIGN_OF_CHAOS",
+    )
+    .unwrap();
+    let reader = recipe
+        .open_map(
+            &map_bytes,
+            map_path,
+            pcx_mpq::checked::ReadBudget {
+                max_archive_bytes: 64 << 20,
+                max_archive_table_bytes: 8 << 20,
+                max_raw_packed_bytes: 8 << 20,
+                max_decoded_bytes: 8 << 20,
+            },
+        )
+        .unwrap();
+    let context = crate::scripts::AssetIdentity {
+        source: format!("{}::{}", install.display(), reader.selection.prefix),
+        edition: "VERSION_REIGN_OF_CHAOS".into(),
+        version: origin.version.clone(),
+    };
+    let tables = defaults(&reader.resolver, &context).unwrap();
+    let overlay = pcx_objects::editor::Overlay::default();
+    let catalog = pcx_sim::world::MetadataCatalog {
+        editor: tables.editor(),
+        units: &overlay,
+        items: &overlay,
+    };
+    let producer = integer(&row("unit", "before-request", Some("0"))["kind"]);
+    let target = integer(&row("unit", "upgrade-finish", Some("0"))["kind"]);
+    let original = catalog.resolve(producer.to_be_bytes()).unwrap();
+    let upgraded = catalog.resolve(target.to_be_bytes()).unwrap();
+    let costs = |definition: &pcx_sim::world::Definition| {
+        ["goldcost", "lumbercost"]
+            .map(|key| crate::player_unit_cost::amount(definition, key).unwrap())
+    };
+    let misc = reader.resolver.resolve("Units/MiscGame.txt").unwrap();
+    let profiles = [(
+        misc.provenance.source.origin.as_str(),
+        misc.bytes.as_slice(),
+    )];
+    let budget = RuleInputBudget {
+        image_bytes: 32 << 20,
+        profile_bytes: 8 << 20,
+        sections: 96,
+    };
+    let training =
+        crate::training_rules::Rules::read(&image, context.clone(), &profiles, budget).unwrap();
+    let price = training
+        .upgrade_costs(Some(costs(&original)), costs(&upgraded))
+        .unwrap();
+    let before = row("bank", "before-request-0", None);
+    let after = row("bank", "after-request-0", None);
+    assert_eq!(
+        price,
+        [
+            integer(&before["g0"]) - integer(&after["g0"]),
+            integer(&before["w0"]) - integer(&after["w0"])
+        ]
+    );
+    let progression = pcx_objects::editor::hero::Progression::read(&profiles, 8 << 20).unwrap();
+    let camera = reader.resolver.resolve("UI/MiscData.txt").unwrap();
+    let numeric =
+        crate::campaign_client::read(&image, origin, &camera.bytes, context.clone(), progression)
+            .unwrap()
+            .numeric;
+    let spent = row("bank", "after-request-1", None);
+    let returned = row("bank", "cancel-immediate", None);
+    let refund = price.map(|cost| {
+        training
+            .refund_for(
+                &numeric,
+                cost,
+                crate::training_rules::RefundKind::StructureUpgrade,
+            )
+            .unwrap()
+    });
+    assert_eq!(
+        refund,
+        [
+            integer(&returned["g0"]) - integer(&spent["g0"]),
+            integer(&returned["w0"]) - integer(&spent["w0"])
+        ]
+    );
+    for (definition, phase) in [(&original, "before-request"), (&upgraded, "upgrade-finish")] {
+        assert_eq!(
+            f64::from(crate::player_unit_cost::amount(definition, "HP").unwrap()),
+            real(&row("vital", phase, Some("0"))["max"])
+        );
+    }
+    let duration = crate::player_unit_cost::amount(&upgraded, "bldtm").unwrap();
+    let pause = real(&row("unit", "resume-immediate", Some("0"))["t"])
+        - real(&row("unit", "pause-immediate", Some("0"))["t"]);
+    let transition = f64::from(duration) + pause;
+    let old = rows
+        .iter()
+        .rfind(|r| {
+            r["tag"] == "unit"
+                && r["phase"] == "sample"
+                && r["i"] == "0"
+                && integer(&r["kind"]) == producer
+        })
+        .unwrap();
+    let new = rows
+        .iter()
+        .find(|r| {
+            r["tag"] == "unit"
+                && r["phase"] == "sample"
+                && r["i"] == "0"
+                && integer(&r["kind"]) == target
+        })
+        .unwrap();
+    assert!(real(&old["t"]) < transition && transition <= real(&new["t"]));
+    eprintln!(
+        "qualified context={context:?} balance_source={:?} price={price:?} refund={refund:?} duration={duration}",
+        tables.assets().get(SlkId::UnitBalance.path())
+    );
 }

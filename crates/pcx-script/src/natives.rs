@@ -33,7 +33,10 @@
 //!   Missing policy or unsupported input/output remains an explicit error;
 //!   host float formatting is never used.
 //!
-//! Other string natives (`SubString`, `StringCase`, `StringHash`) remain refused
+//! - `StringHash` hashes raw C-string bytes through the selected runtime policy.
+//!   It never performs trigger-table lookup or tag expansion.
+//!
+//! Other string natives (`SubString`, `StringCase`) remain refused
 //! with the call's name and span until their exact behavior is derived.
 
 use crate::ast::{NativeDecl, Param, TypeKind, TypeRef};
@@ -74,6 +77,8 @@ pub enum NativeImpl {
     RealToStringWidth,
     /// `StringLength`, NUL-terminated byte length after trigger-table lookup.
     StringLength,
+    /// `StringHash`, raw byte hashing through a source-qualified policy.
+    StringHash,
 }
 
 impl NativeImpl {
@@ -88,6 +93,7 @@ impl NativeImpl {
                 TypeKind::String,
             ),
             Self::StringLength => (&[TypeKind::String], TypeKind::Integer),
+            Self::StringHash => (&[TypeKind::String], TypeKind::Integer),
         };
         !declaration.ret.array
             && declaration.ret.kind == output
@@ -257,6 +263,7 @@ pub fn implemented(name: &str) -> Option<NativeImpl> {
         "R2S" => Some(NativeImpl::RealToString),
         "R2SW" => Some(NativeImpl::RealToStringWidth),
         "StringLength" => Some(NativeImpl::StringLength),
+        "StringHash" => Some(NativeImpl::StringHash),
         _ => None,
     }
 }

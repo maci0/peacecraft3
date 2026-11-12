@@ -48,6 +48,14 @@ pub fn native_trigstr_id(text: &str) -> Option<u32> {
 /// `Ok(None)` means that an admitted table has no entry with this id.
 pub type NativeStringLookup<'a> = dyn Fn(u32) -> Result<Option<String>, String> + 'a;
 
+/// C-string byte boundary, without Unicode conversion or trigger lookup.
+pub fn native_c_bytes(bytes: &[u8]) -> &[u8] {
+    &bytes[..bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len())]
+}
+
 /// The selected native map-string wrapper: C text and at most one WTS lookup.
 /// No UI dictionary lookup or tag substitution happens at this boundary.
 pub fn native_map_string<'a>(
