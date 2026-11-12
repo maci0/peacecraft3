@@ -186,3 +186,21 @@ fn tables_without_any_unitui_name_refuse_at_the_first_lookup() {
         "{error}"
     );
 }
+
+#[test]
+fn type_only_lookup_does_not_admit_undeclared_unit_id() {
+    let common = COMMON.replace(DECLARATION, "type group extends agent\ntype boolexpr extends agent\nnative GroupEnumUnitsOfType takes group g, string name, boolexpr filter returns nothing\n");
+    let mut h = host(&common)
+        .with_unit_id_lookup(tables(&[["zq01", "Quill"]]))
+        .unwrap();
+    assert!(h.unit_ids.is_some());
+    assert_eq!(h.unit_name_id("QUILL").unwrap(), Some(*b"zq01"));
+    assert_eq!(h.unit_name_id(" Quill").unwrap(), None);
+    assert!(h.native("UnitId", &[Value::Str("Quill".into())]).is_err());
+    let wrong = common.replace("group g, string name", "group g, integer name");
+    assert!(
+        host(&wrong)
+            .with_unit_id_lookup(tables(&[["zq01", "Quill"]]))
+            .is_err()
+    );
+}

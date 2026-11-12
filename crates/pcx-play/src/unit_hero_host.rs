@@ -514,6 +514,13 @@ impl ObjectHost {
     ) -> Option<Result<Arc<crate::unit_morph_rules::Rules>, String>> {
         Some(self.units.as_ref()?.heroes.as_ref()?.rules.morph.clone())
     }
+    pub(crate) fn admitted_autocast_rules(&self) -> Result<&crate::autocast_rules::Rules, String> {
+        self.heroes_admission()?
+            .rules
+            .autocast
+            .as_deref()
+            .map_err(Clone::clone)
+    }
     pub(crate) fn admitted_root_rules(
         &self,
     ) -> Option<Result<Arc<crate::unit_root_rules::Rules>, String>> {
@@ -1072,6 +1079,7 @@ impl ObjectHost {
         }
         let alias = ability.to_be_bytes();
         let adding = name == ADD_ABILITY;
+        let withdrawing_slow = !adding && self.bound_slow_alias(alias);
         let (first_rank, capacity, hero_component) = {
             let input = self
                 .heroes_admission()
@@ -1106,7 +1114,9 @@ impl ObjectHost {
             ));
         }
         if !adding {
-            if let Some(family) = self.unit_keyed_family(alias) {
+            if let Some(family) = self.unit_keyed_family(alias)
+                && !withdrawing_slow
+            {
                 return Err(self.hero_error(
                     name,
                     format!(
@@ -1114,17 +1124,26 @@ impl ObjectHost {
                     ),
                 ));
             }
-            if state.has_alias_overrides(alias) {
+            if state.has_alias_overrides(alias) && !withdrawing_slow {
                 return Err(self.hero_error(
                     name,
                     format!("cooldown or autocast state of {alias_text} is not withdrawn"),
                 ));
             }
         }
+        if withdrawing_slow {
+            self.withdraw_slow_ability(unit, alias);
+        }
         let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
             unreachable!()
         };
         let state = record.abilities.as_mut().expect("checked");
+        if withdrawing_slow {
+            state.cooldowns.retain(|(a, _, _)| *a != alias);
+            state.autocast_enabled.retain(|a| *a != alias);
+            state.autocast_disabled.retain(|a| *a != alias);
+            state.alarm_ignored.retain(|a| *a != alias);
+        }
         let outcome = if adding {
             state.grant(alias, first_rank, capacity)
         } else {
@@ -1776,6 +1795,28 @@ impl ObjectHost {
         rank: i32,
         kind: FieldKind,
     ) -> Result<String, String> {
+        self.hero_ability_level_cell_inner(alias, stem, rank, kind, false)
+    }
+
+    /// Source numeric policies may interpret authored empty markers; other callers remain strict.
+    pub(crate) fn hero_ability_level_cell_including_marker(
+        &self,
+        alias: [u8; 4],
+        stem: &str,
+        rank: i32,
+        kind: FieldKind,
+    ) -> Result<String, String> {
+        self.hero_ability_level_cell_inner(alias, stem, rank, kind, true)
+    }
+
+    fn hero_ability_level_cell_inner(
+        &self,
+        alias: [u8; 4],
+        stem: &str,
+        rank: i32,
+        kind: FieldKind,
+        include_marker: bool,
+    ) -> Result<String, String> {
         if rank < 1 {
             return Err("ability rank must be positive".into());
         }
@@ -1879,6 +1920,7 @@ impl ObjectHost {
             .level_cell(stem, rank as u32)
             .map_err(|e| e.to_string())?;
         match cell.typed(kind).map_err(|e| e.to_string())? {
+            defaults::Value::Marker(_) if include_marker => Ok(cell.text.trim().to_owned()),
             defaults::Value::Integer(_)
             | defaults::Value::Real(_)
             | defaults::Value::Text(_)
