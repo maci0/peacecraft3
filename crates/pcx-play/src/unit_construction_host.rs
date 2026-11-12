@@ -77,6 +77,10 @@ struct PreparedBuild {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Site {
     worker: Option<HandleId>,
+    assistants: Vec<Assistant>,
+    assistant_rate: f32,
+    assistant_period: [Option<f64>; 2],
+    assistant_next: [Option<f64>; 2],
     duration: f64,
     elapsed: f64,
     through: f64,
@@ -89,6 +93,15 @@ pub struct Site {
     damaged: bool,
     fault: Option<String>,
     linked_mine: Option<HandleId>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Assistant {
+    worker: HandleId,
+    ability: [u8; 4],
+    rank: i32,
+    rate: f32,
+    cost: [f32; 2],
 }
 impl Site {
     pub(super) fn owner_transfer_supported(&self) -> bool {
@@ -511,7 +524,13 @@ impl ObjectHost {
         let mut workers: Vec<HandleId> = self
             .executed_units()
             .filter(|(_, record)| record.position.is_some())
-            .filter_map(|(_, record)| record.construction.as_ref()?.worker)
+            .filter_map(|(_, record)| record.construction.as_ref())
+            .flat_map(|state| {
+                state
+                    .worker
+                    .into_iter()
+                    .chain(state.assistants.iter().map(|a| a.worker))
+            })
             .collect();
         workers.sort_unstable();
         workers
@@ -532,12 +551,13 @@ impl ObjectHost {
         }
         Ok(self.executed_units().find_map(|(site, record)| {
             let state = record.construction.as_ref()?;
-            (state.worker == Some(worker)).then_some(ConstructionOrder {
-                revision,
-                kind: i32::from_be_bytes(record.definition.rawcode),
-                position: record.position?,
-                site: Some(site),
-            })
+            (state.worker == Some(worker) || state.assistants.iter().any(|a| a.worker == worker))
+                .then_some(ConstructionOrder {
+                    revision,
+                    kind: i32::from_be_bytes(record.definition.rawcode),
+                    position: record.position?,
+                    site: Some(site),
+                })
         }))
     }
 
@@ -575,7 +595,10 @@ impl ObjectHost {
         if state.canceled
             || state.initial_pending
             || state.autonomous
-            || state.worker.is_some()
+            || state
+                .assistants
+                .iter()
+                .any(|assistant| assistant.worker == worker)
             || target.vitals.is_none_or(|vitals| vitals.life <= 0.)
         {
             return Ok(false);
@@ -590,12 +613,11 @@ impl ObjectHost {
         }
         self.require_human_construction_worker(worker)?;
         let kind = i32::from_be_bytes(target.definition.rawcode);
-        let builds = super::unit_training::profile(&record.definition, "Builds", "unitList")
-            .map_err(|why| self.construction_error(why))?;
-        if !builds
-            .split(',')
-            .any(|token| token.trim().as_bytes() == kind.to_be_bytes())
-        {
+        if state.worker.is_some() {
+            if self.construction_assistant(worker, site)?.is_none() {
+                return Ok(false);
+            }
+        } else if !self.construction_worker_builds(worker, kind)? {
             return Ok(false);
         }
         let owner = record.owner;
@@ -632,6 +654,130 @@ impl ObjectHost {
         self.unit_ordered(worker);
         self.clear_combat_target(worker);
         Ok(true)
+    }
+
+    fn construction_worker_builds(&self, worker: HandleId, kind: i32) -> Result<bool, Error> {
+        let definition = &self.executed_unit(worker)?.definition;
+        if !definition.fields.values().any(|field| field.metadata.as_ref().is_some_and(|metadata| {
+            matches!(&metadata.source, pcx_objects::editor::FieldSource::Profile { key, .. } if key.eq_ignore_ascii_case("Builds"))
+        })) {
+            return Ok(false);
+        }
+        let builds = super::unit_training::profile(definition, "Builds", "unitList")
+            .map_err(|why| self.construction_error(why))?;
+        Ok(builds
+            .split(',')
+            .any(|token| token.trim().as_bytes() == kind.to_be_bytes()))
+    }
+
+    fn construction_assistant(
+        &self,
+        worker: HandleId,
+        site: HandleId,
+    ) -> Result<Option<Assistant>, Error> {
+        let record = self.executed_unit(worker)?;
+        let Some(abilities) = &record.abilities else {
+            return Ok(None);
+        };
+        let class = self.construction_rules()?.repair_ability;
+        let mut found = None;
+        for (ability, rank) in abilities.levels() {
+            if self
+                .ability_data_text(ability, "code")
+                .map_err(|why| self.construction_error(why))?
+                .as_bytes()
+                != class
+            {
+                continue;
+            }
+            if found.is_some() {
+                return Err(
+                    self.construction_error("multiple repair abilities on construction assistant")
+                );
+            }
+            let number = |field| -> Result<f32, Error> {
+                let text = self
+                    .unit_ability_level_cell(
+                        ability,
+                        field,
+                        rank,
+                        pcx_objects::editor::FieldKind::Unreal,
+                    )
+                    .map_err(|why| self.construction_error(why))?;
+                let value: f32 = text
+                    .parse()
+                    .map_err(|_| self.construction_error(format!("repair {field} is not real")))?;
+                if !value.is_finite() || value < 0. {
+                    return Err(self.construction_error(format!(
+                        "repair {field} must be finite and nonnegative"
+                    )));
+                }
+                Ok(value)
+            };
+            let ratio = number("DataC")?;
+            let rate = number("DataD")?;
+            let target = self.executed_unit(site)?;
+            let cost = ["goldcost", "lumbercost"].map(|field| {
+                let amount = crate::player_unit_cost::amount(&target.definition, field)
+                    .map_err(|why| self.construction_error(why))?;
+                let amount = self
+                    .numeric
+                    .as_ref()
+                    .ok_or_else(|| self.construction_error("construction numeric policy"))?
+                    .integer(amount)
+                    .map_err(|why| self.construction_error(why.to_string()))?;
+                self.construction_math(BinOp::Mul, amount, ratio)
+            });
+            let [gold, lumber] = cost;
+            found = Some(Assistant {
+                worker,
+                ability,
+                rank,
+                rate,
+                cost: [gold?, lumber?],
+            });
+        }
+        Ok(found)
+    }
+
+    fn refresh_construction_assistants(&self, state: &mut Site, now: f64) -> Result<(), Error> {
+        let mut rate = 0.;
+        let mut cost = [0.; 2];
+        for assistant in &state.assistants {
+            rate = self.construction_math(BinOp::Add, rate, assistant.rate)?;
+            for (total, contribution) in cost.iter_mut().zip(assistant.cost) {
+                *total = self.construction_math(BinOp::Add, *total, contribution)?;
+            }
+        }
+        let speed = self.construction_math(BinOp::Add, 1., rate)?;
+        let duration = self.construction_math(BinOp::Div, state.duration as f32, speed)?;
+        for (i, cost) in cost.into_iter().enumerate() {
+            state.assistant_period[i] = if cost > 0. {
+                let quantum = self
+                    .numeric
+                    .as_ref()
+                    .ok_or_else(|| self.construction_error("construction numeric policy"))?
+                    .integer(self.construction_rules()?.assistant_debit)
+                    .map_err(|why| self.construction_error(why.to_string()))?;
+                let period = f64::from(self.construction_math(
+                    BinOp::Mul,
+                    self.construction_math(BinOp::Div, duration, cost)?,
+                    quantum,
+                )?);
+                if period <= 0. || now + period <= now {
+                    return Err(self
+                        .construction_error("assistant cost interval does not advance the clock"));
+                }
+                Some(period)
+            } else {
+                None
+            };
+            // Preserve an already scheduled debit; following periods use the new pooled contributions.
+            state.assistant_next[i] =
+                state.assistant_period[i].map(|_| state.assistant_next[i].unwrap_or(now));
+        }
+        state.assistant_rate = rate;
+        Ok(())
     }
 
     fn prepare_construction_request(
@@ -852,6 +998,7 @@ impl ObjectHost {
             .ok_or_else(|| self.construction_error("source repair order not admitted"))
     }
 
+    /// Completion and assistant debit boundaries share the mandatory world scheduler.
     pub(crate) fn next_construction_completion(&self, until: f64) -> Option<f64> {
         self.executed_units()
             .filter_map(|(_, record)| {
@@ -859,11 +1006,20 @@ impl ObjectHost {
                 let worker_ready = if site.autonomous {
                     true
                 } else {
-                    let worker = self.executed_unit(site.worker?).ok()?;
+                    let worker = self
+                        .executed_unit(
+                            site.worker
+                                .or_else(|| site.assistants.first().map(|a| a.worker))?,
+                        )
+                        .ok()?;
                     worker.owner == record.owner
                         && worker.paused_since.is_none()
                         && worker.combat.as_ref().is_none_or(|state| !state.dead)
                 };
+                let speed = f64::from(
+                    self.construction_math(BinOp::Add, 1., site.assistant_rate)
+                        .ok()?,
+                );
                 (!site.initial_pending
                     && !site.canceled
                     && record.vitals.is_some_and(|vitals| vitals.life > 0.)
@@ -871,7 +1027,16 @@ impl ObjectHost {
                     && record.paused_since.is_none()
                     && worker_ready)
                     .then(|| {
-                        (site.through + site.duration - site.elapsed)
+                        let span = (site.duration - site.elapsed) / speed;
+                        let mut complete = site.through + span;
+                        // Round outward so projection can consume even a sub-ULP remainder.
+                        if complete - site.through < span {
+                            complete = complete.next_up();
+                        }
+                        site.assistant_next
+                            .into_iter()
+                            .flatten()
+                            .fold(complete, f64::min)
                             .max(self.timer_game_time().expect("construction clock"))
                     })
             })
@@ -990,6 +1155,18 @@ impl ObjectHost {
             .len()
             .checked_add(requests.len())
             .ok_or_else(|| self.construction_error("construction work overflow"))?;
+        let count = sites.iter().try_fold(count, |count, site| {
+            count
+                .checked_add(
+                    self.executed_unit(*site)?
+                        .construction
+                        .as_ref()
+                        .expect("site")
+                        .assistants
+                        .len(),
+                )
+                .ok_or_else(|| self.construction_error("construction assistant work overflow"))
+        })?;
         *work = work
             .checked_sub(count)
             .ok_or_else(|| self.construction_error("construction work budget"))?;
@@ -1054,7 +1231,7 @@ impl ObjectHost {
             .unit_construction_order(unit)?
             .and_then(|order| order.site)
         {
-            self.set_construction_worker(site, None)?;
+            self.detach_construction_worker(site, unit)?;
         }
         Ok(())
     }
@@ -1068,15 +1245,32 @@ impl ObjectHost {
                 record
                     .construction
                     .as_ref()
-                    .filter(|state| state.worker == Some(unit))
+                    .filter(|state| {
+                        state.worker == Some(unit)
+                            || state.assistants.iter().any(|a| a.worker == unit)
+                    })
                     .map(|_| site)
             })
             .collect();
         for site in sites {
-            if let Entry::Unit { record } = self.inner.entry_mut(site)?
-                && let Some(state) = &mut record.construction
-            {
+            let mut state = self
+                .executed_unit(site)?
+                .construction
+                .clone()
+                .expect("retained site");
+            if state.worker == Some(unit) {
                 state.worker = None;
+            }
+            state
+                .assistants
+                .retain(|assistant| assistant.worker != unit);
+            self.refresh_construction_assistants(
+                &mut state,
+                self.timer_game_time()
+                    .ok_or_else(|| self.construction_error("construction clock"))?,
+            )?;
+            if let Entry::Unit { record } = self.inner.entry_mut(site)? {
+                record.construction = Some(state);
             }
         }
         let workers: Vec<_> = self
@@ -1097,6 +1291,10 @@ impl ObjectHost {
             && let Some(state) = &mut record.construction
         {
             state.worker = None;
+            state.assistants.clear();
+            state.assistant_rate = 0.;
+            state.assistant_next = [None; 2];
+            state.assistant_period = [None; 2];
         }
         Ok(())
     }
@@ -1304,6 +1502,10 @@ impl ObjectHost {
         let autonomous = request.as_ref().is_some_and(|request| request.autonomous);
         prepared.record.construction = Some(Site {
             worker: (!autonomous).then_some(worker),
+            assistants: Vec::new(),
+            assistant_rate: 0.,
+            assistant_period: [None; 2],
+            assistant_next: [None; 2],
             duration: f64::from(duration),
             elapsed: 0.,
             through: now,
@@ -1477,33 +1679,160 @@ impl ObjectHost {
                 && let Some(state) = &mut record.construction
             {
                 state.worker = None;
+                state.assistants.clear();
+                state.assistant_rate = 0.;
+                state.assistant_next = [None; 2];
+                state.assistant_period = [None; 2];
                 state.through = now;
             }
             return Ok(());
         }
         let owner = record.owner;
+        let paused = record.paused_since;
+        let kind = i32::from_be_bytes(record.definition.rawcode);
         let mut delta = now - state.through;
+        let resources = ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"];
+        let mut bank = [0; 2];
+        let quantum = self.construction_rules()?.assistant_debit;
+        if quantum <= 0 {
+            return Err(self.construction_error("assistant debit quantum must be positive"));
+        }
+        if !state.assistants.is_empty() {
+            for (i, resource) in resources.into_iter().enumerate() {
+                bank[i] = self
+                    .player_resource_value(owner, resource)?
+                    .ok_or_else(|| self.construction_error("assistant resources not admitted"))?;
+            }
+            let mut retained = Vec::new();
+            retained
+                .try_reserve(state.assistants.len())
+                .map_err(|_| self.construction_error("assistant capacity"))?;
+            for assistant in state.assistants.drain(..) {
+                let worker = self.executed_unit(assistant.worker)?;
+                let rank = worker
+                    .abilities
+                    .as_ref()
+                    .map_or(0, |abilities| abilities.level(assistant.ability));
+                if worker.owner != owner
+                    || worker.vitals.is_none_or(|v| v.life <= 0.)
+                    || worker.combat.as_ref().is_some_and(|c| c.dead)
+                    || rank == 0
+                    || assistant
+                        .cost
+                        .iter()
+                        .zip(bank)
+                        .any(|(cost, bank)| *cost > 0. && bank < quantum)
+                {
+                    continue;
+                }
+                if rank != assistant.rank || worker.paused_since.is_some() {
+                    return Err(self.construction_error(
+                        "paused or rank-changing construction assistants are not qualified",
+                    ));
+                }
+                retained.push(assistant);
+            }
+            state.assistants = retained;
+        }
         if let Some(worker) = state.worker {
             let worker = self.executed_unit(worker)?;
-            if worker.owner != owner {
-                // Site transfer keeps participation until ordinary work revalidates it.
+            if worker.owner != owner
+                || worker.vitals.is_none_or(|v| v.life <= 0.)
+                || worker.combat.as_ref().is_some_and(|c| c.dead)
+            {
                 state.worker = None;
                 delta = 0.;
-            } else if worker.vitals.is_none_or(|v| v.life <= 0.) {
-                return Err(
-                    self.construction_error("construction worker lifecycle requires cleanup")
-                );
-            }
-            if let Some(since) = worker.paused_since {
+            } else if let Some(since) = worker.paused_since {
                 delta = (since - state.through).clamp(0., delta);
             }
-        } else if !state.autonomous {
+        }
+        if state.worker.is_none() && !state.autonomous && !state.assistants.is_empty() {
+            // Reclamation uses canonical unit order; native simultaneous reclamation ordering remains open.
+            state.assistants.sort_by_key(|assistant| assistant.worker);
+            let mut replacement = None;
+            for (i, assistant) in state.assistants.iter().enumerate() {
+                if self.construction_worker_builds(assistant.worker, kind)? {
+                    replacement = Some(i);
+                    break;
+                }
+            }
+            if let Some(i) = replacement {
+                state.worker = Some(state.assistants.remove(i).worker);
+            } else {
+                state.assistants.clear();
+            }
+        }
+        self.refresh_construction_assistants(&mut state, now)?;
+        if state.worker.is_none() && !state.autonomous {
             delta = 0.;
         }
-        if let Some(since) = record.paused_since {
+        if let Some(since) = paused {
             delta = delta.min((since - state.through).max(0.));
         }
-        delta = delta.min(state.duration - state.elapsed);
+        let remaining = state.duration - state.elapsed;
+        let speed = f64::from(self.construction_math(BinOp::Add, 1., state.assistant_rate)?);
+        let mut assisted = delta.min(remaining / speed);
+        let mut funding_failed = false;
+        for (i, available) in bank
+            .map(|bank| (bank / quantum).max(0))
+            .into_iter()
+            .enumerate()
+        {
+            if let (Some(at), Some(period)) = (state.assistant_next[i], state.assistant_period[i]) {
+                let unfunded = at + period * f64::from(available);
+                if unfunded <= state.through + assisted {
+                    assisted = (unfunded - state.through).clamp(0., assisted);
+                    funding_failed = true;
+                }
+            }
+        }
+        let mut charges = [0; 2];
+        for (i, available) in bank
+            .map(|bank| (bank / quantum).max(0))
+            .into_iter()
+            .enumerate()
+        {
+            if let (Some(at), Some(period)) = (state.assistant_next[i], state.assistant_period[i])
+                && at <= state.through + assisted
+            {
+                let count = (((state.through + assisted - at) / period).floor() + 1.)
+                    .min(f64::from(available))
+                    .max(0.) as i32;
+                charges[i] = count
+                    .checked_mul(quantum)
+                    .ok_or_else(|| self.construction_error("assistant charge overflow"))?;
+                let next = at + period * f64::from(count);
+                if count > 0 && next <= at {
+                    return Err(self.construction_error("assistant charging clock did not advance"));
+                }
+                state.assistant_next[i] = Some(next);
+            }
+        }
+        let debit = if charges != [0, 0] {
+            Some(
+                self.prepare_training_debit(owner, charges[0], charges[1], 0, 0)?
+                    .ok_or_else(|| self.construction_error("assistant debit preflight changed"))?,
+            )
+        } else {
+            None
+        };
+        if funding_failed {
+            state.assistants.retain(|assistant| {
+                assistant
+                    .cost
+                    .iter()
+                    .enumerate()
+                    .all(|(i, cost)| *cost == 0. || bank[i] - charges[i] >= quantum)
+            });
+            self.refresh_construction_assistants(&mut state, now)?;
+        }
+        let following_speed =
+            f64::from(self.construction_math(BinOp::Add, 1., state.assistant_rate)?);
+        delta = if !funding_failed && delta >= remaining / speed {
+            remaining
+        } else {
+            (assisted * speed + (delta - assisted) * following_speed).min(remaining)
+        };
         state.damaged |= vitals.life < state.last_life;
         let fraction = self.construction_rules()?.initial_life_fraction;
         // shortcut: source-duration interpolation; qualify native polling before sub-tick parity claims.
@@ -1537,6 +1866,9 @@ impl ObjectHost {
             record.vitals.as_mut().expect("checked").life = life;
             record.construction = (!complete).then_some(state);
         }
+        if let Some(debit) = debit {
+            self.commit_training_debit(debit);
+        }
         if complete {
             #[cfg(feature = "test-fixtures")]
             if std::env::var_os("PCX_AI_PLACEMENT_TRACE").is_some() {
@@ -1553,7 +1885,33 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Change participation on an existing canonical site, preserving paid costs and elapsed work.
+    fn detach_construction_worker(
+        &mut self,
+        site: HandleId,
+        worker: HandleId,
+    ) -> Result<bool, Error> {
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| self.construction_error("construction clock"))?;
+        self.advance_unit_construction(site, now)?;
+        let Some(mut state) = self.executed_unit(site)?.construction.clone() else {
+            return Ok(false);
+        };
+        if state.worker == Some(worker) {
+            state.worker = None;
+        } else {
+            state
+                .assistants
+                .retain(|assistant| assistant.worker != worker);
+        }
+        self.refresh_construction_assistants(&mut state, now)?;
+        if let Entry::Unit { record } = self.inner.entry_mut(site)? {
+            record.construction = Some(state);
+        }
+        Ok(true)
+    }
+
+    /// Enroll a primary or assistant on an existing paid site; None interrupts the primary.
     pub fn set_construction_worker(
         &mut self,
         site: HandleId,
@@ -1571,37 +1929,69 @@ impl ObjectHost {
             || state.autonomous
             || target.vitals.is_none_or(|vitals| vitals.life <= 0.)
             || target.combat.as_ref().is_some_and(|combat| combat.dead)
-            || worker.is_some_and(|worker| state.worker.is_some_and(|current| current != worker))
         {
             return Ok(false);
         }
+        let Some(worker) = worker else {
+            return if let Some(worker) = state.worker {
+                self.detach_construction_worker(site, worker)
+            } else {
+                Ok(true)
+            };
+        };
         let owner = target.owner;
-        if let Some(worker) = worker {
-            let record = self.executed_unit(worker)?;
-            if record.owner != owner
-                || record.construction.is_some()
-                || record.vitals.is_none_or(|v| v.life <= 0.)
-            {
-                return Ok(false);
-            }
-            if self
+        let record = self.executed_unit(worker)?;
+        if record.owner != owner
+            || record.construction.is_some()
+            || record.vitals.is_none_or(|v| v.life <= 0.)
+            || record.combat.as_ref().is_some_and(|combat| combat.dead)
+            || self
                 .unit_construction_order(worker)?
                 .is_some_and(|order| order.site != Some(site))
-            {
-                return Ok(false);
-            }
+        {
+            return Ok(false);
         }
+        if state.worker == Some(worker)
+            || state
+                .assistants
+                .iter()
+                .any(|assistant| assistant.worker == worker)
+        {
+            return Ok(true);
+        }
+        let assistant = if state.worker.is_some() {
+            let Some(assistant) = self.construction_assistant(worker, site)? else {
+                return Ok(false);
+            };
+            Some(assistant)
+        } else {
+            None
+        };
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.construction_error("construction clock"))?;
         self.advance_unit_construction(site, now)?;
-        if let Entry::Unit { record } = self.inner.entry_mut(site)?
-            && let Some(state) = &mut record.construction
-        {
-            state.worker = worker;
-            return Ok(true);
+        let Some(mut state) = self.executed_unit(site)?.construction.clone() else {
+            return Ok(false);
+        };
+        if state.worker.is_some() {
+            let Some(assistant) = assistant else {
+                return Ok(false);
+            };
+            state
+                .assistants
+                .try_reserve(1)
+                .map_err(|_| self.construction_error("assistant capacity"))?;
+            state.assistants.push(assistant);
+        } else {
+            state.worker = Some(worker);
         }
-        Ok(false)
+        self.refresh_construction_assistants(&mut state, now)?;
+        if let Entry::Unit { record } = self.inner.entry_mut(site)? {
+            record.construction = Some(state);
+        }
+        self.advance_unit_construction(site, now)?;
+        Ok(true)
     }
 
     pub fn cancel_unit_construction(&mut self, site: HandleId) -> Result<bool, Error> {
@@ -1654,6 +2044,10 @@ impl ObjectHost {
             record.vitals.as_mut().expect("checked").life = 0.;
             let state = record.construction.as_mut().expect("checked");
             state.worker = None;
+            state.assistants.clear();
+            state.assistant_rate = 0.;
+            state.assistant_next = [None; 2];
+            state.assistant_period = [None; 2];
             state.canceled = true;
         }
         self.commit_training_debit(credit);

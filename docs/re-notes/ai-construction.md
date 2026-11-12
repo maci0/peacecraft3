@@ -22,6 +22,12 @@ the selected Legacy image; local decompiler output stays under `.scratch/`.
 Consequence: with no unit of the player that builds the kind and no idle unit that upgrades
 into it, `SetProduce` returns false and orders nothing.
 
+The upgrade fallback uses the selected map's gameplay namespace for costs and
+build time. Its qualified completion/loss/transfer policy is recorded in
+[player production queues](player-production-queues.md#stock-structure-upgrade-interruption-qualification).
+Upgrade death/removal do not share ordinary training refunds; transfer keeps
+the paid upgrade running under the new owner.
+
 ### Placement search, partial decode
 
 These are native-code observations for the fingerprinted executable, not a recreation or a

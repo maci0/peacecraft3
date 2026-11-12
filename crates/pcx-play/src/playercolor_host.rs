@@ -1005,6 +1005,7 @@ pub use objects::{
 };
 pub use objects::{ItemCommand, ItemDrop};
 pub use objects::{OrderForm, QueueBudget, QueueOutcome, QueueRefusal, SmartRefusal, SmartTarget};
+pub use objects::{ScriptHashBinding, ScriptHashPolicy};
 pub use objects::{UseCheck, UseCommit, UseGrant};
 
 pub use objects::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLeaderboard};

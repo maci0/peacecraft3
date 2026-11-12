@@ -1821,12 +1821,49 @@ impl ObjectHost {
             return Err("ability rank must be positive".into());
         }
         let input = self.heroes_admission()?;
-        let (base, mods) = input.base(alias)?;
+        Self::ranked_ability_cell(
+            &input.tables,
+            &input.overlay,
+            alias,
+            stem,
+            rank,
+            kind,
+            include_marker,
+        )
+    }
+
+    pub(crate) fn unit_ability_level_cell(
+        &self,
+        alias: [u8; 4],
+        stem: &str,
+        rank: i32,
+        kind: FieldKind,
+    ) -> Result<String, String> {
+        if let Some((tables, overlay)) = self.unit_ability_source() {
+            Self::ranked_ability_cell(tables, overlay, alias, stem, rank, kind, false)
+        } else {
+            self.hero_ability_level_cell(alias, stem, rank, kind)
+        }
+    }
+
+    fn ranked_ability_cell(
+        tables: &defaults::DefaultTables,
+        overlay: &Overlay,
+        alias: [u8; 4],
+        stem: &str,
+        rank: i32,
+        kind: FieldKind,
+        include_marker: bool,
+    ) -> Result<String, String> {
+        if rank < 1 {
+            return Err("ability rank must be positive".into());
+        }
+        let (base, mods) = crate::ability_profile::base(tables, overlay, alias)?;
         for entry in mods.iter().rev() {
-            let field =
-                input.tables.editor().field(entry.field).ok_or_else(|| {
-                    format!("{alias:?}: unknown ability override {:?}", entry.field)
-                })?;
+            let field = tables
+                .editor()
+                .field(entry.field)
+                .ok_or_else(|| format!("{alias:?}: unknown ability override {:?}", entry.field))?;
             let FieldSource::Column {
                 slk: SlkId::AbilityData,
                 column,
@@ -1834,8 +1871,7 @@ impl ObjectHost {
             else {
                 continue;
             };
-            let metadata = input
-                .tables
+            let metadata = tables
                 .metadata(field.fourcc)
                 .ok_or("ability override metadata missing")?;
             let (mapped, data) = if column == "Data" {
@@ -1912,8 +1948,7 @@ impl ObjectHost {
                 _ => return Err(format!("{alias:?}: nonfinite {stem} override")),
             });
         }
-        let object = input
-            .tables
+        let object = tables
             .object(Family::Ability, base)
             .map_err(|e| e.to_string())?;
         let cell = object

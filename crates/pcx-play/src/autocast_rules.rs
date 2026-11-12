@@ -58,7 +58,7 @@ pub struct Rules {
     pub slow: Option<slow::Rules>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
-const CLASS_NAMES: [&str; 18] = [
+const CLASS_NAMES: [&str; 20] = [
     "CAbilitySlow",
     "CAbilityInnerFire",
     "CAbilityHeal",
@@ -77,6 +77,8 @@ const CLASS_NAMES: [&str; 18] = [
     "CAbilityCurse",
     "CAbilityManaBattery",
     "CAbilityNeutralHeal",
+    "CAbilitySpellSteal",
+    "CAbilityFlamingAttack",
 ];
 const SCANS_PER_CLASS: usize = 3;
 /// One data scan for the vtables that share an ON handler.
@@ -126,11 +128,17 @@ impl Rules {
         let slow = slow::Rules::read(&mut read)?;
         let mana_minimum = Self::mana_minimum(&mut read)?;
         let clock = clock::Rules::read(&mut read)?;
+        let code: Vec<_> = pe.code_ranges().collect();
+        // Executable operands can coincidentally contain a getter address; vtables are data.
+        let data = pe
+            .initialized_ranges()
+            .filter(|(va, _)| !code.iter().any(|(start, _)| start == va))
+            .collect();
         let mut rules = Self::decode(
             origin,
             sha256(image),
-            pe.code_ranges().collect(),
-            pe.initialized_ranges().collect(),
+            code,
+            data,
             // Each class scans the sections three times (name, getter, name slot); sections do not overlap.
             (CLASS_NAMES.len() * SCANS_PER_CLASS + FAMILY_SCANS) * image.len(),
             read,

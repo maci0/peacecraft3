@@ -2278,6 +2278,28 @@ impl ObjectHost {
         Ok(training.queue_slots)
     }
 
+    #[cfg(test)]
+    pub(crate) fn training_health_fixture(
+        &mut self,
+        health: crate::player_handicap::HealthRules,
+        numeric: crate::script_numeric::NumericPolicy,
+    ) {
+        let image = *numeric.image_sha256();
+        assert_eq!(health.image_sha256(), &image);
+        let players = self.players.as_mut().expect("fixture players");
+        let resources = &mut players.resources.as_mut().expect("fixture resources").rules;
+        resources.image_sha256 = image;
+        let training = resources.training.as_mut().expect("fixture training");
+        training.image_sha256 = image;
+        training
+            .ai_production
+            .as_mut()
+            .expect("fixture production")
+            .image_sha256 = image;
+        players.health_handicap = Some(health);
+        self.numeric = Some(numeric);
+    }
+
     pub(super) fn training_refund(
         &self,
         cost: i32,

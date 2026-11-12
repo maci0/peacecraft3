@@ -240,6 +240,9 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
         let lookup = |id| resolve_native_table_string(self.table, self.label, id);
         self.inner.native_with_strings(name, args, &lookup)
     }
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.inner.string_hash(bytes)
+    }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         resolve_native_table_string(self.table, self.label, id)
     }
@@ -302,6 +305,9 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         let lookup = |id| self.context.native_table_string(id);
         self.inner.native_with_strings(name, args, &lookup)
+    }
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.inner.string_hash(bytes)
     }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.context.native_table_string(id)

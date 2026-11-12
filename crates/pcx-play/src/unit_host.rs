@@ -1804,14 +1804,12 @@ impl ObjectHost {
                 Failure::UnitState("incomplete construction ownership transfer is not qualified"),
             ));
         }
-        // Producer-transfer cleanup: a transferred producer keeps no training
-        // queue. Refund remaining entries per-entry with the admitted rate and
-        // release active food, without training events, before the owner
-        // changes. Pending construction reservations are released the same way.
+        // Ordinary queues refund on transfer; a structure upgrade continues
+        // with its paid price and deadline under the new owner.
         // Errors propagate directly so the `fail` borrow ends at the color
         // block above and does not span these mutable calls.
-        if self.producer_has_training(*unit) {
-            let cleanup = self.prepare_training_death(*unit)?;
+        if self.producer_has_training(*unit) && !self.producer_is_upgrading(*unit) {
+            let cleanup = self.prepare_training_removal(*unit)?;
             if let Some(cleanup) = cleanup {
                 self.commit_training_death(cleanup);
             }
@@ -1876,6 +1874,7 @@ impl ObjectHost {
             }
             _ => unreachable!("validated unit identity"),
         }
+        self.transfer_structure_upgrade(*unit, *player);
         self.record_town_registration(*unit);
         self.publish_unit_guard(*unit, guard);
         Ok(Value::Null)
@@ -3543,7 +3542,7 @@ impl ObjectHost {
         self.prepare_morph_placement(unit, &prepared.definition)?;
         Ok(prepared)
     }
-    fn prepare_morph_placement(
+    pub(super) fn prepare_morph_placement(
         &mut self,
         unit: HandleId,
         definition: &Definition,

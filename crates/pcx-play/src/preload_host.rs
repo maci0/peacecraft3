@@ -249,6 +249,9 @@ impl MapStartupHost {
 }
 struct Shared<'a>(&'a mut MapStartupHost);
 impl Host for Shared<'_> {
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.0.string_hash(bytes)
+    }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.0.native_table_string(id)
     }
@@ -283,6 +286,33 @@ impl Host for Shared<'_> {
 mod native_string_tests {
     use super::*;
     const WTS: &[u8] = b"STRING 7\r\n{\r\nTRIGSTR_23\r\n}\r\nSTRING 23\r\n{\r\nother\r\n}\r\n";
+    #[test]
+    fn string_hash_preload_and_startup_forward_raw_and_refuse_unlent_world() {
+        let policy = crate::playercolor_host::ScriptHashPolicy::synthetic_fixture();
+        let expected = policy.hash(b"TRIGSTR_7").unwrap();
+        let world = crate::neutral_player::native_hash_world_fixture(None, Some(policy));
+        let program = world.context().scripts.shared_program();
+        let mut startup = MapStartupHost::timer_session_fixture(world);
+        assert_eq!(startup.string_hash(b"TRIGSTR_7").unwrap(), expected);
+        let mut vm = Vm::new(&program, Shared(&mut startup));
+        assert_eq!(
+            vm.call("hash", &[Value::Str("TRIGSTR_7".into())]).unwrap(),
+            Value::Int(expected)
+        );
+        drop(vm);
+        let world = startup.inner.take().unwrap();
+        assert!(
+            Shared(&mut startup)
+                .string_hash(b"raw")
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        startup.inner = Some(world);
+        assert_eq!(
+            Shared(&mut startup).string_hash(b"TRIGSTR_7").unwrap(),
+            expected
+        );
+    }
     #[test]
     fn native_string_preload_shared_uses_selected_table_and_retains_callback_guard() {
         let world = crate::neutral_player::native_string_world_fixture(Some(WTS));

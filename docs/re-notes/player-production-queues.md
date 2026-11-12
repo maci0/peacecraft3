@@ -222,7 +222,8 @@ subtract the original unit type's corresponding fields. Target-price mode skips
 original-cost metadata reads, matching the conditional native getter path.
 The queue now derives
 that amount for each chosen producer before spending, retains the paid amount
-in the canonical job, and uses it for cancellation and producer-death refunds.
+in the canonical job, and uses it for explicit cancellation refunds. Stock upgrade loss and transfer
+follow the separately qualified policy below.
 The target's authored build time remains the job duration; a zero cost does not
 make a job instantaneous. Ordinary training and research retain their own cost
 and refund paths.
@@ -265,3 +266,82 @@ explicit original-image/profile test. Native and WASM library builds and strict
 compile checks passed with workspace warnings denied. The final frozen-source
 binary reran all 86 lifecycle and five rule tests under a private offscreen
 display with null audio; source hashes matched before and after the run.
+
+## Stock structure-upgrade interruption qualification
+
+A separate bounded original-client diagnostic qualifies the stock Human hall
+upgrade under the selected 1.29.2.9231 image above, Wine/software rendering and
+explicit RoC. It retains the shipped Booty Bay terrain and main initialization,
+disables melee AI/victory, pauses other initial workers and runs five controlled
+producers. This is a modified diagnostic, not unchanged-map parity or an
+encountered campaign frontier.
+
+The local receipt is
+`/tmp/pc3-sol61-05-upgrade-qualification/runtime-status.json`; the immutable raw
+trace SHA-256 is
+`6b4f2843dfaf253779b48998eb6f6f18216aeabb58083e382f2d32b75da14500`.
+Its 2,039 strict records include five accepted upgrades, ten lifecycle events,
+bit-exact real encodings and one complete terminal inventory. The collector
+checks nonce, field shapes, sample/event counts, bit controls, absence of
+unexpected damage and a completed control. The client was stopped; independent
+harness status reports exited, not running and PID zero. Container-private Xvfb
+and a Pulse null sink were verified; no host display/audio device was mounted.
+The generated map, original bytes and capture remain local.
+
+Source selection matters. A generic editor query opens expansion/base tables
+and does not select the map's gameplay data. The production regression
+`campaign_inputs::local_original_upgrade_catalog_and_policy_match_the_roc_runtime_witness`
+opens the exact diagnostic map through `CampaignRecipe`, calls the existing
+production `defaults` loader and resolves its `MetadataCatalog`. The actual
+map-header selection is `Melee_V0`. Its source prices, upgrade mode and refund
+rate reproduce the observed debits/refund; its authored duration plus the
+observed pause interval lies in the adjacent old/new sample bracket. Matching
+`Custom_V0` cells alone were not selection evidence. No production cost/time
+constant was added, and no production edition-loader defect was found.
+
+| Operation | Native observation |
+| --- | --- |
+| Pending upgrade and pause | The same handle retains the original type and pools until completion; pausing suspends progress. |
+| Complete a damaged producer | Life percentage is retained: the control's 750/1500 becomes 1000/2000, rather than healing fully. |
+| Explicit numeric cancellation | The independently inspected immediate operands at `0xb481b9` and `0xb482b8` identify the accepted cancellation command. One upgrade-cancel event fires, the original type/pools remain, and the source upgrade refund is credited. The public `OrderId("cancel")` still returns zero. |
+| Kill an upgrading producer | No refund or upgrade-cancel/finish event. Its death callback observes the target type and target maximum life, with current life zero. |
+| Remove an upgrading producer | No refund or upgrade/death callback. The type still reads as the original immediately after removal and becomes invalid on a later sample. No upgrade completes. |
+| Transfer an upgrading producer | Neither bank receives a refund. The same paid job continues and finishes under its new owner. |
+
+The recreation now prepares the target definition, model, abilities, pools,
+decay, collision placement and checked revision before committing a replacement.
+Completion preserves the current life percentage, using the admitted life
+rounder when the maximum changes. Unchanged maxima retain current life exactly.
+Mana transitions outside the observed zero-pool class refuse before debit.
+Missing life-rounding policy also refuses a damaged, changed-maximum transition.
+Cancellation keeps the original type/pools. Removal discards upgrade work
+without a refund or replacement. Transfer retains the original paid cost and
+deadline and changes the canonical job owner only when the unit owner commits.
+
+Upgrade death prepares the target's actual death/explosion animation and decay
+before any kill cleanup, commits its prepared inactive placement and target
+form, then uses canonical death delivery. Existing XP/reincarnation planning is
+retained only for structure-to-structure, nonhero replacements with equal
+ability/level, flight domain and experience-level classes; other classes refuse before cleanup.
+This does not fix the canonical kill path's preexisting unrelated late failures.
+Ordinary training and research keep their independent cleanup/refund policy.
+Recipient cancellation uses the retained paid price and the current owner; the
+native cancellation method obtains that owner at `0xb63b3e`. A separate native
+recipient-cancel run has not been performed.
+
+Synthetic regressions exercise nonstock maxima and source rounding, pause,
+recipient completion/cancellation, removal, event-visible target death pools,
+repeated cleanup and malformed target pool/placement refusal before mutation.
+These tests do not prove every native tick, rounding boundary, renderer or
+platform. The original finish event's exact subsecond scheduling remains a
+separate clock qualification; the source-duration check uses adjacent samples.
+Enabled `UpgradeDamageRefundPenalty`, negative price credits, upgrade events
+in the recreation, upgraded/researched pool bonuses and other changed death
+award/ability classes remain unfinished. The enabled penalty and negative price
+classes retain their explicit admission errors.
+
+Mixed training/structure-upgrade queues also refuse before spending; their native
+admission behavior has not been qualified.
+
+Removed-handle `GetUnitTypeId` still returns a strict host error; the native
+delayed zero result is recorded above and is not claimed as implemented.
