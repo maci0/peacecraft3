@@ -35,6 +35,11 @@ set t=CreateTrigger()
 call TriggerRegisterPlayerUnitEvent(t,Player(4),EVENT_PLAYER_UNIT_ISSUED_ORDER,null)
 call TriggerAddAction(t,function observe)
 endfunction
+function listen_player takes nothing returns nothing
+local trigger t=CreateTrigger()
+call TriggerRegisterPlayerUnitEvent(t,Player(4),EVENT_PLAYER_UNIT_ISSUED_ORDER,null)
+call TriggerAddAction(t,function observe)
+endfunction
 function off takes nothing returns boolean
 return IssueImmediateOrder(U,"delta")
 endfunction
@@ -92,6 +97,19 @@ fn open_setup(
     profile: &[u8],
     enable: Option<crate::autocast_rules::Enable>,
 ) -> (Vm, HandleId) {
+    let mut vm = open_setup_vm(default, abilities, profile, enable);
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("U") else {
+        panic!("unit")
+    };
+    (vm, unit)
+}
+fn open_setup_vm(
+    default: &str,
+    abilities: &str,
+    profile: &[u8],
+    enable: Option<crate::autocast_rules::Enable>,
+) -> Vm {
     let mut fields = hero_fields("STR");
     fields.retain(|(id, _)| id != b"A008");
     fields.push(column(
@@ -186,12 +204,7 @@ fn open_setup(
     let mut h = h;
     h.admit_unit_activity(activity, 65536).unwrap();
     let context = Arc::clone(h.player_context().unwrap());
-    let mut vm = context.scripts.clone().owned_vm(h);
-    vm.call("main", &[]).unwrap();
-    let Value::Handle(unit) = vm.global("U") else {
-        panic!("unit")
-    };
-    (vm, unit)
+    context.scripts.clone().owned_vm(h)
 }
 #[test]
 fn source_default_off_and_missing_ability_are_strict_non_mutating_false() {
@@ -394,10 +407,9 @@ fn changed_state_cache_refusal_is_atomic_and_malformed_defaults_are_not_false() 
     assert_eq!(h.executed_unit(u).unwrap(), &before);
     assert_eq!(h.inner().handles(), handles);
     assert!(memory.bytes.lock().unwrap().is_none());
-    let (mut vm, u) = open("bad", true);
-    let before = vm.host().inner.executed_unit(u).unwrap().clone();
-    assert!(vm.call("off", &[]).is_err());
-    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+    let mut vm = open_setup_vm("bad", "X002", PROFILE, enable());
+    assert!(vm.call("main", &[]).is_err());
+    assert_eq!(vm.host().inner.executed_units().count(), 0);
 }
 
 #[test]
@@ -455,6 +467,89 @@ fn advance(vm: &mut Vm, now: f64) -> Result<usize, String> {
     assert!(h.next_timer_expiry(now, &mut 1000).unwrap().is_none());
     h.advance_unit_activity(now, &mut 65536)
         .map_err(|e| format!("{e:?}"))
+}
+#[test]
+fn default_activation_uses_class_code_and_due_boundary_without_an_order() {
+    let mut vm = open_setup_vm("X001", "X002", PROFILE, enable());
+    vm.call("listen_player", &[]).unwrap();
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(u) = vm.global("U") else {
+        panic!("unit")
+    };
+    assert_eq!(vm.global("Seen"), Value::Int(0));
+    let start = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(state(&mut vm, u, b"X002"), Some(true));
+    assert!(!modified(&mut vm, u));
+    vm.call("listen", &[]).unwrap();
+    let due = start + f64::from(FIRST_TICK);
+    advance(&mut vm, due.next_down()).unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(vm.global("Seen"), Value::Int(0));
+    assert_eq!(current(&mut vm, u), 0);
+    let before = vm.host().inner.executed_unit(u).unwrap().clone();
+    let random = vm.host().inner.script_random_state().cloned();
+    let error = advance(&mut vm, due).unwrap_err();
+    assert!(error.contains("automatic cast of X002"), "{error}");
+    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+    assert_eq!(vm.host().inner.script_random_state().cloned(), random);
+    assert!(
+        advance(&mut vm, due)
+            .unwrap_err()
+            .contains("automatic cast of X002")
+    );
+    assert_eq!(vm.host().inner.executed_unit(u).unwrap(), &before);
+}
+#[test]
+fn default_activation_delay_starts_at_creation_in_an_advanced_session() {
+    let mut vm = open_setup_vm("X001", "X002", PROFILE, enable());
+    let created_at = vm.host().inner.timer_game_time().unwrap() + 7.;
+    advance(&mut vm, created_at).unwrap();
+    vm.call("main", &[]).unwrap();
+    let due = created_at + f64::from(FIRST_TICK);
+    advance(&mut vm, due.next_down()).unwrap();
+    assert!(
+        advance(&mut vm, due)
+            .unwrap_err()
+            .contains("automatic cast of X002")
+    );
+}
+#[test]
+fn default_activation_off_and_removal_disarm_and_reenable_restarts_delay() {
+    let (mut vm, _) = open("X001", true);
+    let start = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, start + 2.).unwrap();
+    assert_eq!(vm.call("on", &[]).unwrap(), Value::Bool(true));
+    advance(&mut vm, start + 2. + f64::from(FIRST_TICK) / 2.).unwrap();
+    assert!(advance(&mut vm, start + 2. + f64::from(FIRST_TICK)).is_err());
+
+    let (mut vm, u) = open("X001", true);
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(u)])
+        .unwrap();
+    advance(&mut vm, start + 10.).unwrap();
+}
+#[test]
+fn undecoded_or_invalid_default_activation_refuses_before_unit_allocation() {
+    for rule in [
+        None,
+        Some(crate::autocast_rules::Enable {
+            group: GROUP,
+            first_tick: f32::NAN,
+        }),
+    ] {
+        let mut vm = open_setup_vm("X001", "X002", PROFILE, rule);
+        assert!(vm.call("main", &[]).is_err());
+        assert_eq!(vm.host().inner.executed_units().count(), 0);
+        let start = vm.host().inner.timer_game_time().unwrap();
+        advance(&mut vm, start + 10.).unwrap();
+    }
+    for (default, present) in [("X001", false), ("X002", true)] {
+        let (mut vm, _) = open(default, present);
+        let start = vm.host().inner.timer_game_time().unwrap();
+        advance(&mut vm, start + 10.).unwrap();
+    }
 }
 fn modified(vm: &mut Vm, u: HandleId) -> bool {
     let record = vm.host().inner.executed_unit(u).unwrap();
