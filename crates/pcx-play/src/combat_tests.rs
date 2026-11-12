@@ -2090,6 +2090,120 @@ fn traced_actor(h: &ObjectHost, unit: HandleId) -> CombatActor {
     h.combat_actor(unit).unwrap()
 }
 
+fn illusion_duel(dealt: f32, taken: f32, missile: bool) -> (Vm, HandleId, HandleId) {
+    let (mut vm, [caster, _, _, _]) = holy_open("", "", "AHwe");
+    holy_learn(&mut vm, i32::from_be_bytes(*b"AHwe"));
+    let attacked = vm.global("EVENT_UNIT_ATTACKED");
+    let h = &mut vm.host().inner;
+    h.test_admit_mirror();
+    let source = h
+        .test_mirror_image_factory(caster, *b"AHwe", [32., 48.], [dealt, 1.], true)
+        .unwrap()
+        .unwrap();
+    let target = h
+        .test_mirror_image_factory(caster, *b"AHwe", [64., 48.], [1., taken], true)
+        .unwrap()
+        .unwrap();
+    if missile {
+        h.test_weapon_missile_speed(source, crate::playercolor_host::MissileSpeed::Travel(256.));
+    }
+    h.enable_combat_trace(16);
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    h.native(
+        "TriggerRegisterUnitEvent",
+        &[trigger, Value::Handle(target), attacked],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(source),
+                Value::Str("beta".into()),
+                Value::Handle(target)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    (vm, source, target)
+}
+
+#[test]
+fn ordered_illusion_weapons_scale_each_hit_once_without_extra_random_draws() {
+    for missile in [false, true] {
+        let (mut control, _, control_target) = illusion_duel(1., 1., missile);
+        let initial = life(&mut control, control_target);
+        step(&mut control, 1.);
+        let CombatTraceEvent::Damage {
+            damage: baseline, ..
+        } = control.host().inner.combat_trace().unwrap().events()[1]
+        else {
+            panic!("control impact missing");
+        };
+        assert!(baseline > 0.);
+        let baseline_random = random_snapshot(&mut control);
+        for (dealt, taken) in [(0.375, 1.), (1., 2.25), (0.375, 2.25), (0., 2.25)] {
+            let (mut vm, source, target) = illusion_duel(dealt, taken, missile);
+            advance_until_swing(&mut vm, source);
+            assert_eq!(damage_events(&mut vm), 0);
+            let h = &mut vm.host().inner;
+            let event = h.take_fired_event().expect("attacked precedes damage");
+            h.begin_fired_event(&event).unwrap().unwrap();
+            assert_eq!(
+                h.native("GetTriggerUnit", &[]).unwrap(),
+                Value::Handle(target)
+            );
+            assert_eq!(h.native("GetAttacker", &[]).unwrap(), Value::Handle(source));
+            h.finish_fired_event();
+            assert!(h.take_fired_event().is_none());
+            step(&mut vm, 1.);
+            let events = vm.host().inner.combat_trace().unwrap().events();
+            assert_eq!(events.len(), 2, "one order then one impact: {events:?}");
+            assert!(matches!(events[0], CombatTraceEvent::Ordered { .. }));
+            let CombatTraceEvent::Damage {
+                source: s,
+                target: t,
+                damage,
+                life_before,
+                ..
+            } = events[1]
+            else {
+                panic!("expected damage: {events:?}");
+            };
+            assert_eq!((s.unit, t.unit), (source, target));
+            assert_eq!(life_before, Some(initial));
+            assert!((damage - baseline * dealt * taken).abs() < 0.0001);
+            assert!((life(&mut vm, target) - (initial - damage)).abs() < 0.0001);
+            assert_eq!(random_snapshot(&mut vm), baseline_random);
+            step(&mut vm, 1.25);
+            assert_eq!(damage_events(&mut vm), 1, "settled swing must not replay");
+        }
+    }
+}
+
+#[test]
+fn refused_illusion_melee_scaling_preserves_pending_swing_life_and_rng() {
+    let (mut vm, source, target) = illusion_duel(0.375, 2.25, false);
+    let initial = life(&mut vm, target);
+    advance_until_swing(&mut vm, source);
+    vm.host().inner.test_illusion_dealt_factor(source, f32::NAN);
+    let swing = vm.host().inner.test_swing(source);
+    let before = random_snapshot(&mut vm);
+    let (_, _, error) = advance_until_melee_refusal(&mut vm);
+    assert!(error.contains("Mirror Image"), "{error}");
+    assert_eq!(random_snapshot(&mut vm), before);
+    assert_eq!(vm.host().inner.test_swing(source), swing);
+    assert_eq!(life(&mut vm, target), initial);
+    assert_eq!(damage_events(&mut vm), 0);
+    let (_, _, retry) = retry_melee_refusal(&mut vm);
+    assert_eq!(retry, error);
+    assert_eq!(random_snapshot(&mut vm), before);
+    vm.host().inner.test_illusion_dealt_factor(source, 0.375);
+    step(&mut vm, 1.);
+    assert_eq!(damage_events(&mut vm), 1);
+}
+
 #[test]
 fn combat_trace_records_acquisition_then_its_damage_with_source_identity() {
     let mut fields = armed("64", "normal");

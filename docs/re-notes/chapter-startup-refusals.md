@@ -1104,3 +1104,40 @@ The all-chapter sweep never completed its build, so no horizon result table or
 post-fix chapter pass is claimed. The first Clippy attempt found a missing
 test-helper type qualification; the corrected attempt and both suites were
 stopped before completion. No implementation or tests from that attempt ship.
+
+## Complete indexed opening/idle sweep (2026-11-13)
+
+The baseline probe ran all 79 map entries derived from the selected local
+`CampaignStrings.txt` and `CampaignStrings_exp.txt`, excluding the model-only
+finale. Results: **31 passed, 47 refused, one diagnostic timeout** (RoC Orc01).
+A pass means either an opening skip requested an interlude exit, or control
+returned and the subsequent 300-second idle script horizon completed. It is not
+mission completion or an original-client/tick comparison. The probe advances
+logical time in 0.25-second diagnostic intervals with bounded callback work.
+
+The executable test artifact SHA-256 was
+`377ee0b6bc2b37bd4b74bcbc411d66f52681355fea9d37c980f1f87473c6bfb0`.
+The selected client remains 1.29.2.9231, SHA-256 `3f2ed012...0eed`.
+Every case used private Xvfb, ALSA null audio and a separate local profile.
+After interruption the missing process was verified before resuming unfinished
+cases; completed receipts were retained only after verifying the same binary.
+Local per-map logs, results, binary provenance and final summary remain under
+`/tmp/pc3-horizon-sweep/`; no original assets are published.
+
+First-refusal categories include `PlayThematicMusicEx` (12 maps),
+`IssueImmediateOrder` (11), `AddDefenders` (3), `MeleeDifficulty` (2),
+`IsLocationVisibleToPlayer` (2), and single-map refusals for music volume,
+location-range enumeration, guard return, group target orders, fresh timer
+queries, location-point orders, target orders, campaign/melee AI startup,
+destructable removal, timed life and suicide. Five further cases stop outside
+that native-name diagnostic shape, including automatic-cast delivery. These
+counts identify first frontiers only; fixing one may expose another.
+
+Orc02's baseline failure is specifically `TimerGetRemaining` on a fresh timer,
+through `war3map.j:2833`. The existing original-client timer observation already
+qualifies zero for fresh elapsed/remaining/timeout queries. The shared query
+correction passes the gameplay library suite (2,988 passed, 108 explicit
+ignores), strict native/WASM Clippy, the affected builds and the unchanged
+Orc02 300-second post-control horizon. The baseline counts above precede that
+correction and all ten parallel implementation lanes; the isolated Orc02 replay
+passed separately and does not rewrite the retained baseline results.

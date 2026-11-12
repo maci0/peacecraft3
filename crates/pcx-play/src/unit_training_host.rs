@@ -497,7 +497,7 @@ impl ObjectHost {
             let record = self.executed_unit(unit)?;
             if record.cached
                 || record.summoned
-                || record.admitted_order.is_some()
+                || record.admitted_order.is_some_and(|(_, active)| active)
                 || record.paused_since.is_some()
                 || self.unit_has_effect_history(unit)
                 || record.combat.is_none()
@@ -577,8 +577,8 @@ impl ObjectHost {
         }
         let paused = record.paused_since.is_some();
         let refund = [
-            self.training_refund(job.gold)?,
-            self.training_refund(job.lumber)?,
+            self.training_refund(job.gold, job.research.is_some())?,
+            self.training_refund(job.lumber, job.research.is_some())?,
         ];
         let cancel = self.prepare_job_events(&job, producer, "CANCEL")?;
         let mut next = None;
@@ -664,7 +664,7 @@ impl ObjectHost {
             owner = Some(job.owner);
             for (sum, cost) in refund.iter_mut().zip([job.gold, job.lumber]) {
                 *sum = sum
-                    .checked_add(self.training_refund(cost)?)
+                    .checked_add(self.training_refund(cost, job.research.is_some())?)
                     .ok_or_else(|| self.training_error("death refund overflow"))?;
             }
             if job.active {
@@ -830,8 +830,8 @@ impl ObjectHost {
                 lumber,
                 food,
                 duration,
-                refund_gold: self.training_refund(gold)?,
-                refund_lumber: self.training_refund(lumber)?,
+                refund_gold: self.training_refund(gold, false)?,
+                refund_lumber: self.training_refund(lumber, false)?,
                 unavailable,
             });
         }
@@ -871,8 +871,8 @@ impl ObjectHost {
                 active: job.active,
                 gold: job.gold,
                 lumber: job.lumber,
-                refund_gold: self.training_refund(job.gold)?,
-                refund_lumber: self.training_refund(job.lumber)?,
+                refund_gold: self.training_refund(job.gold, job.research.is_some())?,
+                refund_lumber: self.training_refund(job.lumber, job.research.is_some())?,
                 food: job.food,
                 duration: job.duration,
                 finish: job.active.then_some(job.finish),

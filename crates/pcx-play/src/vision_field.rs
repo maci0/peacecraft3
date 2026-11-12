@@ -34,7 +34,7 @@ pub struct VisionSampleStats {
     /// Stamp inputs after alliance, life, and fog-state filtering.
     /// This is not the number of units and modifiers examined.
     pub emitted_sources: usize,
-    /// Live units plus started fog modifiers read by `vision_sources`, once per viewer.
+    /// Units, started fog modifiers and attached Sentinel owls examined per viewer.
     pub candidates_scanned: usize,
 }
 

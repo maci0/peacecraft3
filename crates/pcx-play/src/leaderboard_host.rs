@@ -303,7 +303,10 @@ impl ObjectHost {
             }
             // These native wrappers return before touching presentation when
             // typed resolution finds no live board. Keep unknown identities strict.
-            if matches!(name, "LeaderboardDisplay" | "DestroyLeaderboard") {
+            if matches!(
+                name,
+                "LeaderboardDisplay" | "DestroyLeaderboard" | "LeaderboardSetItemLabelColor"
+            ) {
                 match args[0] {
                     Value::Null => return Ok(Value::Null),
                     Value::Handle(id) => match self
@@ -316,6 +319,18 @@ impl ObjectHost {
                         _ => return Err(self.inner.error(name, Failure::WrongFamily)),
                     },
                     _ => unreachable!("validated leaderboard signature"),
+                }
+            }
+            if let ("LeaderboardSetItemLabelColor", [Value::Handle(id), Value::Int(row), ..]) =
+                (name, args)
+            {
+                let index = self.leaderboard_index(name, *id)?;
+                let board = &self.leaderboards.as_ref().expect("admitted").boards[index];
+                if usize::try_from(*row)
+                    .ok()
+                    .is_none_or(|row| row >= board.items.len())
+                {
+                    return Ok(Value::Null);
                 }
             }
             let mutation = *result == "nothing" || name == CREATE;
@@ -535,7 +550,14 @@ impl ObjectHost {
                     .ok()
                     .filter(|&at| at < board.items.len())
                     .ok_or_else(|| fail(Failure::LeaderboardState("row index out of range")))?;
-                let color = [*r, *g, *b, *a].map(u8::try_from);
+                // The label handler packs each channel's low byte (1.29.2.9231, 4a1fe0).
+                let color = [*r, *g, *b, *a].map(|channel| {
+                    if name == "LeaderboardSetItemLabelColor" {
+                        Ok(channel as u8)
+                    } else {
+                        u8::try_from(channel)
+                    }
+                });
                 let [Ok(r), Ok(g), Ok(b), Ok(a)] = color else {
                     return Err(fail(Failure::LeaderboardState(
                         "RGBA channels must fit bytes",

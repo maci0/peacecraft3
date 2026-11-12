@@ -158,6 +158,19 @@ impl ObjectHost {
         self.timers.as_ref().map(|state| state.now)
     }
 
+    /// Mandatory world work can split a timer advance, but cannot finish it early.
+    pub(crate) fn next_timer_activity_boundary(&self, until: f64) -> Option<f64> {
+        [
+            self.next_training_completion(until),
+            self.next_construction_completion(until),
+            self.next_mirror_boundary(until),
+            self.next_morph_boundary(until),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by(f64::total_cmp)
+    }
+
     /// Earliest pending timer or timed-event deadline.
     pub(super) fn next_timer_deadline(&self) -> Option<f64> {
         self.inner
@@ -371,9 +384,9 @@ impl ObjectHost {
         let [Value::Handle(timer)] = args else {
             return Err(fail(Failure::TimerArguments));
         };
-        let run = self
-            .timer_run(*timer, name)?
-            .ok_or_else(|| fail(Failure::TimerState("unstarted timer query is unsupported")))?;
+        let Some(run) = self.timer_run(*timer, name)? else {
+            return Ok(Value::Real(0.0));
+        };
         let elapsed = if let Some(held) = run.paused {
             held
         } else if run.deadline.is_none() {

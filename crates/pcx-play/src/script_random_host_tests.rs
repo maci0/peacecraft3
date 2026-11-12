@@ -230,3 +230,73 @@ fn identical_seeds_and_call_order_reproduce_outputs_and_rng_state() {
     );
     assert!(second.3.len() == 2);
 }
+
+#[test]
+fn interleaved_secondary_real_and_die_retain_distinct_exact_state_records() {
+    use crate::script_random::{
+        order::{CallSite, DrawRecord},
+        state,
+    };
+    let policy = Arc::new(profile::fixture());
+    let mut host = host(RANDOM, "")
+        .with_script_random(Arc::clone(&policy), 3)
+        .unwrap();
+    assert!(host.draw_random_secondary_real(1, "orb").is_err());
+    assert_eq!(host.script_random_calls().unwrap(), []);
+    host.native("SetRandomSeed", &[Value::Int(-71)]).unwrap();
+    let mut expected = Some(state::seeded(&policy, -71, 3).unwrap());
+    let mut records = Vec::new();
+    for (site, channel) in [
+        (CallSite::SecondaryReal { channel: 1 }, Some(1)),
+        (CallSite::ScriptInteger, None),
+        (CallSite::SecondaryDie { channel: 1 }, Some(1)),
+        (CallSite::SecondaryReal { channel: 2 }, Some(2)),
+        (CallSite::ScriptReal, None),
+        (CallSite::SecondaryReal { channel: 1 }, Some(1)),
+    ] {
+        match site {
+            CallSite::SecondaryReal { channel } => assert_eq!(
+                host.draw_random_secondary_real(channel, "orb")
+                    .unwrap()
+                    .to_bits(),
+                state::secondary_real(&policy, &mut expected, channel)
+                    .unwrap()
+                    .to_bits(),
+            ),
+            CallSite::SecondaryDie { channel } => assert_eq!(
+                host.draw_random_secondary_die(channel, 1, "illusion")
+                    .unwrap(),
+                state::secondary_die(&policy, &mut expected, channel, 1).unwrap(),
+            ),
+            CallSite::ScriptInteger => assert_eq!(
+                host.native("GetRandomInt", &[Value::Int(-19), Value::Int(41)])
+                    .unwrap(),
+                Value::Int(state::integer(&policy, &mut expected, -19, 41).unwrap()),
+            ),
+            CallSite::ScriptReal => assert_eq!(
+                host.native("GetRandomReal", &[Value::Real(-2.0), Value::Real(7.0)])
+                    .unwrap(),
+                Value::Real(state::real(&policy, &mut expected, -2.0, 7.0).unwrap()),
+            ),
+            _ => unreachable!(),
+        }
+        let state = expected.as_ref().unwrap();
+        records.push(DrawRecord {
+            site,
+            primary_word: Some(state.primary_word()),
+            secondary_word: channel.and_then(|channel| state.secondary_words().nth(channel)),
+        });
+        assert_eq!(host.script_random_state(), expected.as_ref());
+        assert_eq!(host.script_random_calls().unwrap(), records);
+        assert!(host.draw_random_secondary_real(3, "orb").is_err());
+        assert!(host.draw_random_secondary_die(1, 0, "illusion").is_err());
+        assert_eq!(host.script_random_state(), expected.as_ref());
+        assert_eq!(host.script_random_calls().unwrap(), records);
+    }
+    host.native("SetRandomSeed", &[Value::Int(-71)]).unwrap();
+    assert_eq!(host.script_random_calls().unwrap(), []);
+    assert_eq!(
+        host.script_random_state(),
+        Some(&state::seeded(&policy, -71, 3).unwrap())
+    );
+}

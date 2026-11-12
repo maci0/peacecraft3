@@ -2375,6 +2375,40 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     format!("I2S takes an integer, got {}", v.type_name()),
                 )),
             },
+            NativeImpl::StringLength => {
+                // shortcut: literals are expanded earlier, move expansion to consumers for nested-WTS parity.
+                let text = match &args[0] {
+                    Value::Null => return Ok(Value::Int(0)),
+                    Value::Str(text) => text,
+                    value => {
+                        return Err(crate::Error::run(
+                            span,
+                            format!("StringLength takes a string, got {}", value.type_name()),
+                        ));
+                    }
+                };
+                let resolved;
+                let text = if let Some(id) = crate::text::native_trigstr_id(text) {
+                    resolved = self
+                        .host
+                        .resolve_table_string(id)
+                        .map_err(|why| crate::Error::run(span, format!("TRIGSTR_{id}: {why}")))?
+                        .ok_or_else(|| {
+                            crate::Error::run(
+                                span,
+                                format!("TRIGSTR_{id} is not in this map's war3map.wts"),
+                            )
+                        })?;
+                    &resolved
+                } else {
+                    text
+                };
+                let length = text
+                    .bytes()
+                    .position(|byte| byte == 0)
+                    .unwrap_or(text.len());
+                Ok(Value::Int(length as i32))
+            }
         }
     }
 

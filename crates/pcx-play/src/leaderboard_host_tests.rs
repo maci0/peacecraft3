@@ -630,6 +630,69 @@ fn leaderboard_rows_preserve_color_and_style_history() {
 }
 
 #[test]
+fn item_label_color_packs_low_bytes_and_ignores_absent_boards_and_rows() {
+    let mut h = host();
+    let p = player(&mut h, 1);
+    let b = create(&mut h);
+    add(&mut h, &b, &p, "kept label", 37);
+    let name = "LeaderboardSetItemLabelColor";
+    for (channels, expected) in [
+        ([-1, 256, 513, -258], [255, 0, 1, 254]),
+        ([i32::MIN, i32::MAX, 0x12345678, 0], [0, 255, 120, 0]),
+    ] {
+        let before = h.leaderboard_state().unwrap().revision();
+        let mut args = vec![b.clone(), Value::Int(0)];
+        args.extend(channels.map(Value::Int));
+        assert_eq!(h.native(name, &args).unwrap(), Value::Null);
+        let state = h.leaderboard_state().unwrap();
+        assert_eq!(state.revision(), before + 1);
+        let board = state.get(id(&b)).unwrap();
+        assert_eq!(board.items[0].label_color, Some(expected));
+        assert_eq!(board.items[0].value_color, None);
+        assert_eq!(board.items[0].label, "kept label");
+        assert_eq!(board.items[0].value, 37);
+        assert_eq!(board.label_color, None);
+    }
+    let args = |board: Value, row: i32| {
+        vec![
+            board,
+            Value::Int(row),
+            Value::Int(-1),
+            Value::Int(256),
+            Value::Int(513),
+            Value::Int(-258),
+        ]
+    };
+    let kept = snapshot(&h);
+    for row in [i32::MIN, -1, 1, i32::MAX] {
+        assert_eq!(h.native(name, &args(b.clone(), row)).unwrap(), Value::Null);
+        assert_eq!(snapshot(&h), kept);
+    }
+    let unknown = Value::Handle(pcx_script::HandleId::new(
+        std::num::NonZeroU64::new(u64::MAX).unwrap(),
+    ));
+    for invalid in [p, unknown] {
+        assert!(h.native(name, &args(invalid, -1)).is_err());
+        assert_eq!(snapshot(&h), kept);
+    }
+    h.native("DestroyLeaderboard", std::slice::from_ref(&b))
+        .unwrap();
+    let kept = snapshot(&h);
+    for absent in [Value::Null, b] {
+        assert_eq!(
+            h.native(name, &args(absent.clone(), 0)).unwrap(),
+            Value::Null
+        );
+        assert_eq!(snapshot(&h), kept);
+        let mut malformed = args(absent.clone(), 0);
+        malformed[2] = Value::Bool(true);
+        assert!(h.native(name, &malformed).is_err());
+        assert!(h.native(name, &[absent]).is_err());
+        assert_eq!(snapshot(&h), kept);
+    }
+}
+
+#[test]
 fn leaderboard_display_and_destroy_resolve_only_null_and_typed_tombstones_as_absent() {
     let mut h = host();
     let p = player(&mut h, 1);

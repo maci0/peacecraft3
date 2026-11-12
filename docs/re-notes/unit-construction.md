@@ -110,3 +110,49 @@ unranked nonstock menu profiles. A separate nonstock test covers unattended site
 completion after release of its builder. The original-client observation of an Undead
 builder and its site through completion is recorded in [AI construction](ai-construction.md).
 These tests do not establish rendered behavior.
+
+## Terminal sites and repair enrollment, 2026-11-13
+
+The completion scheduler now excludes a site with nonpositive life or a dead
+combat record. Previously an unattended site's retained incomplete marker kept
+producing future completion deadlines after `KillUnit`, even though work
+projection correctly refused to grow the dead site. Death keeps the paid cost
+and does not publish FINISH or provide completion benefits. Repair arrival also
+checks the canonical target before attaching participation: a dead, canceled,
+initializing or autonomous site cannot acquire a worker, and an arriving worker
+cannot replace the site's current worker. A refused arrival clears its
+zero-cost travel request through the existing arrival path.
+
+`SetUnitOwner` on an incomplete site now explicitly refuses before producer
+cleanup or ownership mutation. Previously it could retain the old owner's
+participant and fail the next construction update. Native incomplete-site
+transfer behavior remains unqualified; this refusal is a capability boundary,
+not a claim that the original client rejects ownership changes. Transferring a
+worker continues to refund its pre-arrival reservation to the original owner or
+stop its participation in an already paid site.
+
+The evidence boundary remains the selected 1.29.2.9231 executable digest above,
+the retained source-derived costs/durations and the Human and Undead original
+observations described here and in `ai-construction.md`. No new original-client
+run establishes death, competing repair arrival or owner-transfer timing in this
+change. These are canonical-state/scheduler consistency fixes and an explicit
+unsupported-state refusal. Synthetic regressions exercise terminal wake removal,
+repair enrollment, unchanged paid costs, lack of FINISH, atomic transfer refusal
+and worker transfer before and after arrival; they do not establish native tick
+parity or rendered behavior.
+
+Validation used the branch's isolated target directory: `cargo test -p pcx-play
+--lib construction --jobs 2 --offline` passed 56 tests with the explicit
+local-source test ignored; running `selected_original_construction_rules` with
+its supplied local inputs and `--ignored` passed separately. All five new
+lifecycle regressions ran and passed. Native and `wasm32-unknown-unknown`
+`cargo check -p pcx-play --lib` passed with the workspace's warnings-as-errors
+policy. Every run used the verified private display and null audio sink.
+
+Independent main integration validates all five named regressions in the full
+`pcx-play` package suite: 3,140 passed, zero failed, 143 explicit ignores.
+Strict native/WASM all-target Clippy, native/WASM library builds, formatting
+and the native campaign-probe rebuild pass. Per-command exit receipts and
+unchanged source hashes remain under `/tmp/pc3-construction-main-validation/`.
+These gates establish canonical lifecycle consistency, not native transfer,
+multiple-builder behavior, polling cadence or rendered parity.

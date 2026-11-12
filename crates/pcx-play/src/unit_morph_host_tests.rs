@@ -429,6 +429,18 @@ fn open_with_attack(
     duration: &str,
     first_attack: bool,
 ) -> (Vm, HandleId) {
+    let host = prepared_host(abilities, cast, duration, first_attack);
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut vm = context.scripts.clone().owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("U") else {
+        panic!("unit")
+    };
+    (vm, unit)
+}
+
+fn prepared_host(abilities: &str, cast: &str, duration: &str, first_attack: bool) -> ObjectHost {
     let (registry, activity, numeric) = registry_numeric();
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = registry.binding().image_sha256;
@@ -556,6 +568,9 @@ fn open_with_attack(
     let extra = format!(
         "{extra}\nconstant native SetPlayerTechResearched takes player p, integer id, integer level returns nothing\nconstant native GetPlayerTechResearched takes player p, integer id, boolean specific returns boolean\n"
     );
+    let extra = format!(
+        "{extra}\nnative GetPlayerNeutralPassive takes nothing returns integer\nnative GetPlayerNeutralAggressive takes nothing returns integer\nnative GetBJMaxPlayers takes nothing returns integer\nnative GetBJPlayerNeutralVictim takes nothing returns integer\nnative GetBJPlayerNeutralExtra takes nothing returns integer\n"
+    );
     let mut h = position_host_admitting(2000, 16, SCRIPT, &extra, &fields, |h| h)
         .with_player_tech_researched(crate::playercolor_host::TechLimitBudget { max_records: 8 })
         .unwrap()
@@ -609,14 +624,7 @@ fn open_with_attack(
         property_key,
         !abilities.contains("X003") && !abilities.contains("X005"),
     )));
-    let context = Arc::clone(h.player_context().unwrap());
-    let mut vm = context.scripts.clone().owned_vm(h);
-    vm.init_globals().unwrap();
-    vm.call("main", &[]).unwrap();
-    let Value::Handle(u) = vm.global("U") else {
-        panic!("unit")
-    };
-    (vm, u)
+    h
 }
 
 fn advance(vm: &mut Vm, until: f64) {
@@ -631,6 +639,82 @@ fn advance(vm: &mut Vm, until: f64) {
             }
         }
     }
+}
+
+#[test]
+fn published_session_reaches_target_after_morph_boundaries_and_later_timer() {
+    use crate::map_script_session::MapScriptSession;
+    use crate::map_startup_host::MapStartupHost;
+    use crate::neutral_player::{SelectedMapNeutralHost, tests as neutral};
+
+    let run = |targets: &[f64]| {
+        let host = prepared_host("X001", "0.125", "0.375", true);
+        let context = Arc::clone(host.player_context().unwrap());
+        let world =
+            SelectedMapNeutralHost::try_new(context.clone(), neutral::slots_rule(301, -3, 9), host)
+                .unwrap();
+        let world = SelectedMapNeutralHost::try_new(
+            context.clone(),
+            neutral::extra_rule(301, -3, 9),
+            world,
+        )
+        .unwrap();
+        let world = SelectedMapNeutralHost::try_new(
+            context.clone(),
+            neutral::victim_rule(301, -3, 9),
+            world,
+        )
+        .unwrap();
+        let world = SelectedMapNeutralHost::try_new(
+            context.clone(),
+            neutral::bj_max_players_rule(301, -3, 9),
+            world,
+        )
+        .unwrap();
+        let world =
+            SelectedMapNeutralHost::try_new(context.clone(), neutral::aggressive_rules(301), world)
+                .unwrap();
+        let world =
+            SelectedMapNeutralHost::try_new(context.clone(), neutral::rules(), world).unwrap();
+        let mut session = MapScriptSession::<MapStartupHost>::default();
+        let main = context.scripts.program().function_id("main").unwrap();
+        let on = context.scripts.program().function_id("on").unwrap();
+        session
+            .replace(
+                context,
+                |_| Ok::<_, std::convert::Infallible>(MapStartupHost::timer_session_fixture(world)),
+                &[main],
+            )
+            .unwrap();
+        assert_eq!(session.call_function(on, &[]).unwrap(), Value::Bool(true));
+        let Value::Handle(unit) = session.global("U").unwrap() else {
+            panic!("unit")
+        };
+        let objects = session.host().unwrap().objects_mut();
+        assert_eq!(objects.next_morph_boundary(2.0), Some(0.125));
+        let timer = objects.native("CreateTimer", &[]).unwrap();
+        objects
+            .native(
+                "TimerStart",
+                &[timer, Value::Real(1.25), Value::Bool(false), Value::Null],
+            )
+            .unwrap();
+        let mut delivered = 0;
+        for &until in targets {
+            delivered += session.advance_timers(until, 8).unwrap();
+            assert_eq!(
+                session.host().unwrap().objects().timer_game_time(),
+                Some(until)
+            );
+        }
+        assert_eq!(delivered, 1);
+        let objects = session.host().unwrap().objects();
+        assert_eq!(objects.test_morph_active_count(), 0);
+        let record = objects.executed_unit(unit).unwrap();
+        assert_eq!(record.definition.rawcode, *b"u002");
+        (record.definition.rawcode, record.flight_height)
+    };
+    assert_eq!(run(&[2.0]), run(&[0.0625, 0.25, 0.5, 1.0, 2.0]));
 }
 
 #[test]

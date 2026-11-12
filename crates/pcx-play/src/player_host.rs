@@ -2260,7 +2260,7 @@ impl ObjectHost {
         Ok(training.queue_slots)
     }
 
-    pub(super) fn training_refund(&self, cost: i32) -> Result<i32, Error> {
+    pub(super) fn training_refund(&self, cost: i32, research: bool) -> Result<i32, Error> {
         self.training_queue_slots()?;
         let rules = &self
             .players
@@ -2276,14 +2276,16 @@ impl ObjectHost {
                 Failure::UnitActivity("source numeric rules are not admitted".into()),
             )
         })?;
-        rules
-            .training_rules()
-            .expect("checked")
-            .refund(numeric, cost)
-            .map_err(|why| {
-                self.inner
-                    .error("training refund", Failure::UnitActivity(why))
-            })
+        let training = rules.training_rules().expect("checked");
+        let refund = if research {
+            training.research_refund(numeric, cost)
+        } else {
+            training.refund(numeric, cost)
+        };
+        refund.map_err(|why| {
+            self.inner
+                .error("training refund", Failure::UnitActivity(why))
+        })
     }
 
     pub(super) fn prepare_training_debit(

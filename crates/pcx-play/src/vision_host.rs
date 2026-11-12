@@ -243,6 +243,7 @@ impl ObjectHost {
             night,
             modifiers,
             units,
+            sentinels: self.sentinel_owls().count(),
             sharing_kinds: None,
             fog_states: None,
         })
@@ -307,6 +308,10 @@ impl ObjectHost {
                 source_height: None,
             })?;
         }
+        scanned = scanned.saturating_add(table.sentinels);
+        if scanned > limit {
+            return Err(fail("vision scan budget exceeded".into()));
+        }
         let owls = self.sentinel_vision(viewer, &mut |owner| {
             let kinds = table
                 .sharing_kinds
@@ -314,10 +319,6 @@ impl ObjectHost {
             self.shares_vision(owner, viewer, kinds)
         })?;
         for owl in owls {
-            scanned = scanned.saturating_add(1);
-            if scanned > limit {
-                return Err(fail("vision scan budget exceeded".into()));
-            }
             push(owl)?;
         }
         // Preserve modifier creation order within each phase.
@@ -398,6 +399,8 @@ pub(super) struct SourceTable<'a> {
     modifiers: Vec<(usize, &'a super::FogModifier)>,
     /// Every executed unit in arena order.
     units: Vec<TableUnit<'a>>,
+    /// All attached owls, including those not shared with the sampled viewer.
+    sentinels: usize,
     /// Resolved on first use: the alliance kinds that share vision.
     sharing_kinds: Option<Vec<i32>>,
     /// Resolved on first use: the fog state values.
@@ -406,7 +409,10 @@ pub(super) struct SourceTable<'a> {
 
 impl SourceTable<'_> {
     pub(super) fn candidate_count(&self) -> usize {
-        self.units.len().saturating_add(self.modifiers.len())
+        self.units
+            .len()
+            .saturating_add(self.modifiers.len())
+            .saturating_add(self.sentinels)
     }
 }
 
@@ -499,6 +505,6 @@ impl SightRadii {
 
 pub(super) struct ListedVision {
     pub(super) sources: Vec<VisionSource>,
-    /// Started modifiers plus live units examined, including those that emit nothing.
+    /// Units, started modifiers and attached owls examined, including unshared sources.
     pub(super) candidates_scanned: usize,
 }
