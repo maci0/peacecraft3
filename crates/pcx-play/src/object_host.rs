@@ -668,7 +668,15 @@ impl ObjectHost {
                 .map(Value::Handle);
         }
         let (group, member) = match (name, args) {
-            ("IsUnitInGroup", [unit, group]) => (group, Some(self.unit(unit, name)?)),
+            ("IsUnitInGroup", [unit, group @ (Value::Null | Value::Handle(_))]) => {
+                let Some(unit) = self.optional_unit(unit, name)? else {
+                    return Ok(Value::Bool(false));
+                };
+                if matches!(group, Value::Null) {
+                    return Ok(Value::Bool(false));
+                }
+                (group, Some(unit))
+            }
             ("GroupAddUnit" | "GroupRemoveUnit", [group, unit]) => {
                 (group, self.optional_unit(unit, name)?)
             }

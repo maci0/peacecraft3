@@ -1165,3 +1165,16 @@ original-client observations. Correctly scheduling default work exposes
 unsupported behavior; it does not establish automatic-cast fidelity or improve
 these chapters' horizon result by itself. The full baseline sweep above remains
 unchanged.
+
+After canonical range support and native-qualified null membership queries,
+the rebuilt recreation test executable has SHA-256
+`e6d63593e972814f8ad92ae5411634df20fad159d820278766b30064958cafd5`.
+With the same local install, unchanged maps and verified offscreen/null-audio
+isolation, Undead02 publishes 123 units, restores control at time 1.5 and passes
+the 300-second idle-script horizon. Its opening no longer refuses the null-unit
+`IsUnitInGroup` query. Undead03 publishes 185 units but still refuses `ACsw`
+automatic acquisition at `0.019999999552965164`, before the historical range
+call. Both exact commands and results are retained under
+`/tmp/pc3-group-range-horizon-main/`; the pre-range Undead03 receipt is under
+`/tmp/pc3-undead03-before-range/`. These later runs do not rewrite the baseline
+sweep or establish mission completion, rendered fidelity or native tick parity.

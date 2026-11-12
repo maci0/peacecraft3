@@ -211,7 +211,10 @@ fn null_unit_is_no_member_for_add_and_remove_but_a_null_group_still_refuses() {
         h.native("GroupAddUnit", &[Value::Null, Value::Null])
             .is_err()
     );
-    assert!(h.native("IsUnitInGroup", &[Value::Null, g]).is_err());
+    assert_eq!(
+        h.native("IsUnitInGroup", &[Value::Null, g]).unwrap(),
+        Value::Bool(false)
+    );
 }
 #[test]
 fn incompatible_group_native_shape_type_or_function_override_refuses_admission() {
@@ -483,3 +486,52 @@ fn target_orders_resolve_the_widget_before_the_group_and_reuse_follow() {
 
 #[path = "group_iteration_tests.rs"]
 mod iteration;
+
+#[test]
+fn membership_null_queries_follow_unit_first_resolution_without_allocating() {
+    let mut h = host(12, 2);
+    let g = create(&mut h);
+    let a = unit(&mut h);
+    h.native("GroupAddUnit", &[g.clone(), a.clone()]).unwrap();
+    let dead = create(&mut h);
+    h.native("DestroyGroup", std::slice::from_ref(&dead))
+        .unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    let unknown = Value::Handle(HandleId::new(std::num::NonZeroU64::new(u64::MAX).unwrap()));
+    let unowned = Value::Handle(h.inner.reserve_identity("group").unwrap());
+    let handles = h.inner.handles();
+    for args in [
+        [Value::Null, g.clone()],
+        [Value::Null, Value::Null],
+        [a.clone(), Value::Null],
+        [Value::Null, dead.clone()],
+        [Value::Null, unknown.clone()],
+    ] {
+        assert_eq!(
+            h.native("IsUnitInGroup", &args).unwrap(),
+            Value::Bool(false)
+        );
+    }
+    for args in [
+        [timer.clone(), Value::Null],
+        [unknown.clone(), Value::Null],
+        [a.clone(), timer],
+        [a.clone(), unknown],
+        [a.clone(), dead],
+        [a.clone(), unowned],
+        [Value::Int(0), Value::Null],
+        [Value::Null, Value::Int(0)],
+    ] {
+        assert!(h.native("IsUnitInGroup", &args).is_err());
+    }
+    for args in [vec![], vec![Value::Null], vec![Value::Null; 3]] {
+        assert!(h.native("IsUnitInGroup", &args).is_err());
+    }
+    assert_eq!(
+        h.native("IsUnitInGroup", &[a.clone(), g.clone()]).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(h.inner.handles(), handles);
+    assert_eq!(h.memberships(), 1);
+    assert_eq!(first(&mut h, &g), a);
+}

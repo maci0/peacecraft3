@@ -7195,3 +7195,30 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   credits, enabled damage penalties, transfer/removal, intermediate type/pool
   transitions and original-client timing remain open. See
   [upgrade policy](docs/re-notes/player-production-queues.md).
+
+- 2026-11-13: Both group range natives use source-decoded normalized inclusive
+  centre geometry, canonical accepted positions and existing same-VM filter
+  continuations. Location snapshots, null/retired-location no-ops, bounded
+  preflight and callback unwind are covered. Main's independent complete
+  gameplay package passes 3,169 tests, zero failed, 144 explicit ignores;
+  all ten new range/membership names execute, and the selected-image range gate
+  separately passes. Strict native/WASM all-target Clippy, both libraries,
+  formatting and the application rebuild pass with unchanged source hashes.
+  The native-coverage inventory includes the actual two new consumers.
+  Undead03 still refuses earlier `ACsw` automatic acquisition before reaching
+  its historical range call; no horizon improvement is claimed there. Spatial
+  iteration/mutation order, special eligibility and original-client numeric
+  comparison remain open; known Locust candidates explicitly refuse. See
+  [range enumeration](docs/re-notes/slice-group-enum.md).
+
+- 2026-11-13: Native-qualified null membership queries return false in the
+  selected unit-first resolution order while retaining strict malformed,
+  wrong-family and nonnull-unit/destroyed-group boundaries. Real CreateUnit/
+  RemoveUnit coverage verifies canonical membership cleanup and typed tombstone
+  queries without allocation. All three named membership regressions pass in
+  the main package run above. The rebuilt unchanged Undead02 replay now reaches
+  player control and passes 300 seconds of idle script advancement. This is
+  not mission completion or original-client timing parity; nonnull queries on
+  destroyed groups remain unqualified. See
+  [group arena](docs/re-notes/script-group-arena.md) and
+  [chapter receipts](docs/re-notes/chapter-startup-refusals.md).
