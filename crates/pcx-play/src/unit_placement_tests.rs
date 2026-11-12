@@ -805,7 +805,9 @@ fn texture_channel_operands_control_construction_flags() {
 
 pub(crate) fn rules(exponent: u32, initial: f32) -> Rules {
     let (bytes, binding, budget) = fixture(exponent, initial);
-    Rules::read(&bytes, binding, budget).unwrap()
+    let mut rules = Rules::read(&bytes, binding, budget).unwrap();
+    rules.group_range = Ok(group_range::tests::rules(exponent));
+    rules
 }
 
 pub(crate) fn placement(source: Source, queries: usize) -> Placement {
@@ -1966,4 +1968,27 @@ fn script_destructable_odd_footprint_needs_a_snapped_position() {
     assert_eq!(cells(&p, 240., 240.).unwrap(), block(6..=8, 6..=8));
     // An unaligned position snaps first: 224 becomes 240 on the first (3-wide) axis.
     assert_eq!(cells(&p, 224., 240.).unwrap(), block(6..=8, 6..=8));
+}
+
+#[test]
+fn unqualified_group_range_operands_do_not_disable_other_placement_queries() {
+    let (bytes, binding, budget) = fixture(3, -8192.25);
+    let parsed = Rules::read(&bytes, binding, budget).unwrap();
+    assert!(
+        parsed
+            .group_range()
+            .unwrap_err()
+            .to_string()
+            .contains("unqualified")
+    );
+    assert_eq!(parsed.cell_size(), 8.);
+    let mut mismatched = rules(3, -8192.25);
+    mismatched.group_range = Ok(group_range::tests::rules(4));
+    assert!(
+        mismatched
+            .group_range()
+            .unwrap_err()
+            .to_string()
+            .contains("scales differ")
+    );
 }

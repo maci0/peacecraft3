@@ -586,3 +586,326 @@ endfunction
         assert_eq!(v.host().inner.native(name, &[]).unwrap(), Value::Null);
     }
 }
+
+const RANGE_DECLARATIONS: &str = r#"
+type location extends agent
+native Location takes real x, real y returns location
+native MoveLocation takes location l, real x, real y returns nothing
+native RemoveLocation takes location l returns nothing
+native GroupEnumUnitsInRange takes group g, real x, real y, real radius, boolexpr filter returns nothing
+native GroupEnumUnitsInRangeOfLoc takes group g, location l, real radius, boolexpr filter returns nothing
+native ShowUnit takes unit u, boolean show returns nothing
+native RemoveUnit takes unit u returns nothing
+"#;
+
+fn range_vm(script: &str, members: usize) -> Vm {
+    let host = position_host_program(
+        100,
+        members,
+        &format!("{SCENE}\n{script}"),
+        RANGE_DECLARATIONS,
+    )
+    .with_locations()
+    .unwrap();
+    let ctx = Arc::clone(host.player_context().unwrap());
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    vm
+}
+
+#[test]
+fn range_enumeration_uses_centres_inclusive_edges_and_shown_extant_units() {
+    let mut v = range_vm("", 16);
+    let group = v.global("TARGET");
+    let [a, b, c] = ["A", "B", "C"].map(|name| v.global(name));
+    for (radius, expected) in [
+        (0., [true, false, false]),
+        (31.75, [true, false, false]),
+        (32., [true, true, false]),
+        (64., [true, true, true]),
+    ] {
+        v.host()
+            .inner
+            .native(
+                "GroupEnumUnitsInRange",
+                &[
+                    group.clone(),
+                    Value::Real(16.),
+                    Value::Real(16.),
+                    Value::Real(radius),
+                    Value::Null,
+                ],
+            )
+            .unwrap();
+        for (unit, present) in [a.clone(), b.clone(), c.clone()].into_iter().zip(expected) {
+            assert_eq!(
+                v.host()
+                    .inner
+                    .native("IsUnitInGroup", &[unit, group.clone()])
+                    .unwrap(),
+                Value::Bool(present)
+            );
+        }
+    }
+    v.host()
+        .inner
+        .native("ShowUnit", &[b.clone(), Value::Bool(false)])
+        .unwrap();
+    v.host()
+        .inner
+        .native("RemoveUnit", std::slice::from_ref(&c))
+        .unwrap();
+    v.host()
+        .inner
+        .native(
+            "GroupEnumUnitsInRange",
+            &[
+                group.clone(),
+                Value::Real(16.),
+                Value::Real(16.),
+                Value::Real(90.),
+                Value::Null,
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        v.host()
+            .inner
+            .native("FirstOfGroup", std::slice::from_ref(&group))
+            .unwrap(),
+        a
+    );
+    assert_eq!(v.host().inner.memberships(), 1);
+    v.host()
+        .inner
+        .native("ShowUnit", &[b.clone(), Value::Bool(true)])
+        .unwrap();
+    v.host()
+        .inner
+        .native(
+            "GroupEnumUnitsInRange",
+            &[
+                group.clone(),
+                Value::Real(48.),
+                Value::Real(16.),
+                Value::Real(0.),
+                Value::Null,
+            ],
+        )
+        .unwrap();
+    assert_eq!(v.host().inner.native("FirstOfGroup", &[group]).unwrap(), b);
+}
+
+#[test]
+fn range_location_snapshots_nested_predicates_restore_filter_context() {
+    let mut v = range_vm(
+        r#"
+globals
+location L = null
+endglobals
+function InnerRange takes nothing returns boolean
+set INNER_HITS = INNER_HITS + 1
+return GetFilterUnit() == B
+endfunction
+function OuterRange takes nothing returns boolean
+local unit before = GetFilterUnit()
+set HITS = HITS + 1
+call MoveLocation(L, 700.0, 700.0)
+call GroupEnumUnitsInRange(INNER, 48.0, 16.0, 0.0, Condition(function InnerRange))
+call GroupEnumUnitsInRangeOfLoc(INNER, null, 30.0, Condition(function FalsePredicate))
+if GetFilterUnit() != before or FirstOfGroup(INNER) != B then
+set OK = false
+endif
+return before == B
+endfunction
+function run takes nothing returns nothing
+set L = Location(16.0, 16.0)
+call GroupEnumUnitsInRangeOfLoc(TARGET, L, 32.0, Filter(function OuterRange))
+endfunction
+"#,
+        16,
+    );
+    v.call("run", &[]).unwrap();
+    assert_eq!(v.global("HITS"), Value::Int(2));
+    assert_eq!(v.global("INNER_HITS"), Value::Int(2));
+    assert_eq!(v.global("OK"), Value::Bool(true));
+    let group = v.global("TARGET");
+    assert_eq!(
+        v.host().inner.native("FirstOfGroup", &[group]).unwrap(),
+        v.global("B")
+    );
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn range_preflight_failures_preserve_members_and_do_not_install_callbacks() {
+    let mut v = range_vm("", 1);
+    let group = v.global("TARGET");
+    let unit = v.global("B");
+    v.host()
+        .inner
+        .native("GroupAddUnit", &[group.clone(), unit.clone()])
+        .unwrap();
+    for radius in [90., -1., f32::NAN, f32::INFINITY] {
+        assert!(
+            v.host()
+                .inner
+                .native(
+                    "GroupEnumUnitsInRange",
+                    &[
+                        group.clone(),
+                        Value::Real(16.),
+                        Value::Real(16.),
+                        Value::Real(radius),
+                        Value::Null
+                    ]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            v.host()
+                .inner
+                .native("FirstOfGroup", std::slice::from_ref(&group))
+                .unwrap(),
+            unit
+        );
+        assert_eq!(
+            v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+            Value::Null
+        );
+    }
+    for coordinate in [f32::NAN, f32::INFINITY] {
+        assert!(
+            v.host()
+                .inner
+                .native(
+                    "GroupEnumUnitsInRange",
+                    &[
+                        group.clone(),
+                        Value::Real(coordinate),
+                        Value::Real(16.),
+                        Value::Real(32.),
+                        Value::Null
+                    ]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            v.host()
+                .inner
+                .native("FirstOfGroup", std::slice::from_ref(&group))
+                .unwrap(),
+            unit
+        );
+    }
+    assert!(
+        v.host()
+            .inner
+            .native(
+                "GroupEnumUnitsInRangeOfLoc",
+                &[group.clone(), unit.clone(), Value::Real(4.), Value::Null]
+            )
+            .is_err()
+    );
+    v.host()
+        .inner
+        .native(
+            "GroupEnumUnitsInRangeOfLoc",
+            &[group.clone(), Value::Null, Value::Real(4.), Value::Null],
+        )
+        .unwrap();
+    assert_eq!(
+        v.host().inner.native("FirstOfGroup", &[group]).unwrap(),
+        unit
+    );
+}
+
+#[test]
+fn range_bad_predicate_unwinds_before_a_successful_location_query() {
+    let mut v = range_vm(
+        r#"
+function BadRange takes nothing returns boolean
+return 7
+endfunction
+function bad takes nothing returns nothing
+call GroupEnumUnitsInRange(TARGET,16.0,16.0,32.0,Filter(function BadRange))
+endfunction
+function run takes nothing returns nothing
+local location l=Location(80.0,16.0)
+call GroupEnumUnitsInRangeOfLoc(TARGET,l,0.0,Condition(function TruePredicate))
+endfunction
+"#,
+        8,
+    );
+    let error = v.call("bad", &[]).unwrap_err().to_string();
+    assert!(error.contains("GroupEnumUnitsInRange"), "{error}");
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+    v.call("run", &[]).unwrap();
+    let group = v.global("TARGET");
+    assert_eq!(
+        v.host().inner.native("FirstOfGroup", &[group]).unwrap(),
+        v.global("C")
+    );
+    assert_eq!(v.global("HITS"), Value::Int(1));
+}
+
+#[test]
+fn range_accepted_positions_are_canonical_and_missing_positions_refuse_atomically() {
+    let mut v = range_vm("", 8);
+    let group = v.global("TARGET");
+    let a = v.global("A");
+    let Value::Handle(id) = a else {
+        panic!("unit");
+    };
+    v.host().inner.range_test_position(id, Some([160., 160.]));
+    for (point, expected) in [([16., 16.], Value::Null), ([160., 160.], a.clone())] {
+        v.host()
+            .inner
+            .native(
+                "GroupEnumUnitsInRange",
+                &[
+                    group.clone(),
+                    Value::Real(point[0]),
+                    Value::Real(point[1]),
+                    Value::Real(0.),
+                    Value::Null,
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            v.host()
+                .inner
+                .native("FirstOfGroup", std::slice::from_ref(&group))
+                .unwrap(),
+            expected
+        );
+    }
+    v.host().inner.range_test_position(id, None);
+    assert!(
+        v.host()
+            .inner
+            .native(
+                "GroupEnumUnitsInRange",
+                &[
+                    group.clone(),
+                    Value::Real(16.),
+                    Value::Real(16.),
+                    Value::Real(0.),
+                    Value::Null
+                ]
+            )
+            .is_err()
+    );
+    assert_eq!(v.host().inner.native("FirstOfGroup", &[group]).unwrap(), a);
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+}
