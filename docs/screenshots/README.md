@@ -1,6 +1,6 @@
 # Renderer screenshots
 
-Fresh 0.13.0 captures from PeaceCraft III on 4 November 2026, using the locally supplied Legacy 1.29.2.9231 install in Reign of Chaos mode. The production renderer ran headless at 1280×960 with offscreen Vulkan software rendering and audio disabled. These are rendered demonstrations, not original-client captures or pixel-parity evidence.
+Fresh 0.16.0 captures from PeaceCraft III on 12 November 2026, using the locally supplied Legacy 1.29.2.9231 install in Reign of Chaos mode. The production renderer ran headless at 1280×960 with offscreen Vulkan software rendering and audio disabled. These are rendered demonstrations, not original-client captures or pixel-parity evidence. No original-client comparison was run for the 0.16.0 captures; the full-screen comparison figures below were measured on the earlier 0.13.0 captures.
 
 - `main-menu.png`: Reign of Chaos main menu.
 - `chapter-selection.png`: campaign and chapter selection; difficulty selection is unavailable.
