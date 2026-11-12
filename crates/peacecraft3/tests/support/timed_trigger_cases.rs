@@ -347,6 +347,130 @@ fn timed_callback_failure_cleans_context_and_candidate_replacement_keeps_previou
     assert!(s.host().is_none());
 }
 
+#[test]
+fn timer_delivery_cursor_keeps_condition_snapshot_and_skips_retired_subscription() {
+    let source = "\
+globals
+trigger first = CreateTrigger()
+trigger retired = CreateTrigger()
+timer clock = CreateTimer()
+integer seen = 0
+boolean context_ok = true
+endglobals
+function added takes nothing returns boolean
+set seen = seen * 10 + 9
+return true
+endfunction
+function reject takes nothing returns boolean
+set context_ok = context_ok and GetTriggeringTrigger() == first and GetExpiredTimer() == clock
+set seen = seen * 10 + 1
+call TriggerAddCondition(first,Condition(function added))
+call DestroyTrigger(retired)
+return false
+endfunction
+function accept takes nothing returns boolean
+set context_ok = context_ok and GetTriggeringTrigger() == first and GetExpiredTimer() == clock
+set seen = seen * 10 + 2
+return true
+endfunction
+function unwanted takes nothing returns nothing
+set seen = -1
+endfunction
+function handler takes nothing returns nothing
+set context_ok = context_ok and GetTriggeringTrigger() == null and GetTriggerEventId() == null and GetExpiredTimer() == clock
+set seen = seen * 10 + 3
+call DestroyTimer(clock)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddCondition(first,Condition(function reject))
+call TriggerAddCondition(first,Condition(function accept))
+call TriggerAddAction(first,function unwanted)
+call TriggerAddAction(retired,function unwanted)
+call TriggerRegisterTimerExpireEvent(first,clock)
+call TriggerRegisterTimerExpireEvent(retired,clock)
+call TimerStart(clock,0.5,false,function handler)
+endfunction
+";
+    let mut app = timer_app();
+    deliver_timed_trigger(&mut app, source, 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.advance_timers(10.5, 1).unwrap(), 1);
+    assert_eq!(session.global("seen"), Some(Value::Int(123)));
+    assert_eq!(session.global("context_ok"), Some(Value::Bool(true)));
+    assert_eq!(session.advance_timers(20.0, 0).unwrap(), 0);
+}
+
+#[test]
+fn timer_delivery_cursor_failure_retires_expiry_before_next_callback() {
+    let source = "\
+globals
+trigger subscribed = CreateTrigger()
+timer first = CreateTimer()
+timer next = CreateTimer()
+integer seen = 0
+boolean context_ok = false
+endglobals
+function fail takes nothing returns boolean
+set seen = 7
+call TimerStart(null,1.0,false,null)
+return true
+endfunction
+function unwanted takes nothing returns nothing
+set seen = -1
+endfunction
+function recovered takes nothing returns nothing
+set context_ok = GetTriggeringTrigger() == null and GetTriggerEventId() == null and GetExpiredTimer() == next
+set seen = seen * 10 + 9
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddCondition(subscribed,Condition(function fail))
+call TriggerAddAction(subscribed,function unwanted)
+call TriggerRegisterTimerExpireEvent(subscribed,first)
+call TimerStart(first,0.5,false,function unwanted)
+call TimerStart(next,0.75,false,function recovered)
+endfunction
+";
+    let mut app = timer_app();
+    deliver_timed_trigger(&mut app, source, 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert!(session.advance_timers(10.5, 1).is_err());
+    assert_eq!(session.global("seen"), Some(Value::Int(7)));
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(
+        objects.native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(
+        objects.native("GetTriggerEventId", &[]).unwrap(),
+        Value::Null
+    );
+    assert!(objects.native("GetExpiredTimer", &[]).is_err());
+    assert_eq!(session.advance_timers(10.75, 1).unwrap(), 1);
+    assert_eq!(session.global("seen"), Some(Value::Int(79)));
+    assert_eq!(session.global("context_ok"), Some(Value::Bool(true)));
+    assert_eq!(session.advance_timers(20.0, 0).unwrap(), 0);
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn browser_timed_trigger_gate() -> u32 {
@@ -354,7 +478,9 @@ pub fn browser_timed_trigger_gate() -> u32 {
     timed_trigger_disabled_phase_and_destroy_before_firing_are_retained();
     timer_subscription_runs_actions_then_restores_context_for_direct_handler();
     timed_callback_failure_cleans_context_and_candidate_replacement_keeps_previous_state();
-    4
+    timer_delivery_cursor_keeps_condition_snapshot_and_skips_retired_subscription();
+    timer_delivery_cursor_failure_retires_expiry_before_next_callback();
+    6
 }
 
 #[cfg(target_arch = "wasm32")]
