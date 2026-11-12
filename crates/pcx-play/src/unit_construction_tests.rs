@@ -380,7 +380,12 @@ fn public_fixture_admitted(
         heroes,
         (
             &format!(
-                "{EVENTS}\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n"
+                "{EVENTS}\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n\
+                native GetBJPlayerNeutralExtra takes nothing returns integer\n\
+                native GetBJPlayerNeutralVictim takes nothing returns integer\n\
+                native GetBJMaxPlayers takes nothing returns integer\n\
+                native GetPlayerNeutralAggressive takes nothing returns integer\n\
+                native GetPlayerNeutralPassive takes nothing returns integer\n"
             ),
             |mut host| {
                 let catalog = Arc::new(PublicBuildCatalog(host.unit_catalog().unwrap()));
@@ -2413,6 +2418,102 @@ fn assistant_worker(host: &mut ObjectHost, owner: HandleId) -> HandleId {
     host.native("RemoveGuardPosition", &[Value::Handle(worker)])
         .unwrap();
     worker
+}
+
+#[test]
+fn published_session_finishes_fractional_free_assistance_at_large_clocks() {
+    use crate::map_script_session::MapScriptSession;
+    use crate::map_startup_host::MapStartupHost;
+    use crate::neutral_player::{SelectedMapNeutralHost, tests as neutral};
+
+    for start in [10000., 1_099_511_627_776.] {
+        let (mut vm, primary, _) = assistant_fixture("0", ".3", Default::default());
+        let owner = vm.host().inner.executed_unit(primary).unwrap().owner;
+        register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+        assert!(
+            vm.host()
+                .inner
+                .next_timer_expiry(start, &mut 8)
+                .unwrap()
+                .is_none()
+        );
+        let site = site(&mut vm, primary);
+        let host = &mut vm.host().inner;
+        let helper = assistant_worker(host, owner);
+        assert!(host.set_construction_worker(site, Some(helper)).unwrap());
+        let paid_bank = [
+            bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+            bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+        ];
+        let context = Arc::clone(host.player_context().unwrap());
+        let placeholder = ObjectHost::checked(
+            EnumHost::checked_selected(
+                context.scripts.shared_program(),
+                &context.map_digest.label,
+                &[],
+                Limits {
+                    max_handles: 256,
+                    admission_steps: 1000,
+                    expression_depth: 64,
+                    expression_work: 4096,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let host = std::mem::replace(host, placeholder);
+        let world =
+            SelectedMapNeutralHost::try_new(context.clone(), neutral::slots_rule(301, -3, 9), host)
+                .unwrap();
+        let world = SelectedMapNeutralHost::try_new(
+            context.clone(),
+            neutral::extra_rule(301, -3, 9),
+            world,
+        )
+        .unwrap();
+        let world = SelectedMapNeutralHost::try_new(
+            context.clone(),
+            neutral::victim_rule(301, -3, 9),
+            world,
+        )
+        .unwrap();
+        let world = SelectedMapNeutralHost::try_new(
+            context.clone(),
+            neutral::bj_max_players_rule(301, -3, 9),
+            world,
+        )
+        .unwrap();
+        let world =
+            SelectedMapNeutralHost::try_new(context.clone(), neutral::aggressive_rules(301), world)
+                .unwrap();
+        let world =
+            SelectedMapNeutralHost::try_new(context.clone(), neutral::rules(), world).unwrap();
+        let mut session = MapScriptSession::<MapStartupHost>::default();
+        session
+            .replace(
+                context,
+                |_| Ok::<_, std::convert::Infallible>(MapStartupHost::timer_session_fixture(world)),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(session.advance_timers(start + 40., 8).unwrap(), 0);
+        assert_eq!(session.advance_queued_events(1).unwrap(), 1);
+        assert_eq!(session.advance_timers(start + 41., 8).unwrap(), 0);
+        assert_eq!(session.advance_queued_events(1).unwrap(), 0);
+        let objects = session.host().unwrap().objects_mut();
+        assert_eq!(objects.timer_game_time(), Some(start + 41.));
+        assert_eq!(
+            [
+                bank(objects, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+                bank(objects, owner, "PLAYER_STATE_RESOURCE_LUMBER")
+            ],
+            paid_bank
+        );
+        assert!(objects.unit_construction(site).unwrap().is_none());
+        for worker in [primary, helper] {
+            assert!(objects.unit_construction_order(worker).unwrap().is_none());
+        }
+    }
 }
 
 #[test]

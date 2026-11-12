@@ -383,3 +383,15 @@ are retained in `/tmp/pc3-sol06-phase3-verification.json`; those sources were
 unchanged throughout the successful final run. Earlier failed fixture attempts
 and successful pre-review runs are preserved separately. No rendered comparison,
 native Windows run or full-workspace integration is claimed by these checks.
+
+The completion forecast now uses the same admitted, source-policy-rounded speed
+as work projection. If adding its required span rounds the deadline downward,
+the forecast advances to the next representable `f64`; this is a scheduler
+progress rule, not an authored game tolerance or native timing observation.
+The published-session regression
+`published_session_finishes_fractional_free_assistance_at_large_clocks` uses
+nonstock free assistance with rate `.3`, duration 37 and clocks 10000 and 2^40.
+It reproduced `WakeBudget` before the fix; afterward it reaches both requested
+times under budget eight, delivers one finish event, clears both worker orders
+and preserves both banks. This does not qualify the remaining native pooled
+cost-event phase or reclamation cadence.

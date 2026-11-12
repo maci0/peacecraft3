@@ -1016,6 +1016,10 @@ impl ObjectHost {
                         && worker.paused_since.is_none()
                         && worker.combat.as_ref().is_none_or(|state| !state.dead)
                 };
+                let speed = f64::from(
+                    self.construction_math(BinOp::Add, 1., site.assistant_rate)
+                        .ok()?,
+                );
                 (!site.initial_pending
                     && !site.canceled
                     && record.vitals.is_some_and(|vitals| vitals.life > 0.)
@@ -1023,9 +1027,12 @@ impl ObjectHost {
                     && record.paused_since.is_none()
                     && worker_ready)
                     .then(|| {
-                        let complete = site.through
-                            + (site.duration - site.elapsed)
-                                / (1. + f64::from(site.assistant_rate));
+                        let span = (site.duration - site.elapsed) / speed;
+                        let mut complete = site.through + span;
+                        // Round outward so projection can consume even a sub-ULP remainder.
+                        if complete - site.through < span {
+                            complete = complete.next_up();
+                        }
                         site.assistant_next
                             .into_iter()
                             .flatten()
