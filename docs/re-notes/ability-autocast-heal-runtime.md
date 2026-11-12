@@ -149,3 +149,32 @@ ranking/enumeration, full readiness, turn and post-cast duration bindings,
 retained post-EFFECT payment, repeated phases and caster-owned mark lifetime.
 No one-shot heal, guessed nearest selector, silent idle success or broad native
 parity claim is justified by this qualification.
+
+## Timing bindings and phase writer follow-up
+
+`autocast_rules::Class.tick` now independently binds the two timing virtuals:
+`+0x470` for retry and `+0x474` for the minimum after a selected cast. The decoder
+checks each getter, the matching bootstrap destination and integer-to-real call,
+and reads the bootstrap operand. Unknown shapes leave timing unadmitted without
+removing the existing ON/OFF capability. Nonstock operands and relocated getter
+and global addresses, destination/call/opcode drift, nonpositive values and class
+integration have explicit synthetic regressions. The selected-image gate joins
+Heal, Neutral Heal and Slow's decoded timing. This supplies rule inputs; it does
+not connect a class's target acquisition or execute a cast.
+
+Further read-only disassembly of `0xbed2f0` identifies an important mutable phase
+writer. At `0xbed36f..0xbed3a1`, Heal obtains virtual `+0x2ec`, adds the image
+operand referenced at `0x10db058`, and writes FloatMini `+0x94` (value `+0x98`).
+At `0xbed3ae..0xbed3cc`, it adds the post-cast minimum global to this updated
+value for the `Bhea` creation/refresh duration. The exact virtual-to-source-field
+and other phase-writer joins remain open. A source `castbsw` value cannot simply
+be kept immutable across this effect.
+
+The generic duration routine `0xb4a600` compares `+0x98` against an image
+sentinel read from `0x10db134`, using the tolerance referenced at `0x10db054`.
+Mapped image bytes identify that sentinel as positive FLT_MAX, not unity. This
+is static native-code evidence, distinct from the sampled runtime brackets.
+The local disassemblies are `/tmp/pc3-sol09-heal-effect.asm` and
+`/tmp/pc3-sol09-common-postcast-delay.asm`; full retained Heal effect dossier
+`ev_20c69a4aeb2e1756d457f245f0d49a12e297778539564799445e7c371b853731`
+is in `/tmp/pc3-sol04-slow-native-evidence.json`.
