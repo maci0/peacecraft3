@@ -15,6 +15,7 @@ pub(super) struct Context {
     event: Option<HandleId>,
     range: Option<(HandleId, HandleId)>,
     subject: super::EventSubject,
+    expired_timer: Option<Option<HandleId>>,
 }
 
 #[derive(Default)]
@@ -25,6 +26,8 @@ pub(super) struct Threads {
     sleepers: BTreeMap<u64, (f64, Context)>,
     pending: Option<f64>,
     next: u64,
+    /// None inherits native delivery; Some(None) retains a null event response.
+    expired_timer: Option<Option<HandleId>>,
     /// `Some` once `TriggerSleepAction` is admitted, bounding parked threads.
     limit: Option<usize>,
 }
@@ -133,6 +136,7 @@ impl ObjectHost {
             event: self.trigger_runtime.as_ref().and_then(|s| s.event_context),
             range: self.range_context(),
             subject: self.events.subject,
+            expired_timer: self.threads.expired_timer,
         }
     }
 
@@ -143,6 +147,11 @@ impl ObjectHost {
         }
         self.set_range_context(context.range);
         self.events.subject = context.subject;
+        self.threads.expired_timer = context.expired_timer;
+    }
+
+    pub(super) fn thread_expired_timer(&self) -> Option<Option<HandleId>> {
+        self.threads.expired_timer
     }
 
     /// Depth of spawned or resumed threads currently active.
@@ -180,7 +189,10 @@ impl ObjectHost {
             .checked_add(1)
             .ok_or_else(|| fail("tickets"))?;
         let ticket = self.threads.next;
-        let context = self.thread_context();
+        let mut context = self.thread_context();
+        context.expired_timer = context
+            .expired_timer
+            .or_else(|| self.active_expired_timer());
         self.threads.sleepers.insert(ticket, (deadline, context));
         Ok(ticket)
     }

@@ -19,6 +19,12 @@ pub struct Binding {
     pub full_timeout: SourceWindow,
     pub active_elapsed: SourceWindow,
     pub inactive_elapsed: SourceWindow,
+    pub pause: SourceWindow,
+    pub resume: SourceWindow,
+    pub rearm: SourceWindow,
+    pub stop: SourceWindow,
+    pub dispatch: SourceWindow,
+    pub expiry_dispatch: SourceWindow,
 }
 
 #[derive(Debug)]
@@ -68,6 +74,12 @@ impl Rules {
             &b.full_timeout,
             &b.active_elapsed,
             &b.inactive_elapsed,
+            &b.pause,
+            &b.resume,
+            &b.rearm,
+            &b.stop,
+            &b.dispatch,
+            &b.expiry_dispatch,
         ];
         if image.len() > budget.image_bytes
             || windows.iter().map(|w| u64::from(w.len)).sum::<u64>() > budget.profile_bytes as u64
@@ -93,6 +105,12 @@ impl Rules {
         let elapsed = open(&b.active_elapsed)?;
         let inactive = open(&b.inactive_elapsed)?;
         let constructor = open(&b.constructor)?;
+        let pause = open(&b.pause)?;
+        let resume = open(&b.resume)?;
+        let rearm = open(&b.rearm)?;
+        let stop = open(&b.stop)?;
+        let dispatch = open(&b.dispatch)?;
+        let expiry_dispatch = open(&b.expiry_dispatch)?;
         let minimum_va = word(schedule, 0xb).ok_or_else(|| fail(Problem::Shape))?;
         let minimum = word(
             pe.read_from(minimum_va, false)
@@ -166,6 +184,25 @@ impl Rules {
             || call(inactive, b.inactive_elapsed.va, 0x5e) != Some(n.binding.math_sub.va)
             || word(constructor, 0xa8) != Some(zero_va)
             || word(constructor, 0xb7) != Some(zero_va)
+            || call(pause, b.pause.va, 0x3b) != Some(b.stop.va)
+            || !at(stop, 0x36, &[0x83, 0x66, 0x10, 0xf9])
+            || !at(resume, 0x11, &[0x8b, 0x41, 0x50])
+            || !at(resume, 0x17, &[0x8b, 0x41, 0x34])
+            || !at(resume, 0x1c, &[0xd1, 0xe8, 0x83, 0xe0, 1])
+            || call(resume, b.resume.va, 0x2f).is_none()
+            || call(resume, b.resume.va, 0x2f) != call(rearm, b.rearm.va, 0x5e)
+            || !at(rearm, 0xd, &[0x8b, 0x41, 0x24])
+            || !at(rearm, 0x13, &[0x85, 0xc0, 0x74])
+            || !at(rearm, 0x17, &[0x8b, 0x46, 0x48])
+            || !at(rearm, 0x1b, &[0x8b, 0x7e, 0x34])
+            || call(dispatch, b.dispatch.va, 0x29) != Some(b.rearm.va)
+            || call(dispatch, b.dispatch.va, 0x22).is_none()
+            || call(dispatch, b.dispatch.va, 0x22) != call(dispatch, b.dispatch.va, 0x3b)
+            || word(expiry_dispatch, 0x8c) != Some(zero_va)
+            || call(expiry_dispatch, b.expiry_dispatch.va, 0xaa) != Some(b.schedule.va)
+            || call(expiry_dispatch, b.expiry_dispatch.va, 0xee) != Some(b.stop.va)
+            || word(expiry_dispatch, 0x10e) != Some(segment_va)
+            || call(expiry_dispatch, b.expiry_dispatch.va, 0x11e) != Some(b.schedule.va)
         {
             return Err(fail(Problem::Shape));
         }
@@ -227,6 +264,16 @@ impl Rules {
             })
         };
         calculate().map_err(|e: real::MathError| n.runtime_error(e))
+    }
+
+    /// Preserve ordinary caller deadlines; apply only the qualified residual/minimum edges.
+    pub(crate) fn delivery_delay(&self, epoch: Epoch, timeout: f64) -> f64 {
+        let minimum = f64::from(f32::from_bits(self.minimum));
+        if epoch.whole > 0 && f64::from(f32::from_bits(epoch.remainder)) < minimum {
+            f64::from(epoch.whole) * f64::from(f32::from_bits(self.segment)) + minimum
+        } else {
+            timeout.max(minimum)
+        }
     }
 
     fn clamp(&self, value: u32) -> u32 {

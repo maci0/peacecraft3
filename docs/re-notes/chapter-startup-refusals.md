@@ -1190,3 +1190,30 @@ positive receipts predate default-on scheduling and are not current horizon
 passes. These four results do not establish that string migration caused the
 refusals or that a mission was completed. Exact commands and results remain in
 `/tmp/pc3-strings-construction-horizons/`.
+
+
+### Source-policy and Slow lifecycle integration replay
+
+After `d73f9224`, the rebuilt recreation test executable has SHA-256
+`ff10823cebd371a68072e522baa195c033da3085e8c04736dc27e08ebcee6fbc`. The selected local
+Legacy 1.29.2.9231 install, unchanged RoC maps and verified private display/null
+audio are retained. The source-policy and Slow resource-failure corrections
+pass their independent package/application checks; these six separate chapter
+runs establish only the following current frontiers:
+
+| Chapter | Published units | Result |
+| --- | ---: | --- |
+| Human01 | 152 | Control at 0.5; 300-second idle horizon passes |
+| Undead02 | 123 | Control at 1.5; 300-second idle horizon passes |
+| Undead03 | 185 | Automatic `ACsw` acquisition refuses |
+| Undead05 | 194 | Automatic `ACbl` acquisition refuses |
+| Undead06 | 211 | Automatic `Anh2` acquisition refuses |
+| Undead08 | 211 | Automatic `Aslo` acquisition refuses |
+
+All four refusals occur at the source first deadline
+`0.019999999552965164`, before the historical type/range or AI-difficulty
+frontiers. No automatic work is suppressed to reach a later script call.
+Commands, exits, executable identity and complete logs remain under
+`/tmp/pc3-next-integration-horizons/`. The earlier pre-atomic-fix runs remain
+under `/tmp/pc3-next-integration-before-atomic-horizons/`. These are recreation
+idle-script results, not mission completion or original-client tick parity.

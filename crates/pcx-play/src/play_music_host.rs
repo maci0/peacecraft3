@@ -1,11 +1,10 @@
-//! Admitted `common.j` music-playback natives with retained requests only.
+//! Admitted `common.j` music-playback declarations and thematic dispatch.
 //!
 //! The eight natives keep their shipped declarations verbatim (all
 //! non-constant; the `frommsecs` parameter spelling is the shipped typo and is
-//! not corrected here). Audible playback — volume scaling, seek positions and
-//! fade timing — is unqualified, so dispatch retains the exact executed
-//! arguments, surfaces them through the getters below, and refuses loudly
-//! instead of guessing gains, offsets or curves.
+//! not corrected here). Source-qualified thematic calls update the shared
+//! map-music request. Other calls retain their arguments and refuse until their
+//! playback semantics are qualified and consumed.
 use super::{Error, Failure, ObjectHost};
 use pcx_script::Value;
 
@@ -70,9 +69,8 @@ fn is_play_music_native(name: &str) -> bool {
 }
 
 impl ObjectHost {
-    /// Admits request retention only. Every native keeps its shipped
-    /// declaration (see the task's `common.j` extract); audible behavior stays
-    /// an explicit dispatch refusal until the semantics are qualified.
+    /// Admits declarations and request retention. Thematic playback additionally
+    /// requires map-music admission and selected-client thematic rules.
     pub fn with_play_music(mut self, max_name_bytes: usize) -> Result<Self, Error> {
         let name = "PlayMusic";
         if self.play_music.is_some() {
@@ -184,11 +182,12 @@ impl ObjectHost {
     pub fn music_play_position_request(&self) -> Option<i32> {
         self.play_music.as_ref()?.play_position
     }
-    /// Last executed `PlayThematicMusicEx` request, if any.
+    /// Last unqualified `PlayThematicMusicEx` request, retained before refusal.
+    /// Source-qualified calls use `thematic_music_request()` instead.
     pub fn thematic_music_ex_request(&self) -> Option<&ThematicMusicExRequest> {
         self.play_music.as_ref()?.thematic_ex.as_ref()
     }
-    /// Last executed `SetThematicMusicPlayPosition` argument, if any.
+    /// Last unqualified thematic seek, retained before refusal.
     pub fn thematic_play_position_request(&self) -> Option<i32> {
         self.play_music.as_ref()?.thematic_play_position
     }
@@ -197,7 +196,27 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        let state = self.play_music.as_mut()?;
+        self.play_music.as_ref()?;
+        match (name, args) {
+            ("PlayThematicMusicEx", [Value::Str(path), Value::Int(from)])
+                if self
+                    .map_music
+                    .as_ref()
+                    .is_some_and(|state| state.has_thematic_rules()) =>
+            {
+                return Some(self.start_thematic(path, Some(*from)).map(|()| Value::Null));
+            }
+            ("SetThematicMusicPlayPosition", [Value::Int(position)])
+                if self
+                    .map_music
+                    .as_ref()
+                    .is_some_and(|state| state.has_thematic_rules()) =>
+            {
+                return Some(self.seek_thematic(*position).map(|()| Value::Null));
+            }
+            _ => {}
+        }
+        let state = self.play_music.as_mut().expect("checked music admission");
         if !is_play_music_native(name) {
             return None;
         }
