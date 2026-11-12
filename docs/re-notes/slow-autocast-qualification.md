@@ -92,6 +92,100 @@ Public facing is therefore not evidence for an instantaneous logical-heading
 threshold. The previous direct host's instant face assignment remains a fidelity
 gap; neither a coordinate fit nor a permanent refusal closes turning behavior.
 
+### Paired short-clock heading controls
+
+The five-arm follow-up completed 640 ordered snapshots and 25 spell events.
+Receipt: `/tmp/pc3-sol04-slow-heading-paired-verified.json`; manifest:
+`/tmp/pc3-sol04-slow-heading-paired-probes-1794518018248068581/manifest.json`.
+Each event records both an eight-second timer and the earlier long timer. The
+short timer reports the east EFFECT at `0.470000` and FINISH at `1.030000`;
+the corresponding long queries report `0.470093` and `1.030029`. These are query
+differences, not a scheduling quantum.
+
+North CHANNEL occurs at short time `0.110000`; west and north with the native
+turn-speed getter multiplied by a synthetic half occur at `0.199999`. Halving
+the native property-window getter leaves north CHANNEL at `0.110000`. The setter
+takes the getter's raw radians; passing half the UnitData degree cell would be
+a different experiment. Public north facing is still `10.313240` degrees inside
+CHANNEL. Each owned container independently reports stopped/PID zero, disabled
+network, read-only root, dropped capabilities and only its private harness/run
+mounts. None mounted a host display or audio socket.
+
+### Logical heading and the physics frame
+
+Selected code distinguishes logical heading at CPoPos `+0x8c` from public
+orientation at `+0xc8`, with visual angular velocity at `+0xcc`. Public
+`GetUnitFacing` resolves the latter through `0x7fe970`; `GetUnitTurnSpeed` reads
+`+0xb8`. The stationary turn path `0x8b00c0` uses that turn-speed field to clamp
+one logical step. Its arrival helper `0x8aeb50` checks the independent spell
+window before that step. The property window at `+0xbc` instead gates walking
+in `0x8b0b90`. The controlled half-property-window result is consistent with
+these separate roles.
+
+Physics dispatch `0x8b5220` runs logical cluster work before `0x8b0900` visual
+orientation. In the one-unit stationary path, `0x8aa740` records arrival before
+`0x8ac620` commits the logical step, and `0x8ac3e0`/`0x8ad5a0` performs the
+arrived relation cleanup afterward. The cleanup calls `0x8b15a0` and delivers
+the movement completion message before visual interpolation. Thus the delayed
+spell cannot be implemented by comparing public facing after a visual update.
+The complete canonical timer-queue cursor and order-resume bridge remain open.
+
+The physics timer is armed by `0x4ee0c0` from the global operand initialized by
+`0x40d030` through native decimal conversion `0x9a1760`. The heading reader joins
+that initializer destination to the timer operand, and follows the arrival
+window, angle tolerance, half-turn and full-turn operands in their consumers.
+It uses the native decimal operation order: convert the combined digits, then
+scale through the existing selected reciprocal/multiply policy. It does not
+parse the period with the host floating-point parser.
+
+The `unit_activity::heading` rules expose one pure stationary logical step with
+check-before-turn arrival and the separate visual phase. Fresh campaign
+preparation attaches both policies to the canonical activity policy. Runtime
+unit motion, facing setters, script timed turns and Slow phase deadlines are
+not yet routed through these policies. The authoritative physics callback bridge
+remains required before claiming turning fidelity.
+
+### Orientation arithmetic controls
+
+The curve reader follows all sixteen selector entries in constructor
+`0x4109f0`. It evaluates the constructor's reviewed stack/register forms and
+decimal conversion, rather than copying its coefficients. The power path follows
+`0x9a1be0`, logarithm `0x9a1960`/`0x9a0350`, and exponential
+`0x9a14c0`/`0x9a0460` with the existing software arithmetic. A private native
+`Pow` control retains 65 binary32 results across a synthetic unit interval;
+all match exactly. Witness: `/tmp/pc3-sol04-heading-power-witness.json`.
+
+A second private observation resolves the script handle through the selected
+game-state handle pool and AGILE object registry to CPoPos. The helper uses only
+process query/read access, verifies the position object's setter/reset vtable
+entries, and reads clock and orientation fields twice around each sample. It
+does not call, inject into, suspend or modify the client. Of 1,200 readable
+samples, 1,178 have identical brackets. Adjacent-pair exclusions retain 44
+unstable brackets, 82 changed logical headings and 1,029 unchanged orientations.
+The remaining 44 transitions have a stable logical heading, selector and queue
+cycle, and an interval shorter than the source physics period. All 44 angle and
+angular-velocity results match the reconstructed visual step bit for bit.
+Witness: `/tmp/pc3-sol04-heading-visual-witness.json`; raw observations:
+`/tmp/pc3-sol04-heading-rpm-reference-read-facing-1794522844194114247/native-heading.jsonl`.
+The owned client is stopped; its receipt independently checks private mounts,
+disabled network, read-only root and dropped capabilities.
+
+These observations caught two arithmetic-order errors that ordinary floating
+point tests missed. The shortest-arc helper `0x8a19b0` subtracts current minus
+goal before sign reversal/wrap; reversing operands changes the selected signed
+truncation result. Angle normalization `0x8aead0` uses remainder `0x9a1a90`
+when the magnitude reaches a revolution. Its fractional reciprocal product is
+not equivalent to subtracting a revolution. The nonnegative remainder sequence
+is shared with timer query arithmetic, and heading admission joins its table and
+arithmetic calls to the selected numeric policy. This does not qualify general
+JASS modulo behavior.
+
+The direct `SetUnitFacing` control also exhibits later logical-heading writes
+while the caster has no public order and fixed position. Those transitions are
+retained as unknown controller/idle work, not fitted as a constant visual goal.
+This control therefore qualifies the isolated visual step, not the complete
+idle/order-resume phase or its writers.
+
 ## Selected-code findings and remaining gates
 
 Slow candidate filter `0xbf7c20`, evidence

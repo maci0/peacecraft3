@@ -203,13 +203,7 @@ impl Rules {
             if usize::from(whole) > work {
                 return Err(real::MathError::Unsupported);
             }
-            // The remainder uses the fractional reciprocal product, not host `%`.
-            let q = real::mul(t, n.reciprocal(self.segment))?;
-            let fractional = real::sub(q, real::from_i32(real::truncate(q)?)?)?;
-            let mut remainder = real::mul(fractional, self.segment)?;
-            if f32::from_bits(remainder) >= f32::from_bits(self.segment) {
-                remainder = real::sub(remainder, self.segment)?;
-            }
+            let remainder = n.positive_remainder(t, self.segment)?;
             let period = if whole > 0 {
                 self.segment
             } else {
