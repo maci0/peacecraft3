@@ -82,7 +82,11 @@ impl ObjectHost {
         let value = state::integer(&random.policy, &mut random.state, low, high)
             .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
         let primary_word = random.state.as_ref().map(|state| state.primary_word());
-        random.order.push(DrawRecord { site, primary_word });
+        random.order.push(DrawRecord {
+            site,
+            primary_word,
+            secondary_word: None,
+        });
         Ok(value)
     }
 
@@ -109,6 +113,10 @@ impl ObjectHost {
         random.order.push(DrawRecord {
             site: CallSite::SecondaryDie { channel },
             primary_word,
+            secondary_word: random
+                .state
+                .as_ref()
+                .and_then(|state| state.secondary_words().nth(channel)),
         });
         Ok(value)
     }
@@ -132,8 +140,12 @@ impl ObjectHost {
             .map_err(|error| self.inner.error(caller, Failure::RandomState(error)))?;
         let primary_word = random.state.as_ref().map(|state| state.primary_word());
         random.order.push(DrawRecord {
-            site: CallSite::SecondaryDie { channel },
+            site: CallSite::SecondaryReal { channel },
             primary_word,
+            secondary_word: random
+                .state
+                .as_ref()
+                .and_then(|state| state.secondary_words().nth(channel)),
         });
         Ok(value)
     }
@@ -197,6 +209,7 @@ impl ObjectHost {
                     random.order.push(DrawRecord {
                         site: CallSite::ScriptInteger,
                         primary_word,
+                        secondary_word: None,
                     });
                     Value::Int(value)
                 }),
@@ -209,6 +222,7 @@ impl ObjectHost {
                     random.order.push(DrawRecord {
                         site: CallSite::ScriptReal,
                         primary_word,
+                        secondary_word: None,
                     });
                     Value::Real(value)
                 }),

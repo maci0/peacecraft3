@@ -480,3 +480,72 @@ gate still fails after one of four exact real results; neither exit 101 nor exit
 134 is accepted as a passing gate. The private primary-only initialization and
 compatibility catalog are unchanged. This advances the missing-native boundary
 without qualifying engine initialization or complete RNG consumer parity.
+
+
+## Secondary real consumer trace correction (2026-11-13)
+
+The current host already connects `AIsb` swing-start rolls through
+`orb_swing_start` to `draw_random_secondary_real`. Its caller log mislabeled those
+calls as secondary dice and retained only the unchanged primary word. The log now
+distinguishes `SecondaryReal` and records the selected secondary post-draw word
+for both secondary call kinds. Generator arithmetic and draw ordering are unchanged.
+
+Fresh bounded objdump inspection of the selected SHA-256-qualified 1.29.2.9231
+image rechecks the call at `0xc9f35d` to `0x69a030`, whose admitted owner/channel
+path uses the selected secondary generator. This is static native-code evidence,
+not a new original-client execution. REA's file-header observation
+`ev_d6ef7de70a29cb3cd3012fc21ee7709660e7b3d8ff4f7cf5d1009ecd4af20655`
+confirms input identity only; it does not establish the helper's semantics.
+The bounded disassembly and detailed earlier binding are separate observations.
+The fresh local disassembly receipt is `/tmp/pc3-sol61-03-rng-native.json`;
+it contains the exact commands and pre/post image identity and is not committed.
+
+Mixed-consumer and actual orb/combat synthetic regressions compare caller order,
+post-draw words and complete retained state, including refusal and reseed behavior;
+see [slice-rng.md](slice-rng.md#current-correction-2026-11-13). This closes a trace
+identity/visibility defect in an existing consumer. It adds no newly qualified
+engine initializer or consumer. The semantic source of the per-slot seed inputs,
+full engine owner lifecycle, complete draw history and native tick parity remain
+unresolved; the earlier capture does not justify an invented seed or fixed skip.
+
+The earlier private `.scratch/script-rng-*` receipts are not present in the
+current main checkout. The bounded selected-image objdump inspection does not
+recover the missing startup input provenance. Resolving engine initialization
+requires that caller/input evidence; replaying the historical observed seed or
+draw total would bypass the question.
+
+
+## Engine/script initializer distinction rechecked (2026-11-13)
+
+Fresh bounded selected-image disassembly makes the remaining initializer gap
+concrete. The engine path at `0x51c924..0x51c959` selects a seed, calls the primary
+seed helper, then forwards that same input to `0x6647c0`. That wrapper calls
+`0x69a0d0` before transferring to another subsystem. The related path at
+`0x51bf61..0x51bf7d` likewise passes the same loaded local to both seed calls.
+Neither reviewed prefix advances the primary between those calls.
+
+The JASS setter at `0x4a99a0..0x4a99c7` instead seeds the primary, calls the
+primary draw helper once, and tail-transfers its result to `0x69a0d0`. The latter
+seeds a local generator from its argument, advances that local generator in its
+loop and packs each secondary entry from the successive local result. Therefore
+reusing the script setter for engine initialization changes both primary state
+and the secondary seed input on these reviewed paths. This is static code
+reasoning on the identified image, not a new startup runtime observation.
+
+The exact commands and bounded windows are retained in the same private
+`/tmp/pc3-sol61-03-rng-native.json` receipt. Raw call/pointer scans used to select
+these windows are candidate discovery, not a complete caller graph. Selection
+of the engine branch and semantic provenance of its loaded seed remain open.
+The current production host continues to admit explicit script reseeding only;
+no initializer is installed from a captured seed, branch immediate or fixed
+warmup. The needed next integration is a source-qualified engine seed input and
+owner lifecycle, with separate raw-seed initialization and consumer execution.
+
+
+The unresolved contribution is narrowed to the payload obtained by `0x5acc80`
+at `0x51c212`: a selected session record supplies the bounded payload, then two
+`0x45c310` calls decode its values. After the decode-completion check, the first
+result feeds the XOR/rotation accumulator at `0x51c2a9..0x51c2b8`. The getter's
+copying relationship is visible at `0x5accd4..0x5accfc`; the semantic writer and
+origin of that record payload are not qualified here. Those are the next
+provenance boundary, rather than the primary seed-packing arithmetic.
