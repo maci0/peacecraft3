@@ -378,6 +378,109 @@ fn tick_delay_drift_or_invalid_initialization_refuses_without_stock_fallback() {
     }
 }
 
+fn mana_fixture(shift: u32, floor: i8) -> Memory {
+    let table = shift + 0x60000;
+    let helper = shift + 0x70000;
+    let global = shift + 0x80000;
+    let mut config = vec![0x90; 0x61];
+    config[..6].copy_from_slice(&[0x8b, 0x45, 0x18, 0xff, 0x75, 0x20]);
+    config[0x14..0x1c].copy_from_slice(&[0x8b, 0x10, 0x8b, 0x45, 0x1c, 0x89, 0x55, 0xe0]);
+    config[0x4d..0x55].copy_from_slice(&[0x8d, 0x45, 0xd0, 0x50, 0x56, 0xff, 0x75, 0x08]);
+    config[0x5c] = 0xe8;
+    config[0x5d..].copy_from_slice(&0x801c50u32.wrapping_sub(helper + 0x91).to_le_bytes());
+    let mut init = vec![0x90; 40];
+    init[..12].copy_from_slice(&[0x8b, 0x86, 0xc0, 0x01, 0, 0, 0x8d, 0x8e, 0xc0, 0x01, 0, 0]);
+    init[12..15].copy_from_slice(&[0x6a, 0, 0x68]);
+    init[19] = 0x68;
+    init[20..24].copy_from_slice(&global.to_le_bytes());
+    init[24] = 0x68;
+    init[25..29].copy_from_slice(&global.to_le_bytes());
+    init[37..].copy_from_slice(&[0xff, 0x50, 0x18]);
+    vec![
+        (
+            0x675835,
+            [&[0xc7, 0x86, 0xc0, 0x01, 0, 0][..], &table.to_le_bytes()].concat(),
+            true,
+        ),
+        (table + 0x18, helper.to_le_bytes().to_vec(), false),
+        (helper + 0x30, config, true),
+        (0x670a10, init, true),
+        (
+            0x8c3ee9,
+            vec![
+                0x8b, 0x46, 0x10, 0x89, 0x45, 0xf8, 0x8b, 0x46, 0x14, 0x89, 0x45, 0xfc, 0x8d, 0x97,
+                0x80, 0, 0, 0, 0x8b, 0x01, 0x8b, 0x49, 0x04, 0x89, 0x02, 0x89, 0x4a, 0x04,
+            ],
+            true,
+        ),
+        (
+            0x8c47d0,
+            vec![
+                0xf3, 0x0f, 0x10, 0x83, 0x80, 0, 0, 0, 0x8d, 0xb3, 0x80, 0, 0, 0,
+            ],
+            true,
+        ),
+        (0x8c4817, vec![0xf3, 0x0f, 0x10, 0x06], true),
+        (
+            0x401300,
+            [
+                &[0x6a, floor as u8, 0x68][..],
+                &global.to_le_bytes(),
+                &[0xe8],
+                &0x9a1620u32.wrapping_sub(0x401300 + 12).to_le_bytes(),
+                &[0x83, 0xc4, 0x08, 0xc3],
+            ]
+            .concat(),
+            true,
+        ),
+    ]
+}
+
+fn read_mana_minimum(memory: &Memory) -> Result<f32, String> {
+    Rules::mana_minimum(&mut |va, n, code| {
+        memory
+            .iter()
+            .find(|(at, b, executable)| {
+                va >= *at && va - *at < b.len() as u32 && code == *executable
+            })
+            .and_then(|(at, b, _)| b.get((va - *at) as usize..(va - *at) as usize + n))
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| "synthetic mana window missing".into())
+    })
+}
+
+#[test]
+fn mana_minimum_follows_proxy_descriptor_and_nonstock_bootstrap() {
+    for shift in [0, 0x100000] {
+        for floor in [-3, 0, 4, 9] {
+            assert_eq!(
+                read_mana_minimum(&mana_fixture(shift, floor)).unwrap(),
+                f32::from(floor)
+            );
+        }
+    }
+}
+
+#[test]
+fn mana_minimum_rejects_changed_component_descriptor_or_clamp_roles() {
+    for mutate in [
+        (|m: &mut Memory| m[0].1[2] = 0xa0) as fn(&mut Memory),
+        |m| m[2].1[2] = 0x14,
+        |m| m[2].1[0x1b] = 0xe4,
+        |m| m[2].1[0x5d] ^= 1,
+        |m| m[3].1[20] ^= 1,
+        |m| m[4].1[2] = 0x14,
+        |m| m[5].1[4] = 0x84,
+        |m| {
+            m[7].1.truncate(8);
+        },
+    ] {
+        let mut memory = mana_fixture(0, 4);
+        mutate(&mut memory);
+        assert!(read_mana_minimum(&memory).is_err());
+    }
+}
+
 #[test]
 #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
 fn selected_original_autocast_classes_bind() {
@@ -426,6 +529,7 @@ fn selected_original_autocast_classes_bind() {
         );
     }
     assert_eq!(rules.alarm_code, Some(*b"Aalr"));
+    assert!(rules.mana_minimum.is_some_and(f32::is_finite));
     assert_eq!(class(b"Ainf").enable.unwrap().group, 1);
     assert_eq!(class(b"Ambt").enable.unwrap().group, 1);
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);

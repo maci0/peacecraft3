@@ -197,3 +197,37 @@ bias for such a clock while the paired short clock tracks the requested delays
 at the diagnostic precision. These printed increments must not become a
 universal 8192-based scheduling grid. Timer-query arithmetic and actual spell
 queue deadlines remain separate fidelity questions.
+
+## Mana lower-bound binding
+
+The shared rule input now admits `Rules.mana_minimum` from CUnit's mana proxy,
+rather than introducing another literal lower bound in spell settlement. CUnit
+constructor writer `0x675835` binds proxy `+0x1c0` to the Float vtable. Its
+`+0x18` initializer is `0x800cd0`: argument five becomes descriptor `+0x10`,
+the minimum. CUnit initialization `0x670a10..0x670a38` supplies the minimum's
+address; bootstrap `0x401300` initializes that same global through the native
+integer-to-real conversion. The decoder reads the operand and checks these
+relationships, including the proxy/helper vtable link and descriptor forwarding.
+
+The resource initializer `0x8c3ee9..0x8c3f05` copies descriptor `+0x10` to
+resource `+0x80`; `0x8c47a0` clamps against this bound both before and after its
+resource delta. Those writes and clamp readpoints are also checked. This binds
+the mana-specific lower operand without asserting an identical implementation
+of the original generic property registry. That registry's complete deferred
+instantiation path remains unqualified; other resource lower bounds must not be
+inferred from mana. Existing synthetic rule fixtures leave the capability absent
+unless supplied explicitly, preserving the unsupported boundary for consumers.
+
+The associated retained native dossiers include CUnit initialization
+`ev_d5cbe985ea147539e895b6db5229e08a36070e37fd348f420b1cef539bbf2abb`,
+CUnit construction
+`ev_a8fc81bd2bfacb0e81fa9edc2b6d7f29c71665999a883162990f88ce0ba30a85`,
+Float initialization
+`ev_f483f8b1108cef7021f9a18959d9ff5a68a571ee82c96f08c5a3c9a0b2737333`,
+and resource initialization
+`ev_417ddc9988420f0fe5555747f5299a33b3d9d6b6ac12fc3d04253f77b3d2c9b0`
+in the local evidence bundle named above. Nonstock negative, zero and positive
+initializer operands, relocated proxy/helper/global addresses, changed component,
+argument, descriptor, forwarding and clamp roles, and truncated initialization
+have explicit regressions. This rule binding alone does not implement Heal
+payment or its retained cast lifecycle.
