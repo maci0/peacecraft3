@@ -82,6 +82,7 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         self.config.as_ref()?;
         if let Some(result) = self.priority_native(name, args) {
@@ -93,7 +94,7 @@ impl ObjectHost {
         if !CONTRACTS.iter().any(|c| c.0 == name) {
             return None;
         }
-        Some(self.apply_config(name, args))
+        Some(self.apply_config(name, args, strings))
     }
     fn speed_lock_native(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |why| self.inner.error(name, why);
@@ -146,7 +147,12 @@ impl ObjectHost {
                 .ok_or_else(|| fail(Failure::ConfigState("speed lock is unset")))
         }
     }
-    fn apply_config(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn apply_config(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         let fail = |problem| self.inner.error(name, problem);
         let config = self
             .config
@@ -154,6 +160,8 @@ impl ObjectHost {
             .ok_or_else(|| fail(Failure::ConfigState("not admitted")))?;
         match (name, args) {
             ("SetMapName" | "SetMapDescription", [Value::Str(text)]) => {
+                let text = pcx_script::text::native_map_string(text, strings)
+                    .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
                 let other = if name == "SetMapName" {
                     &config.description
                 } else {
@@ -166,7 +174,7 @@ impl ObjectHost {
                 let mut copy = String::new();
                 copy.try_reserve_exact(text.len())
                     .map_err(|_| fail(Failure::Capacity))?;
-                copy.push_str(text);
+                copy.push_str(&text);
                 if name == "SetMapName" {
                     config.name = Some(copy);
                 } else {

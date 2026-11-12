@@ -354,3 +354,108 @@ verify private Xvfb and null audio. Receipts are retained locally in
 selected zero tests was discarded, and the earlier host-loop-only test was not
 accepted as session coverage. No browser runtime or original-client comparison
 was run for this correction.
+
+## Query precision and retained pause state (2026-11-13)
+
+This follow-up uses the same selected image and version identified above.
+It qualifies timer **queries**, independently of the recreation's double-precision
+queue deadlines. The earlier statement that native query rounding is absent now
+applies only to explicit partial timer hosts without admitted timer-query rules.
+The campaign client attaches the reviewed rules to its existing numeric policy.
+No frame rate, universal callback quantum or deadline rounding follows from this
+change.
+
+### Source and runtime evidence
+
+The retained REA source join covers constructor `0x4fe380`, start `0x4fe6f0` /
+`0x7fb820`, schedule `0x7fb940`, extended remaining `0x7fc0b0`, full timeout
+`0x7fbad0`, active elapsed `0x7fbb90`, object elapsed `0x4fe470`, pause
+`0x4fe640`, resume `0x4fe6b0` and dispatch `0x7fc390`. The segment initializer
+at `0x40d210` calls the same admitted integer-to-real helper as the numeric
+policy. The schedule routine loads its minimum delay from the selected image.
+Neither operand is copied into a simulation constant. The remainder routine
+`0x9a1a90` uses the fractional part of an approximate reciprocal product, then
+multiplies by the segment; host floating-point remainder is a different operation.
+
+Static evidence IDs include
+`ev_db21eb4449ca53eceae21ce942cfd23013cd20dcd368f5ca355efc48063343c4`
+(pause),
+`ev_dfc0abf7d2b63817c094c2f0871f6236d3aaa4b5ac9a0e48e2af40433e4c8ff0`
+(resume), and
+`ev_e260a2eb9c21676859e6cb99c46a2e471ac6047892ccdd3f134a7a08b13a2340`
+(extended dispatch). The local complete 18-record bundle is
+`/tmp/pc3-sol02-clock-audit/query-lifecycle-rea-evidence.json`; the analysis
+session was closed after retaining its snapshot. This is static evidence,
+not an observation that those instructions executed in a particular capture.
+
+Three diagnostic scenarios were each repeated twice in a private, networkless,
+read-only Wine/software-Mesa container with verified private Xvfb and Pulse null
+sink. Original map terrain and main were retained; bounded diagnostic JASS and
+its corrected member CRC were substituted locally. These are instrumented
+reference maps, not unchanged campaign or native Windows acceptance runs.
+Every owned probe container was stopped and independently verified exited/PID 0.
+No map bytes, generated copies or captured original contents enter this repository.
+
+The paired-clock scenario queries independent 8-second and 2000-second timers
+from the **same** callbacks. Requested non-dyadic durations include `0.02`,
+`0.47`, `1.03`, `0.0317` and `0.0031`; dyadic controls include `0.5` and `1.25`.
+The short/long readings differ, with independent signed `I2S(R2I(delta*scale))`
+controls establishing that formatting alone does not cause the discrepancy.
+The 2000-second readings cannot establish an 8192 Hz callback quantum. The
+source query's cancellation and arithmetic order account for their apparent grid.
+
+The lifecycle scenario records 72 snapshots / 216 query values. An independent
+bounded JASS encoder normalizes each real by exact power-of-two multiplications
+and reports its sign, exponent and 24-bit mantissa with integer conversion.
+It avoids formatted-real strings as the bit oracle. The two complete 88-record
+traces agree after removing the run nonce; raw SHA-256 identities are
+`695a650024019c0a9b06874e8b09a1e6a17d80f4dc8ddf71087067cef51a7874` and
+`ed19dde14304acbc75c253633e2e92a6e92b68c41bdb74cd76437296e36e992c`.
+The local witness and cleanup receipts are
+`/tmp/pc3-sol02-clock-audit/query-lifecycle-witness.json` and
+`query-lifecycle-cleanup.json` in that directory. It exercises short and long
+starts from a callback, segment crossings, pause/resume, restart and expiry.
+
+### Implemented readpoints and bounded acceptance
+
+`NumericPolicy::with_timer_queries` validates same-image source windows and
+operand/call relationships and reuses the existing software arithmetic and
+reciprocal table. Each started timer retains a separate query epoch and cached
+remaining value. Full segments use the source's 16-bit count; construction and
+projection are bounded by that count without allocating per-segment entries.
+Unsupported real classes, invalid operands, counts outside that representation
+and changed image/policy identities refuse before replacing an armed run.
+
+Active elapsed is reconstructed virtual timeout minus active remaining in
+source arithmetic order. Pause stores remaining. Inactive elapsed is original
+raw timeout minus that cached value. Resume creates a partial query epoch from
+the cache; `TimerGetTimeout` still returns the original raw timeout. Restart
+retains the cache. Consequently inactive elapsed can legitimately be negative
+after a shorter restart. Neither elapsed nor remaining is artificially clamped.
+Fresh unstarted timer queries retain their previously qualified zero behavior.
+
+The actual public host regression
+`selected_native_timer_query_bits_match_public_lifecycle` admits the selected
+numeric/rule image and drives `TimerStart`, queries, pause/resume/restart and
+`next_timer_expiry`; it compares all 216 bit fields against the explicit local
+witness. It passed with both replicated traces supplying that witness. Run it
+with `PEACECRAFT3_QUERY_IMAGE`, `PEACECRAFT3_QUERY_WITNESS` and `--ignored`.
+The ordinary synthetic tests derive an alternate segment and minimum delay,
+exercise retained cache/negative elapsed and preserve armed state on refusal.
+They establish reconstruction invariants, not additional native observations.
+
+### Remaining limits
+
+Callback query time follows the retained query epoch's source arithmetic;
+outside timer callbacks it still comes from the caller-supplied logical clock.
+The application's complete native game-clock producer and wrap policy remain
+separate work. Timer-register timed-event callbacks retain their existing clock
+path; their native queue implementation is not inferred from `TimerStart`.
+Delivery continues to use the existing double-precision deadlines and recreation
+tie policy. Exact segment-end residual scheduling, minimum-delay firing and
+arbitrary equal-boundary order have not been changed or claimed equivalent.
+Regular periodic callbacks retain the old epoch readpoint, while the segmented
+periodic source path restarts before dispatch; the new bit witness does not
+qualify every periodic or yielding/reentrant combination. Resume with a non-null
+handler has a separate retained-callback rearm path at `0x4fe5d0`; its complete
+schedule remains unqualified here. No application-wide tick parity is claimed.

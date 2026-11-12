@@ -7235,3 +7235,72 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   acquisition, caster-owned channel state, effects and original-client tick
   parity remain open. See
   [Neutral Heal activation](docs/re-notes/ability-autocast-on.md).
+
+- 2026-11-13: Raw script literals decode escapes and retain code-tag markers
+  through variables, arrays, concatenation and calls. Evidenced native
+  consumers perform their own single WTS lookup after identity/local-recipient
+  checks; no generic native-argument expansion occurs. Missing source, missing
+  entry and malformed text remain distinct. Borrowed/owned sessions, AI,
+  preload and recording decorators preserve the selected map source. Main's
+  affected full package suites pass 3,444 tests, zero failed, 159 explicit
+  ignores, including sixteen actual consumer/forwarding regressions. Strict
+  native/WASM all-target/all-feature Clippy and both libraries pass. Corrected
+  application fixtures retain raw Capture and precise call diagnostics; all 26
+  session/callback cases and the application rebuild pass with core source
+  unchanged. Human01 and Undead02 pass current 300-second idle horizons; Orc02
+  and Human08 reach unsupported `ACcs`/`ACwb` work. Native string rendering,
+  case/hash/formatting and complete mission/tick parity remain open. See
+  [string boundaries](docs/re-notes/script-string-natives.md).
+
+- 2026-11-13: Paid worker-required Human construction sites survive ownership
+  transfer with site identity, HP, elapsed work and banks preserved. The old
+  worker remains observable immediately; ordinary work revalidation releases
+  an owner mismatch without refund/error. Same-owner repair can reenroll and
+  complete already-paid work. Other unqualified site classes still refuse.
+  Four controlled original-client/Wine traces, source-native observations and
+  public lifecycle tests support this sampled slice. All named main transfer
+  tests pass in the complete package run above; native/WASM checks, libraries
+  and application checks pass. The autonomous death/transfer fixtures now
+  actually issue the public request selecting that mode. Assistant builders,
+  exact polling/ownership-event timing, automatic reacquisition and transfer
+  cancellation remain open. See
+  [construction matrix](docs/re-notes/unit-construction.md).
+
+- 2026-11-13: Type enumeration and four counted variants now share canonical
+  groups and VM predicates. Limits use the decoded unsigned insertion quota;
+  zero bypasses the limit. Literal/computed `TRIGSTR` type names stay raw on
+  the current VM, and type-only admission does not admit undeclared `UnitId`.
+  Native spatial order and mutation semantics remain unqualified. See
+  [group enumeration](docs/re-notes/slice-group-enum.md).
+
+- 2026-11-13: Slow now delivers CHANNEL/CAST synchronously, delivers EFFECT
+  before payment/buff commitment, and finishes after the source backswing.
+  Interruption and callback edits retain the qualified payment semantics.
+  Resource checks precede cast publication and art allocation; three public
+  failure regressions cover exhausted event, handle and buff capacities,
+  including unchanged permanent art identities/history and old Slow state.
+  Source-derived autocast tick, minimum-mana and simple-clock bindings plus
+  mandatory due boundaries are integrated; actual automatic acquisition and
+  canonical turning are still open. See
+  [Slow qualification](docs/re-notes/slow-autocast-qualification.md).
+
+- 2026-11-13: `MeleeDifficulty` captures source-qualified per-owner input at AI
+  creation, independently of script globals and later input refreshes. Actual
+  supplied `common.ai` build-helper calls pass. `R2S`/`R2SW` use source-derived
+  formatting through the VM and normal campaign reader: all 194 original-client
+  expressions match. Timer query epochs/cache reproduce all 216 native witness
+  bit fields across the qualified pause/resume/restart and segment cases;
+  delivery scheduling is unchanged. Source queue production/wrap and further
+  callback lifecycle work remain separate. See
+  [AI difficulty](docs/re-notes/campaign-ai-melee-difficulty.md),
+  [formatting](docs/re-notes/script-string-natives.md) and
+  [timer queries](docs/re-notes/legacy-timer-start.md).
+
+  Independent combined validation passes 3,494 package tests, zero failed,
+  163 explicit ignores; all seven explicit local-image/native-witness gates,
+  strict native/WASM all-target/all-feature Clippy, both libraries, all 26
+  application session/callback cases and the application rebuild pass. Rust
+  hashes remain unchanged through checks. Receipts:
+  `/tmp/pc3-next-integration-validation/`. Focused review closes the Slow
+  failure-path findings. These checks do not establish complete missions,
+  rendered/audio parity, full save/load or tick-identical execution.

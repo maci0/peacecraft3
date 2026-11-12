@@ -290,8 +290,5 @@ pub fn current_cloned_tickets_preserve_vm_state_and_diagnostics() {
     }
     assert_eq!(state.global("counter"), Some(Value::Int(11)));
     assert_eq!(state.host().unwrap().inits, 1);
-    assert_eq!(
-        state.host().unwrap().text,
-        vec!["|cffff0000Authored|r|nText"; 3]
-    );
+    assert_eq!(state.host().unwrap().text, vec!["TRIGSTR_7"; 3]);
 }

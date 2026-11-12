@@ -21,6 +21,7 @@ pub(super) struct Cast {
     backswing: f64,
 }
 
+#[derive(Clone)]
 struct Payment {
     caster: HandleId,
     target: HandleId,
@@ -34,6 +35,13 @@ struct Payment {
     movement: f32,
     attack: f32,
     expires_at: f64,
+}
+
+pub(super) struct Acceptance {
+    revision: u64,
+    backswing: f64,
+    channel: Vec<super::super::combat::AbilityEvent>,
+    cast: Vec<super::super::combat::AbilityEvent>,
 }
 
 #[derive(Default)]
@@ -165,17 +173,48 @@ impl ObjectHost {
         Ok(f64::from(seconds))
     }
 
-    pub(super) fn begin_slow_windup(&mut self, caster: HandleId, now: f64) -> Result<(), Error> {
+    pub(super) fn prepare_slow_acceptance(
+        &mut self,
+        caster: HandleId,
+    ) -> Result<Acceptance, Error> {
         let backswing = self.prepare_slow_windup(caster)?;
         let channel = self.slow_rows(caster, "CHANNEL")?;
         let cast = self.slow_rows(caster, "CAST")?;
-        self.reserve_game_event_delivery(channel.len() + cast.len())?;
-        let state = self.curses.as_mut().expect("curse admission");
-        let revision = state
+        let interrupt = self
+            .curses
+            .as_ref()
+            .and_then(|s| s.pending.get(&caster))
+            .is_some_and(|c| c.slow.is_some() && !matches!(c.stage, Stage::SlowEnding));
+        let interrupt = if interrupt {
+            self.slow_rows(caster, "ENDCAST")?.len()
+        } else {
+            0
+        };
+        self.reserve_game_event_delivery(channel.len() + cast.len() + interrupt)?;
+        let revision = self
+            .curses
+            .as_ref()
+            .expect("curse admission")
             .slow_lifecycle
             .revision
             .checked_add(1)
             .ok_or_else(|| self.inner.error(NATIVE, Failure::Capacity))?;
+        Ok(Acceptance {
+            revision,
+            backswing,
+            channel,
+            cast,
+        })
+    }
+
+    pub(super) fn begin_slow_windup(&mut self, caster: HandleId, acceptance: Acceptance) {
+        let Acceptance {
+            revision,
+            backswing,
+            channel,
+            cast,
+        } = acceptance;
+        let state = self.curses.as_mut().expect("curse admission");
         state.slow_lifecycle.revision = revision;
         let pending = state.pending.get_mut(&caster).expect("Slow windup");
         pending.slow = Some(Cast {
@@ -192,10 +231,6 @@ impl ObjectHost {
         self.commit_ability_events(channel, subject);
         self.commit_ability_events(cast, subject);
         self.settle_slow_event(subject.slow);
-        if self.timer_game_time() != Some(now) {
-            return Err(self.curse_error("Slow acceptance changed the game clock"));
-        }
-        Ok(())
     }
 
     pub(super) fn slow_effect_in_progress(&self, caster: HandleId) -> bool {
@@ -248,7 +283,7 @@ impl ObjectHost {
             return Ok(());
         }
         match cast.stage {
-            Stage::Walking => self.walk_curse_cast(caster, target, alias, Kind::Slow, now),
+            Stage::Walking => self.walk_curse_cast(caster, target, alias, Kind::Slow, now, None),
             Stage::Casting { effect_at } if now >= effect_at => self.emit_slow_effect(caster, now),
             Stage::SlowBackswing { until } if now >= until => self.finish_slow_cast(caster),
             Stage::Casting { .. }
@@ -381,6 +416,13 @@ impl ObjectHost {
     }
 
     pub(crate) fn settle_slow_event(&mut self, context: Option<Context>) {
+        if self
+            .curses
+            .as_ref()
+            .is_some_and(|s| s.slow_lifecycle.fault.is_some())
+        {
+            return;
+        }
         let Some(context) = context else { return };
         if self.slow_event_pending(context) {
             return;
@@ -435,15 +477,22 @@ impl ObjectHost {
     fn settle_slow_payment(&mut self, context: Context, active: bool) -> Result<(), Error> {
         let Some(payment) = self
             .curses
-            .as_mut()
+            .as_ref()
             .expect("curse admission")
             .slow_lifecycle
             .payments
-            .remove(&context.revision)
+            .get(&context.revision)
+            .cloned()
         else {
             return Ok(());
         };
         if matches!(self.inner.entry(payment.caster)?, Entry::RemovedUnit { .. }) {
+            self.curses
+                .as_mut()
+                .expect("curse admission")
+                .slow_lifecycle
+                .payments
+                .remove(&context.revision);
             return Ok(());
         }
         let record = self.executed_unit(payment.caster)?;
@@ -465,6 +514,35 @@ impl ObjectHost {
                 .map_err(|e| self.curse_error(format!("Slow mana subtraction: {e}")))?,
         )
         .max(payment.minimum);
+        let completion = if active {
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| self.curse_error("Slow clock missing"))?;
+            let cast = self
+                .curses
+                .as_ref()
+                .expect("curse admission")
+                .pending
+                .get(&payment.caster)
+                .ok_or_else(|| self.curse_error("active Slow cast missing"))?;
+            let backswing = cast
+                .slow
+                .as_ref()
+                .ok_or_else(|| self.curse_error("Slow phases missing"))?
+                .backswing;
+            Some((now + payment.cooldown, now + backswing))
+        } else {
+            None
+        };
+        if active && self.live(payment.target).is_some() {
+            self.apply_slow(
+                payment.target,
+                payment.buff,
+                payment.movement,
+                payment.attack,
+                payment.expires_at,
+            )?;
+        }
         if let Entry::Unit { record } = self.inner.entry_mut(payment.caster)? {
             record
                 .vitals
@@ -472,31 +550,23 @@ impl ObjectHost {
                 .expect("validated Slow vitality")
                 .mana = remaining;
         }
-        if active {
-            if self.live(payment.target).is_some() {
-                self.apply_slow(
-                    payment.target,
-                    payment.buff,
-                    payment.movement,
-                    payment.attack,
-                    payment.expires_at,
-                )?;
-            }
-            let now = self
-                .timer_game_time()
-                .ok_or_else(|| self.curse_error("Slow clock missing"))?;
+        if let Some((ready_at, until)) = completion {
             let state = self.curses.as_mut().expect("curse admission");
             state
                 .ready_at
-                .insert((payment.caster, payment.alias), now + payment.cooldown);
+                .insert((payment.caster, payment.alias), ready_at);
             let cast = state
                 .pending
                 .get_mut(&payment.caster)
                 .expect("active Slow cast");
-            cast.stage = Stage::SlowBackswing {
-                until: now + cast.slow.as_ref().expect("Slow phases").backswing,
-            };
+            cast.stage = Stage::SlowBackswing { until };
         }
+        self.curses
+            .as_mut()
+            .expect("curse admission")
+            .slow_lifecycle
+            .payments
+            .remove(&context.revision);
         Ok(())
     }
 

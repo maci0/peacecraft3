@@ -91,6 +91,15 @@ pub struct Site {
     linked_mine: Option<HandleId>,
 }
 impl Site {
+    pub(super) fn owner_transfer_supported(&self) -> bool {
+        // Worker-required sites are admitted through the qualified Human construction path.
+        !self.autonomous
+            && !self.initial_pending
+            && !self.canceled
+            && self.linked_mine.is_none()
+            && self.fault.is_none()
+    }
+
     pub(super) fn note_damage(&mut self) {
         self.damaged = true;
     }
@@ -851,7 +860,8 @@ impl ObjectHost {
                     true
                 } else {
                     let worker = self.executed_unit(site.worker?).ok()?;
-                    worker.paused_since.is_none()
+                    worker.owner == record.owner
+                        && worker.paused_since.is_none()
                         && worker.combat.as_ref().is_none_or(|state| !state.dead)
                 };
                 (!site.initial_pending
@@ -1475,7 +1485,11 @@ impl ObjectHost {
         let mut delta = now - state.through;
         if let Some(worker) = state.worker {
             let worker = self.executed_unit(worker)?;
-            if worker.owner != owner || worker.vitals.is_none_or(|v| v.life <= 0.) {
+            if worker.owner != owner {
+                // Site transfer keeps participation until ordinary work revalidates it.
+                state.worker = None;
+                delta = 0.;
+            } else if worker.vitals.is_none_or(|v| v.life <= 0.) {
                 return Err(
                     self.construction_error("construction worker lifecycle requires cleanup")
                 );

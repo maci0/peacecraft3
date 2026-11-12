@@ -9,7 +9,7 @@
 //!
 //! # What is implemented
 //!
-//! Numeric conversions and byte string length. `I2R` and `R2I` are proved
+//! Numeric conversions, source-qualified real formatting and byte string length. `I2R` and `R2I` are proved
 //! from the shipped scripts rather than from their names:
 //!
 //! - `I2R`: integer to real. `Blizzard.j`'s `ModuloReal` computes
@@ -27,14 +27,14 @@
 //!
 //! - `StringLength`: byte length through the first NUL, with one native
 //!   trigger-table lookup. See `docs/re-notes/script-string-natives.md` for
-//!   the selected-image evidence and remaining literal-expansion limits.
+//!   the selected-image evidence and native-specific lookup boundary.
 //!
-//! Everything else is refused with its name and the span of the call, which
-//! is what `PLAN.md` requires of a missing native. The other formatting natives
-//! (`R2S`, `R2SW`) and the string natives (`SubString`, `StringCase`,
-//! `StringHash`) are refused because their exact output is not
-//! derived yet, and a slightly-wrong substring or number format is exactly the
-//! failure a loud error prevents.
+//! - `R2S` and `R2SW` call the selected runtime's qualified real formatter.
+//!   Missing policy or unsupported input/output remains an explicit error;
+//!   host float formatting is never used.
+//!
+//! Other string natives (`SubString`, `StringCase`, `StringHash`) remain refused
+//! with the call's name and span until their exact behavior is derived.
 
 use crate::ast::{NativeDecl, Param, TypeKind, TypeRef};
 use crate::span::Span;
@@ -68,26 +68,35 @@ pub enum NativeImpl {
     RealToInt,
     /// `I2S`, integer to its signed decimal text.
     IntToString,
+    /// `R2S`, real formatting through a source-qualified runtime.
+    RealToString,
+    /// `R2SW`, the same formatter with explicit width and precision.
+    RealToStringWidth,
     /// `StringLength`, NUL-terminated byte length after trigger-table lookup.
     StringLength,
 }
 
 impl NativeImpl {
-    // Each builtin consumes one scalar and returns one scalar.
     fn accepts_signature(self, declaration: &Native) -> bool {
-        let [parameter] = declaration.params.as_slice() else {
-            return false;
+        let (inputs, output): (&[TypeKind], _) = match self {
+            Self::IntToReal => (&[TypeKind::Integer], TypeKind::Real),
+            Self::RealToInt => (&[TypeKind::Real], TypeKind::Integer),
+            Self::IntToString => (&[TypeKind::Integer], TypeKind::String),
+            Self::RealToString => (&[TypeKind::Real], TypeKind::String),
+            Self::RealToStringWidth => (
+                &[TypeKind::Real, TypeKind::Integer, TypeKind::Integer],
+                TypeKind::String,
+            ),
+            Self::StringLength => (&[TypeKind::String], TypeKind::Integer),
         };
-        let (input, output) = match self {
-            Self::IntToReal => (TypeKind::Integer, TypeKind::Real),
-            Self::RealToInt => (TypeKind::Real, TypeKind::Integer),
-            Self::IntToString => (TypeKind::Integer, TypeKind::String),
-            Self::StringLength => (TypeKind::String, TypeKind::Integer),
-        };
-        !parameter.ty.array
-            && !declaration.ret.array
-            && parameter.ty.kind == input
+        !declaration.ret.array
             && declaration.ret.kind == output
+            && declaration.params.len() == inputs.len()
+            && declaration
+                .params
+                .iter()
+                .zip(inputs)
+                .all(|(parameter, input)| !parameter.ty.array && &parameter.ty.kind == input)
     }
 }
 
@@ -245,6 +254,8 @@ pub fn implemented(name: &str) -> Option<NativeImpl> {
         "I2R" => Some(NativeImpl::IntToReal),
         "R2I" => Some(NativeImpl::RealToInt),
         "I2S" => Some(NativeImpl::IntToString),
+        "R2S" => Some(NativeImpl::RealToString),
+        "R2SW" => Some(NativeImpl::RealToStringWidth),
         "StringLength" => Some(NativeImpl::StringLength),
         _ => None,
     }

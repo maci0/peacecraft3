@@ -7,6 +7,12 @@ use crate::script_random::{profile::arithmetic_shapes, real};
 use crate::scripts::AssetIdentity;
 use pcx_script::{RealOps, Value, ast::BinOp};
 
+#[path = "script_numeric_format.rs"]
+mod formatting;
+pub use formatting::Binding as FormatBinding;
+#[path = "timer_query_rules.rs"]
+pub mod timer_query;
+
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub origin: AssetIdentity,
@@ -52,6 +58,8 @@ pub struct NumericPolicy {
     equality_threshold: f32,
     literal_bytes: usize,
     math: Option<crate::script_math::ScriptMath>,
+    formatting: Option<formatting::Formatter>,
+    timer_queries: Option<timer_query::Rules>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -199,11 +207,27 @@ impl NumericPolicy {
             equality_threshold,
             literal_bytes,
             math: None,
+            formatting: None,
+            timer_queries: None,
         })
     }
 
     pub fn origin(&self) -> &AssetIdentity {
         &self.binding.origin
+    }
+    pub fn with_formatting(
+        mut self,
+        image: &[u8],
+        binding: &FormatBinding,
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        self.formatting = Some(formatting::Formatter::read(
+            image,
+            binding,
+            &self.binding,
+            budget,
+        )?);
+        Ok(self)
     }
     pub fn image_sha256(&self) -> &Sha256Digest {
         &self.binding.image_sha256
@@ -239,6 +263,19 @@ impl NumericPolicy {
     }
     pub fn math(&self) -> Option<&crate::script_math::ScriptMath> {
         self.math.as_ref()
+    }
+    /// Attach query arithmetic without changing the caller's delivery clock.
+    pub fn with_timer_queries(
+        mut self,
+        image: &[u8],
+        binding: &timer_query::Binding,
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        self.timer_queries = Some(timer_query::Rules::read(image, binding, &self, budget)?);
+        Ok(self)
+    }
+    pub(crate) fn timer_queries(&self) -> Option<&timer_query::Rules> {
+        self.timer_queries.as_ref()
     }
     pub(crate) fn equality_threshold(&self) -> f32 {
         self.equality_threshold
@@ -338,6 +375,17 @@ fn reciprocal_shape(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 impl RealOps for NumericPolicy {
+    fn real_to_string(
+        &self,
+        value: f32,
+        width_precision: Option<(i32, i32)>,
+    ) -> Result<String, String> {
+        self.formatting
+            .as_ref()
+            .ok_or_else(|| self.runtime_error("real formatter is not admitted"))?
+            .render(value, width_precision)
+            .map_err(|why| self.runtime_error(why))
+    }
     fn literal(&self, spelling: &str) -> Result<f32, String> {
         if spelling.len() > self.literal_bytes {
             return Err(self.runtime_error("over-budget real literal"));
