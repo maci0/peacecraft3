@@ -63,3 +63,31 @@ caller then issues nothing and returns false. The Orc Burrow lists `Abds,Aspi,Ab
 (`Abun` is `CAbilityBunker`, getters `0xc17b20`, battle stations `0xd0083`, stand down `0xd0091`), none with
 `Order=load`, so the call returns false. Inferred by exhaustion of order-id constants, not by a
 runtime check. A unit that does list a `load` ability refuses (the load is not decoded).
+
+## Admission and placement follow-up (2026-11-12)
+
+Static evidence, same SHA-256 as above; no runtime comparison. Both order forms
+require an answering ability before their class handler can run (`0x49b060` ->
+`0x6a19a0`, documented in the cargo section). This implies that a timed order
+without an answering ability should return false before reaching the casting
+stage. This admission correction is not implemented here; the existing timed
+casting refusal remains. No new behavior or tests are shipped in this follow-up.
+
+`0xb94b70` first tests the caster's current coordinates through `0xb945e0`.
+On failure it calls `0xb94de0`, searches through `0x6be040` with callback
+`0xb955d0`, then retests through `0xb945e0`. The callback calls `0x7ff460`,
+`0x67ecd0` (accepting zero or `0x45`), `0x7ff460` again, and `0x6c0f80` before
+publishing accepted coordinates at context offsets `+0x1c/+0x20`. This establishes
+a placement predicate/search chain, not the existing collision-circle range
+interpretation. The transforms, predicate semantics and approach remain open;
+no new range or placement rule is admitted by this change.
+
+For Black Arrow, `0xcaf240` calls `0xcaf350` before `0x687ca0`. The helper reads
+the source position and orientation, calls `0x9969a0` and `0x679d00`, and adds the
+first two resulting coordinates to the source position. Interpreting those calls
+as rotation of the supplied displacement is an inference pending their decode.
+The facing branch at `0xcaf2c6` selects the source transform when argument
+`+0x18` is nonzero; otherwise it calls `0x46dea0` and `0x99ffe0` with operand
+`0x10db0f8`. Creation flags are argument `+0x1c` OR 2. Caller ownership, facing
+operands, factory position search and `BNdm` lifetime remain unresolved here;
+summon death retains its existing refusal. No original bytes are included.
