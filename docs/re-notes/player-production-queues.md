@@ -179,3 +179,36 @@ through the source cost classifier until token transitions are implemented.
 Hero training/revival, research, construction and race-specific workers remain
 the subsequent parts of the economy stage. This contract does not close that
 stage or the first-mission playthrough requirement.
+
+## Research refund policy
+
+Research entries in the shared queue now use `Misc/ResearchRefundRate` for
+explicit cancellation, producer-death cleanup and queue-detail refunds. Ordinary
+training retains `TrainRefundRate`; structure upgrades still use that existing
+policy and remain a separate fidelity gap (`UpgradeRefundRate` is not bound). Both values
+come from the ordered source profiles, including map overrides; a missing
+research rate refuses a research refund before money, life or queue mutation.
+It does not substitute the training rate. Conversion remains per entry and
+uses the admitted numeric policy, with finite in-range results truncated toward
+zero.
+
+Evidence class: native instruction inspection with GNU objdump of the selected
+1.29.2.9231 executable, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+In the queue cancellation walker `0xb56f90`, the research branch pushes the
+`ResearchRefundRate` key at `0xb570d2`, calls the profile getter at `0xb570e0`,
+and reads level-priced gold/lumber through `0x6df7e0` / `0x6e0a30` at
+`0xb570f8` / `0xb57136`. Integer-to-real, multiply, truncation and credit calls
+are `0xb57102` / `0xb5710f` / `0xb57115` / `0xb57121` for gold and
+`0xb57140` / `0xb5714d` / `0xb57153` / `0xb5715f` for lumber. The rule reader
+checks those call targets and reads the profile-key pointer from the image;
+it does not copy either refund rate into production constants.
+
+Synthetic regressions distinguish training rate 0.37 from research rate 0.61,
+check cancellation and producer death exactly once without awarding a level,
+check the queue-detail refund, and reject a missing research policy without
+changing the bank, queue or producer life. Parser checks cover ordered overrides,
+missing/malformed rates, truncated instructions, source identity and numeric
+conversion. These are recreation and source-binding checks; no new matched
+original-client research cancellation/death runtime run was performed. Research
+events, player research commands and transfer/removal semantics remain open.

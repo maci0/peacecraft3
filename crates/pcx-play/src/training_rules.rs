@@ -16,6 +16,7 @@ pub struct Rules {
     pub(crate) ai_production: Result<crate::campaign_production_rules::Rules, String>,
     pub profile_sources: Vec<String>,
     refund_rate: f32,
+    research_refund_rate: Option<f32>,
 }
 
 impl Rules {
@@ -96,7 +97,18 @@ impl Rules {
             return Err("training backend and pending UI bounds differ".into());
         }
         for (address, target) in [
-            (0xb5724b_u32, 0x9a1620_u32),
+            (0xb570e0_u32, 0x430620_u32),
+            (0xb570f8, 0x6df7e0),
+            (0xb57136, 0x6e0a30),
+            (0xb57102, 0x9a1620),
+            (0xb5710f, 0x99ffe0),
+            (0xb57115, 0x9a07b0),
+            (0xb57121, 0x4b5820),
+            (0xb57140, 0x9a1620),
+            (0xb5714d, 0x99ffe0),
+            (0xb57153, 0x9a07b0),
+            (0xb5715f, 0x4b5860),
+            (0xb5724b, 0x9a1620),
             (0xb57258, 0x99ffe0),
             (0xb5725e, 0x9a07b0),
             (0xb5726a, 0x4b5820),
@@ -110,12 +122,21 @@ impl Rules {
                 return Err("training refund numeric/credit path differs".into());
             }
         }
-        let pointer = word(immediate(&mut read, 0xb571b1, &[0x68], 4)?)?;
-        if read(pointer, b"TrainRefundRate\0".len(), false)? != b"TrainRefundRate\0" {
-            return Err("training refund profile key differs".into());
+        for (address, key) in [
+            (0xb571b1, "TrainRefundRate"),
+            (0xb570d2, "ResearchRefundRate"),
+        ] {
+            let pointer = word(immediate(&mut read, address, &[0x68], 4)?)?;
+            let terminated = format!("{key}\0");
+            if read(pointer, terminated.len(), false)? != terminated.as_bytes() {
+                return Err(format!("{key} refund profile key differs"));
+            }
         }
-        let ([rate], profile_sources) =
-            pcx_objects::editor::misc::misc_scalars(profiles, ["TrainRefundRate"], profile_bytes)?;
+        let ([rate, research_rate], profile_sources) = pcx_objects::editor::misc::misc_scalars(
+            profiles,
+            ["TrainRefundRate", "ResearchRefundRate"],
+            profile_bytes,
+        )?;
         Ok(Self {
             origin,
             image_sha256,
@@ -123,16 +144,28 @@ impl Rules {
             queue_slots: usize::try_from(slots).map_err(|_| "training slot width")?,
             profile_sources,
             refund_rate: rate.ok_or("missing Misc/TrainRefundRate")?,
+            research_refund_rate: research_rate,
         })
     }
 
     pub fn refund(&self, numeric: &NumericPolicy, cost: i32) -> Result<i32, String> {
+        self.refund_at_rate(numeric, cost, self.refund_rate)
+    }
+
+    pub fn research_refund(&self, numeric: &NumericPolicy, cost: i32) -> Result<i32, String> {
+        self.refund_at_rate(
+            numeric,
+            cost,
+            self.research_refund_rate
+                .ok_or("missing Misc/ResearchRefundRate")?,
+        )
+    }
+
+    fn refund_at_rate(&self, numeric: &NumericPolicy, cost: i32, rate: f32) -> Result<i32, String> {
         if numeric.image_sha256() != &self.image_sha256 || cost < 0 {
             return Err("training refund source identity or cost differs".into());
         }
-        let Value::Real(value) =
-            numeric.binary(BinOp::Mul, numeric.integer(cost)?, self.refund_rate)?
-        else {
+        let Value::Real(value) = numeric.binary(BinOp::Mul, numeric.integer(cost)?, rate)? else {
             return Err("training refund product is not real".into());
         };
         if !value.is_finite()
@@ -148,6 +181,14 @@ impl Rules {
 #[cfg(any(test, feature = "test-fixtures"))]
 impl Rules {
     pub fn fixture(queue_slots: usize, refund_rate: f32) -> Self {
+        Self::fixture_with_refunds(queue_slots, refund_rate, Some(refund_rate))
+    }
+
+    pub(crate) fn fixture_with_refunds(
+        queue_slots: usize,
+        refund_rate: f32,
+        research_refund_rate: Option<f32>,
+    ) -> Self {
         Self {
             origin: AssetIdentity {
                 source: "synthetic training".into(),
@@ -159,6 +200,7 @@ impl Rules {
             ai_production: Err("synthetic AI production not admitted".into()),
             profile_sources: vec!["synthetic".into()],
             refund_rate,
+            research_refund_rate,
         }
     }
 }
@@ -176,7 +218,18 @@ mod tests {
         data.insert(0x6324d1, vec![0x83, 0xfb, (slots - 1) as u8]);
         data.insert(0x63241f, vec![0x6a, (slots - 1) as u8]);
         for (address, target) in [
-            (0xb5724b_u32, 0x9a1620_u32),
+            (0xb570e0_u32, 0x430620_u32),
+            (0xb570f8, 0x6df7e0),
+            (0xb57136, 0x6e0a30),
+            (0xb57102, 0x9a1620),
+            (0xb5710f, 0x99ffe0),
+            (0xb57115, 0x9a07b0),
+            (0xb57121, 0x4b5820),
+            (0xb57140, 0x9a1620),
+            (0xb5714d, 0x99ffe0),
+            (0xb57153, 0x9a07b0),
+            (0xb5715f, 0x4b5860),
+            (0xb5724b, 0x9a1620),
             (0xb57258, 0x99ffe0),
             (0xb5725e, 0x9a07b0),
             (0xb5726a, 0x4b5820),
@@ -199,6 +252,11 @@ mod tests {
             [vec![0x68], 0x1234_u32.to_le_bytes().to_vec()].concat(),
         );
         data.insert(0x1234, b"TrainRefundRate\0".to_vec());
+        data.insert(
+            0xb570d2,
+            [vec![0x68], 0x2345_u32.to_le_bytes().to_vec()].concat(),
+        );
+        data.insert(0x2345, b"ResearchRefundRate\0".to_vec());
         data
     }
 
@@ -222,13 +280,36 @@ mod tests {
         let rules = decode(
             &instructions(5),
             &[
-                ("base", b"[Misc]\nTrainRefundRate=0.75\n"),
-                ("map", b"[Misc]\nTrainRefundRate=0.37\n"),
+                (
+                    "base",
+                    b"[Misc]\nTrainRefundRate=0.75\nResearchRefundRate=0.91\n",
+                ),
+                (
+                    "map",
+                    b"[Misc]\nTrainRefundRate=0.37\nResearchRefundRate=0.61\n",
+                ),
             ],
         )
         .unwrap();
         assert_eq!(rules.queue_slots, 5);
         assert_eq!(rules.refund_rate, 0.37);
+        assert_eq!(rules.research_refund_rate, Some(0.61));
+        let missing = decode(
+            &instructions(5),
+            &[("train-only", b"[Misc]\nTrainRefundRate=0.4\n")],
+        )
+        .unwrap();
+        assert_eq!(missing.research_refund_rate, None);
+        assert!(
+            decode(
+                &instructions(5),
+                &[(
+                    "bad",
+                    b"[Misc]\nTrainRefundRate=0.4\nResearchRefundRate=NaN\n"
+                )]
+            )
+            .is_err()
+        );
         assert!(decode(&instructions(5), &[("missing", b"[Misc]\n")]).is_err());
         assert!(
             decode(
@@ -248,7 +329,9 @@ mod tests {
             mutant.get_mut(address).unwrap().pop();
             assert!(decode(&mutant, profiles).is_err(), "{address:#x}");
         }
-        for address in [0xb56fbf, 0xb573bd, 0x6324d1, 0x63241f, 0xb57258, 0x1234] {
+        for address in [
+            0xb56fbf, 0xb573bd, 0x6324d1, 0x63241f, 0xb57258, 0x1234, 0xb570d2, 0x2345, 0xb5710f,
+        ] {
             let mut mutant = source.clone();
             *mutant.get_mut(&address).unwrap().last_mut().unwrap() ^= 1;
             assert!(decode(&mutant, profiles).is_err(), "{address:#x}");
@@ -264,6 +347,16 @@ mod tests {
         assert_eq!(rules.refund(&numeric, 235).unwrap(), 86);
         assert_eq!(rules.refund(&numeric, 1).unwrap(), 0);
         assert!(rules.refund(&numeric, -1).is_err());
+        rules.research_refund_rate = Some(0.61);
+        assert_eq!(rules.research_refund(&numeric, 235).unwrap(), 143);
+        rules.research_refund_rate = None;
+        assert!(
+            rules
+                .research_refund(&numeric, 235)
+                .unwrap_err()
+                .contains("ResearchRefundRate")
+        );
+        assert_eq!(rules.refund(&numeric, 235).unwrap(), 86);
         rules.refund_rate = f32::INFINITY;
         assert!(rules.refund(&numeric, 235).is_err());
     }
@@ -291,5 +384,6 @@ mod tests {
         assert_eq!(rules.image_sha256, REVIEWED_IMAGE);
         assert_eq!(rules.queue_slots, 7);
         assert_eq!(rules.refund_rate, 1.);
+        assert!(rules.research_refund_rate.is_some());
     }
 }

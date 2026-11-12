@@ -102,6 +102,29 @@ fn fixture_with_training_configured(
     heroes: bool,
     source: (&str, impl FnOnce(ObjectHost) -> ObjectHost),
 ) -> (Vm, HandleId, HandleId) {
+    fixture_with_training_refunds_configured(
+        overrides,
+        capacity,
+        (refund_rate, Some(refund_rate)),
+        admit_numeric,
+        orders,
+        heroes,
+        source,
+    )
+}
+
+fn fixture_with_training_refunds_configured(
+    overrides: &[([u8; 4], ObjectField)],
+    capacity: usize,
+    refund_rates: (f32, Option<f32>),
+    admit_numeric: bool,
+    orders: (
+        std::sync::Arc<crate::order_registry::Registry>,
+        crate::unit_activity::Rules,
+    ),
+    heroes: bool,
+    source: (&str, impl FnOnce(ObjectHost) -> ObjectHost),
+) -> (Vm, HandleId, HandleId) {
     let (script, configure) = source;
     let mut fields = vec![
         profile_field(b"T001", "Trains", "unitList", "u001"),
@@ -147,7 +170,11 @@ fn fixture_with_training_configured(
             let numeric =
                 crate::script_numeric::NumericPolicy::read(&image, binding, budget, 64).unwrap();
             resources.image_sha256 = *numeric.image_sha256();
-            let mut training = crate::training_rules::Rules::fixture(3, refund_rate);
+            let mut training = crate::training_rules::Rules::fixture_with_refunds(
+                3,
+                refund_rates.0,
+                refund_rates.1,
+            );
             training.image_sha256 = resources.image_sha256;
             training.ai_production = Ok(crate::campaign_production_rules::Rules::fixture(
                 resources.image_sha256,
@@ -1507,10 +1534,17 @@ fn ai_production_fixture() -> (Vm, HandleId, HandleId) {
     ai_production_fixture_with(&[])
 }
 fn ai_production_fixture_with(overrides: &[([u8; 4], ObjectField)]) -> (Vm, HandleId, HandleId) {
-    fixture_with_training_configured(
+    ai_production_fixture_with_refund(overrides, Some(0.37))
+}
+
+fn ai_production_fixture_with_refund(
+    overrides: &[([u8; 4], ObjectField)],
+    research_rate: Option<f32>,
+) -> (Vm, HandleId, HandleId) {
+    fixture_with_training_refunds_configured(
         overrides,
         4,
-        0.37,
+        (0.37, research_rate),
         true,
         super::super::super::activity::rules(),
         false,
@@ -2064,12 +2098,19 @@ const GATED: [u8; 4] = *b"R002";
 /// `R001` has two levels (gold 50 + 25 n, lumber 20 + 10 n, seconds 7 + 3 n) and needs a
 /// `u001` for level 2; `R002` needs a `d001` nobody owns. Only `b001` researches them.
 fn research_fixture() -> (Vm, HandleId, HandleId) {
-    let (mut vm, actor, producer) = ai_production_fixture_with(&[profile_field(
-        b"T011",
-        "Researches",
-        "upgradeList",
-        "R001,R002",
-    )]);
+    research_fixture_with_refund(Some(0.61))
+}
+
+fn research_fixture_with_refund(rate: Option<f32>) -> (Vm, HandleId, HandleId) {
+    let (mut vm, actor, producer) = ai_production_fixture_with_refund(
+        &[profile_field(
+            b"T011",
+            "Researches",
+            "upgradeList",
+            "R001,R002",
+        )],
+        rate,
+    );
     step(&mut vm, 1.);
     let h = &mut vm.host().inner;
     let ctx = Arc::clone(h.player_context().unwrap());
@@ -2209,23 +2250,88 @@ fn ai_research_waits_for_funds_requirements_a_researcher_and_an_idle_queue() {
 }
 
 #[test]
-fn ai_research_refunds_on_cancel_and_leaves_the_level_unchanged() {
+fn research_cancel_and_death_use_the_research_rate_once_without_awarding_a_level() {
+    for death in [false, true] {
+        let (mut vm, actor, producer) = research_fixture();
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        fund(&mut vm, owner, 100, 100);
+        let h = &mut vm.host().inner;
+        let upgrade = i32::from_be_bytes(RESEARCHED);
+        h.set_ai_upgrade(4, upgrade).unwrap();
+        let details = h.unit_training_details(producer).unwrap();
+        assert_eq!(details[0].refund_gold, 30);
+        assert_eq!(details[0].refund_lumber, 12);
+        if death {
+            h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+        } else {
+            assert!(h.cancel_unit_training(producer, 0).unwrap());
+        }
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 80);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 92);
+        assert!(h.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(h.ai_upgrade_level(owner, upgrade).unwrap(), 0);
+        if death {
+            h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+        } else {
+            assert!(!h.cancel_unit_training(producer, 0).unwrap());
+        }
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 80);
+        step(&mut vm, 20.);
+        assert_eq!(tech_level(&mut vm.host().inner, owner, RESEARCHED), 0);
+    }
+}
+
+#[test]
+fn research_refund_uses_the_paid_level_price_after_an_earlier_level_completes() {
     let (mut vm, actor, producer) = research_fixture();
     let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
     fund(&mut vm, owner, 100, 100);
+    vm.host()
+        .inner
+        .set_ai_upgrade(4, i32::from_be_bytes(RESEARCHED))
+        .unwrap();
+    step(&mut vm, 9.);
+    assert_eq!(tech_level(&mut vm.host().inner, owner, RESEARCHED), 1);
+    fund(&mut vm, owner, 100, 100);
     let h = &mut vm.host().inner;
-    let upgrade = i32::from_be_bytes(RESEARCHED);
-    h.set_ai_upgrade(4, upgrade).unwrap();
+    h.set_ai_upgrade(4, i32::from_be_bytes(RESEARCHED)).unwrap();
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 25);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 70);
     assert!(h.cancel_unit_training(producer, 0).unwrap());
-    let gold = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 70);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 88);
+    assert_eq!(tech_level(h, owner, RESEARCHED), 1);
+}
+
+#[test]
+fn missing_research_refund_refuses_cancel_and_death_before_mutation() {
+    let (mut vm, actor, producer) = research_fixture_with_refund(None);
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 100, 100);
+    let h = &mut vm.host().inner;
+    h.set_ai_upgrade(4, i32::from_be_bytes(RESEARCHED)).unwrap();
+    let queue = h.unit_training_queue(producer).unwrap();
+    let life = h.executed_unit(producer).unwrap().vitals.unwrap().life;
     assert!(
-        gold > 50 && gold < 100,
-        "refund, not the full price: {gold}"
+        h.cancel_unit_training(producer, 0)
+            .unwrap_err()
+            .to_string()
+            .contains("ResearchRefundRate")
     );
-    assert!(h.unit_training_queue(producer).unwrap().is_empty());
-    assert_eq!(h.ai_upgrade_level(owner, upgrade).unwrap(), 0);
-    step(&mut vm, 20.);
-    assert_eq!(tech_level(&mut vm.host().inner, owner, RESEARCHED), 0);
+    assert!(
+        h.native("KillUnit", &[Value::Handle(producer)])
+            .unwrap_err()
+            .contains("ResearchRefundRate")
+    );
+    assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+    assert_eq!(
+        h.executed_unit(producer).unwrap().vitals.unwrap().life,
+        life
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 50);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 80);
+    step(&mut vm, 9.);
+    assert_eq!(tech_level(&mut vm.host().inner, owner, RESEARCHED), 1);
 }
 
 /// The second fixture gives every unit a `Builds` list with `b001`.

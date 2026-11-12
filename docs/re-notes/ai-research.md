@@ -33,8 +33,9 @@ scan, the addresses are virtual addresses in the Legacy image.
 - `SetUpgrade` picks the first unit, in arena order, of the AI player that is alive, finished,
   lists the upgrade in `Researches` and has an empty queue. The cost is the next level's gold
   and lumber, charged when the order is accepted. The job joins the shared training queue
-  (`Training` with a research level), so refund on cancel, refund on the producer's death, pause
-  handling and the queue slot bound are the training code's. The duration is `timebase +
+  (`Training` with a research level), sharing cancellation, producer-death cleanup, pause
+  handling and the queue slot bound. Research refunds use the source `ResearchRefundRate`;
+  see [the refund policy](player-production-queues.md#research-refund-policy). The duration is `timebase +
   timemod * (level - 1)` seconds. It finishes through `SetPlayerTechResearched`'s upgrade path
   (`set_researched_with_effects`), after the tick's regeneration so that an effect on a
   moving unit does not rebase a regeneration clock without motion. It raises no training or
@@ -57,8 +58,9 @@ Each of these either refuses loudly or is a choice:
   while a building trains, or accepts a busy building, the order of who researches differs.
 - Arena order stands for the player's unit list order (`0xac4030` filters the list; the filter
   is not decoded).
-- Whether the cost is charged at order time (assumed, as for training) and the refund share
-  (the training refund rule).
+- Whether the cost is charged at order time (assumed, as for training). The refund share
+  is source-bound separately; matched original research cancellation/death runtime
+  observations remain open.
 - The `timebase` and `timemod` shape. The loader reads both; the `n - 1` combination is the
   cost routines' shape applied by analogy.
 - The key-to-level mapping of `Requires` and `Requires<n>`.
@@ -72,5 +74,7 @@ Each of these either refuses loudly or is a choice:
 
 Synthetic nonstock: `upgrade_research.rs` (`research_prices_are_base_plus_modifier_per_level_with_map_edits`,
 `research_requirements_follow_the_level_keys_and_refuse_unread_forms`), `unit_training_tests.rs`
-(`ai_research_*`: cost, duration, level, queue, requirement, funds, idle queue, cancel refund),
+(`ai_research_*`: cost, duration, level, queue, requirement, funds, idle queue), plus `research_cancel_and_death_use_the_research_rate_once_without_awarding_a_level`,
+`research_refund_uses_the_paid_level_price_after_an_earlier_level_completes` and
+`missing_research_refund_refuses_cancel_and_death_before_mutation` for refund lifecycle checks,
 `campaign_ai.rs` (`upgrade_natives_reach_the_world_and_set_upgrade_answers_false`).
