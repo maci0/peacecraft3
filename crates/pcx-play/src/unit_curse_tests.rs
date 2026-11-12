@@ -50,6 +50,8 @@ fn cells(headers: &[&str], values: &[(&str, &str)]) -> Vec<String> {
 
 #[derive(Clone)]
 struct Config {
+    script: &'static str,
+    mana_minimum: Option<f32>,
     /// `abilList` of every fixture unit.
     abilities: &'static str,
     /// Replacement `AbilityData` cells of the Slow row.
@@ -69,6 +71,8 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            script: "",
+            mana_minimum: Some(0.),
             abilities: "Aslo",
             slow: Vec::new(),
             polymorph: Vec::new(),
@@ -315,7 +319,20 @@ fn host_with(config: &Config) -> ObjectHost {
     let activity = activity
         .with_move_speed_profiles(&[("synthetic game misc", MISC.as_bytes())], 4096)
         .unwrap();
-    let (hero_rules, combat_rules) = hero_rules();
+    let (mut hero_rules, combat_rules) = hero_rules();
+    hero_rules.autocast = Ok(Arc::new(crate::autocast_rules::Rules {
+        origin: hero_rules.binding.origin.clone(),
+        image_sha256: hero_rules.binding.image_sha256,
+        classes: vec![],
+        groups: vec![],
+        alarm_code: None,
+        mana_minimum: config.mana_minimum,
+        slow: Some(crate::autocast_rules::slow::Rules {
+            class: *b"Aslo",
+            data_column: "DataC".into(),
+            empty_data: 0.,
+        }),
+    }));
     let mut fields = hero_fields("STR");
     fields.push(column(
         b"ubdg",
@@ -337,6 +354,13 @@ fn host_with(config: &Config) -> ObjectHost {
         "castpt",
         FieldKind::Unreal,
         "0.25",
+    ));
+    fields.push(column(
+        b"Smb0",
+        SlkId::UnitWeapons,
+        "castbsw",
+        FieldKind::Unreal,
+        "0.375",
     ));
     fields.push(column(
         b"H001",
@@ -365,6 +389,13 @@ fn host_with(config: &Config) -> ObjectHost {
         "abilList",
         FieldKind::Token,
         config.abilities,
+    ));
+    fields.push(column(
+        b"A011",
+        SlkId::UnitAbilities,
+        "auto",
+        FieldKind::Token,
+        "_",
     ));
     fields.push(column(
         b"urac",
@@ -406,10 +437,11 @@ fn host_with(config: &Config) -> ObjectHost {
     };
     fields.push((*b"mPrp", prop));
     let extra = format!(
-        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}\nnative SetUnitTimeScale takes unit u, real scale returns nothing\nconstant native GetUnitTypeId takes unit u returns integer\nnative UnitRemoveBuffs takes unit whichUnit, boolean removePositive, boolean removeNegative returns nothing\n",
+        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}\nnative SetUnitTimeScale takes unit u, real scale returns nothing\nconstant native GetUnitTypeId takes unit u returns integer\nnative UnitRemoveBuffs takes unit whichUnit, boolean removePositive, boolean removeNegative returns nothing\nglobals\nconstant unitevent EVENT_UNIT_SPELL_FINISH=ConvertUnitEvent(7901)\nconstant playerunitevent EVENT_PLAYER_UNIT_SPELL_FINISH=ConvertPlayerUnitEvent(-7902)\nendglobals\n",
         enumeration::TRIGGERS,
         super::activity::ORDERS
     );
+    let extra = format!("{extra}\n{}", config.script);
     let overlay = config.overlay.clone();
     let hero_budget = crate::playercolor_host::HeroBudget {
         abilities_per_unit: 8,
@@ -1188,4 +1220,444 @@ fn dark_conversion_is_cancelled_when_the_buff_is_removed() {
     step(&mut vm, CONVERSION_SECONDS + 1.0);
     assert!(!is_removed(&mut vm, target));
     assert!(buffs(&mut vm, target).is_empty());
+}
+
+const SLOW_CALLBACKS: &str = r#"
+native UnitRemoveAbility takes unit u, integer a returns boolean
+native UnitAddAbility takes unit u, integer a returns boolean
+globals
+integer SlowMode
+integer SlowEvents=0
+real SlowEffectMana
+integer SlowEffectBuff
+real SlowActionMana
+real SlowEndMana
+unit SlowEndTarget
+unit SlowFinishTarget
+unit SlowRetarget
+trigger SlowEffectTrigger
+boolean SlowAction
+endglobals
+function SlowChannel takes nothing returns nothing
+set SlowEvents=SlowEvents*10+1
+endfunction
+function SlowCast takes nothing returns nothing
+set SlowEvents=SlowEvents*10+2
+endfunction
+function SlowEffect takes nothing returns nothing
+set SlowEvents=SlowEvents*10+3
+set SlowEffectMana=GetUnitState(H,UNIT_STATE_MANA)
+set SlowEffectBuff=GetUnitAbilityLevel(E,'Bslo')
+if SlowMode==1 then
+set SlowAction=IssueImmediateOrder(H,"beta")
+elseif SlowMode==2 then
+set SlowAction=IssueTargetOrder(H,"alpha",SlowRetarget)
+elseif SlowMode==3 then
+call RemoveUnit(E)
+elseif SlowMode==4 then
+call KillUnit(H)
+elseif SlowMode==5 then
+set SlowAction=UnitRemoveAbility(H,'Aslo')
+elseif SlowMode==6 then
+call RemoveUnit(H)
+elseif SlowMode==7 then
+call SetUnitTimeScale(H,-1.0)
+elseif SlowMode==8 then
+call SetUnitState(H,UNIT_STATE_MANA,40.0)
+elseif SlowMode==9 then
+set SlowAction=UnitRemoveAbility(H,'Aslo')
+set SlowAction=UnitAddAbility(H,'Aslo')
+endif
+set SlowActionMana=GetUnitState(H,UNIT_STATE_MANA)
+endfunction
+function SlowFinish takes nothing returns nothing
+set SlowEvents=SlowEvents*10+4
+set SlowFinishTarget=GetSpellTargetUnit()
+endfunction
+function SlowEnd takes nothing returns nothing
+set SlowEvents=SlowEvents*10+5
+set SlowEndMana=GetUnitState(H,UNIT_STATE_MANA)
+if SlowMode==5 then
+set SlowMode=GetUnitAbilityLevel(H,'Aslo')
+endif
+set SlowEndTarget=GetSpellTargetUnit()
+endfunction
+function SlowWatch takes integer mode, unit retarget returns nothing
+local trigger t=CreateTrigger()
+set SlowMode=mode
+set SlowRetarget=retarget
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_CHANNEL)
+call TriggerAddAction(t,function SlowChannel)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_CAST)
+call TriggerAddAction(t,function SlowCast)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_EFFECT)
+call TriggerAddAction(t,function SlowEffect)
+set SlowEffectTrigger=t
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_FINISH)
+call TriggerAddAction(t,function SlowFinish)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_ENDCAST)
+call TriggerAddAction(t,function SlowEnd)
+endfunction
+function SlowIssue takes nothing returns boolean
+return IssueTargetOrder(H,"alpha",E)
+endfunction
+"#;
+
+fn slow_callbacks(mode: i32) -> (Vm, HandleId, HandleId, HandleId) {
+    let (mut vm, [caster, _, enemy, _]) = open_with(Config {
+        script: SLOW_CALLBACKS,
+        ..Config::default()
+    });
+    vm.call("prime", &[]).unwrap();
+    let other = spawn(&mut vm, 5, b"u001", 64.);
+    vm.call("SlowWatch", &[Value::Int(mode), Value::Handle(other)])
+        .unwrap();
+    assert_eq!(vm.call("SlowIssue", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(
+        vm.global("SlowEvents"),
+        Value::Int(12),
+        "CHANNEL/CAST precede the public order return"
+    );
+    (vm, caster, enemy, other)
+}
+
+fn slow_advance_and_deliver(vm: &mut Vm, until: f64) -> Vec<f64> {
+    let mut times = Vec::new();
+    while vm.host().inner.timer_game_time().unwrap() < until {
+        let next = vm
+            .host()
+            .inner
+            .next_timer_activity_boundary(until)
+            .unwrap_or(until);
+        assert!(
+            vm.host()
+                .inner
+                .next_timer_expiry(next, &mut 100)
+                .unwrap()
+                .is_none()
+        );
+        vm.host()
+            .inner
+            .advance_unit_activity(next, &mut 65536)
+            .unwrap();
+        while let Some(event) = vm.host().inner.take_fired_event() {
+            times.push(vm.host().inner.timer_game_time().unwrap());
+            if let Some(delivery) = vm.host().inner.begin_fired_event(&event).unwrap() {
+                assert!(delivery.conditions.is_empty());
+                let result = vm.run_thread(&delivery.actions);
+                vm.host().inner.finish_fired_event();
+                result.unwrap();
+            }
+        }
+    }
+    times
+}
+
+fn slow_cooldown(vm: &mut Vm, unit: HandleId) -> f32 {
+    let Value::Real(value) = vm
+        .host()
+        .inner
+        .native(
+            "BlzGetUnitAbilityCooldownRemaining",
+            &[
+                Value::Handle(unit),
+                Value::Int(i32::from_be_bytes(*b"Aslo")),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("cooldown")
+    };
+    value
+}
+
+#[test]
+fn slow_public_order_effect_callback_precedes_payment_and_source_timed_finish() {
+    let (mut vm, caster, enemy, _) = slow_callbacks(0);
+    let base = speed(&mut vm, enemy);
+    let times = slow_advance_and_deliver(&mut vm, 1.);
+    assert_eq!(times, [CAST_POINT, CAST_POINT + 0.375, CAST_POINT + 0.375]);
+    assert_eq!(vm.global("SlowEffectMana"), Value::Real(200.));
+    assert_eq!(vm.global("SlowEffectBuff"), Value::Int(0));
+    assert_eq!(vm.global("SlowEvents"), Value::Int(12345));
+    assert_eq!(vm.global("SlowFinishTarget"), Value::Null);
+    assert_eq!(vm.global("SlowEndTarget"), Value::Null);
+    assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+    assert_eq!(speed(&mut vm, enemy), clamped(base, MOVEMENT_FACTOR));
+    assert_eq!(current_order(&mut vm, caster), 0);
+}
+
+#[test]
+fn slow_effect_stop_or_caster_death_keeps_payment_without_buff_cooldown_or_finish() {
+    for mode in [1, 4] {
+        let (mut vm, caster, enemy, _) = slow_callbacks(mode);
+        slow_advance_and_deliver(&mut vm, 1.);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
+        assert_eq!(vm.global("SlowEndTarget"), Value::Handle(enemy));
+        assert_eq!(vm.global("SlowEndMana"), Value::Real(200.));
+        assert_eq!(vm.global("SlowActionMana"), Value::Real(200.));
+        assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+        assert!(buffs(&mut vm, enemy).is_empty());
+        assert_eq!(slow_cooldown(&mut vm, caster), 0.);
+        slow_advance_and_deliver(&mut vm, 2.);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
+        assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+    }
+}
+
+#[test]
+fn slow_effect_retarget_keeps_original_cast_and_removed_target_still_pays_and_cools() {
+    for mode in [2, 3] {
+        let (mut vm, caster, enemy, other) = slow_callbacks(mode);
+        slow_advance_and_deliver(&mut vm, 1.);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(12345));
+        assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+        assert!(slow_cooldown(&mut vm, caster) > 0.);
+        assert!(buffs(&mut vm, other).is_empty());
+        if mode == 2 {
+            assert_eq!(vm.global("SlowAction"), Value::Bool(true));
+            assert_eq!(buffs(&mut vm, enemy), [*b"Bslo"]);
+        }
+    }
+}
+
+#[test]
+fn slow_effect_ability_withdrawal_or_caster_removal_does_not_leave_or_replay_jobs() {
+    for mode in [5, 6] {
+        let (mut vm, caster, enemy, _) = slow_callbacks(mode);
+        slow_advance_and_deliver(&mut vm, 1.);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
+        assert!(buffs(&mut vm, enemy).is_empty());
+        if mode == 5 {
+            assert_eq!(vm.global("SlowAction"), Value::Bool(true));
+            assert_eq!(vm.global("SlowMode"), Value::Int(0));
+            assert_eq!(vm.global("SlowEndMana"), Value::Real(200.));
+            assert_eq!(vm.global("SlowEndTarget"), Value::Handle(enemy));
+            assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+            assert_eq!(
+                vm.host()
+                    .inner
+                    .native(
+                        "GetUnitAbilityLevel",
+                        &[
+                            Value::Handle(caster),
+                            Value::Int(i32::from_be_bytes(*b"Aslo"))
+                        ]
+                    )
+                    .unwrap(),
+                Value::Int(0)
+            );
+        }
+        slow_advance_and_deliver(&mut vm, 2.);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
+    }
+}
+
+#[test]
+fn slow_disabled_or_destroyed_effect_trigger_still_settles_payment_once() {
+    for native in ["DisableTrigger", "DestroyTrigger"] {
+        let (mut vm, caster, enemy, _) = slow_callbacks(0);
+        let trigger = vm.global("SlowEffectTrigger");
+        vm.host().inner.native(native, &[trigger]).unwrap();
+        slow_advance_and_deliver(&mut vm, 1.);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(1245));
+        assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+        assert_eq!(buffs(&mut vm, enemy), [*b"Bslo"]);
+        slow_advance_and_deliver(&mut vm, 2.);
+        assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+        assert_eq!(vm.global("SlowEvents"), Value::Int(1245));
+    }
+}
+
+#[test]
+fn slow_effect_callback_error_restores_context_and_does_not_replay_payment() {
+    let (mut vm, caster, enemy, _) = slow_callbacks(7);
+    step(&mut vm, CAST_POINT);
+    let event = vm.host().inner.take_fired_event().unwrap();
+    let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+    let error = vm.run_thread(&delivery.actions).unwrap_err().to_string();
+    vm.host().inner.finish_fired_event();
+    assert!(error.contains("SetUnitTimeScale"), "{error}");
+    assert_eq!(
+        vm.host().inner.native("GetSpellTargetUnit", &[]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+    assert_eq!(buffs(&mut vm, enemy), [*b"Bslo"]);
+    slow_advance_and_deliver(&mut vm, 1.);
+    assert_eq!(vm.global("SlowEvents"), Value::Int(12345));
+    assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+}
+
+#[test]
+fn slow_pause_shifts_effect_and_backswing_boundaries_without_duplicate_events() {
+    let (mut vm, caster, _, _) = slow_callbacks(0);
+    slow_advance_and_deliver(&mut vm, CAST_POINT / 2.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(caster), Value::Bool(true)])
+        .unwrap();
+    assert!(slow_advance_and_deliver(&mut vm, 1.).is_empty());
+    assert_eq!(mana(&mut vm, caster), 200.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(caster), Value::Bool(false)])
+        .unwrap();
+    let effect = 1. + CAST_POINT / 2.;
+    assert_eq!(slow_advance_and_deliver(&mut vm, effect), [effect]);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(caster), Value::Bool(true)])
+        .unwrap();
+    assert!(slow_advance_and_deliver(&mut vm, 2.).is_empty());
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(caster), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(slow_advance_and_deliver(&mut vm, 3.), [2.375, 2.375]);
+    assert_eq!(vm.global("SlowEvents"), Value::Int(12345));
+    assert_eq!(mana(&mut vm, caster), 200. - SLOW_COST);
+}
+
+#[test]
+fn slow_effect_payment_reads_callback_mana_and_the_bound_nonstock_minimum() {
+    let (mut vm, [caster, _, enemy, _]) = open_with(Config {
+        script: SLOW_CALLBACKS,
+        mana_minimum: Some(7.),
+        ..Config::default()
+    });
+    vm.call("prime", &[]).unwrap();
+    vm.call("SlowWatch", &[Value::Int(8), Value::Handle(enemy)])
+        .unwrap();
+    assert_eq!(vm.call("SlowIssue", &[]).unwrap(), Value::Bool(true));
+    slow_advance_and_deliver(&mut vm, 1.);
+    assert_eq!(vm.global("SlowEffectMana"), Value::Real(200.));
+    assert_eq!(vm.global("SlowActionMana"), Value::Real(40.));
+    assert_eq!(mana(&mut vm, caster), 7.);
+    assert_eq!(buffs(&mut vm, enemy), [*b"Bslo"]);
+    assert!(slow_cooldown(&mut vm, caster) > 0.);
+    assert_eq!(vm.global("SlowEvents"), Value::Int(12345));
+}
+
+#[test]
+fn slow_missing_mana_policy_refuses_before_order_or_phase_delivery() {
+    let (mut vm, [caster, _, enemy, _]) = open_with(Config {
+        script: SLOW_CALLBACKS,
+        mana_minimum: None,
+        ..Config::default()
+    });
+    vm.call("prime", &[]).unwrap();
+    vm.call("SlowWatch", &[Value::Int(0), Value::Handle(enemy)])
+        .unwrap();
+    let error = vm.call("SlowIssue", &[]).unwrap_err().to_string();
+    assert!(error.contains("mana minimum is not admitted"), "{error}");
+    assert_eq!(vm.global("SlowEvents"), Value::Int(0));
+    assert_eq!(current_order(&mut vm, caster), 0);
+    assert_eq!(mana(&mut vm, caster), 200.);
+    assert!(buffs(&mut vm, enemy).is_empty());
+}
+
+#[test]
+fn slow_marker_policy_preserves_strict_readers_and_refuses_malformed_numeric_data() {
+    for marker in ["-", "_"] {
+        let (mut vm, [caster, _, _, _]) = open_with(Config {
+            slow: vec![("DataC1", marker)],
+            ..Config::default()
+        });
+        let host = &mut vm.host().inner;
+        assert!(
+            host.hero_ability_level_cell(*b"Aslo", "DataC", 1, FieldKind::Bool)
+                .unwrap_err()
+                .contains("missing DataC1")
+        );
+        assert_eq!(
+            host.hero_ability_level_cell_including_marker(*b"Aslo", "DataC", 1, FieldKind::Bool)
+                .unwrap(),
+            marker
+        );
+        let now = host.timer_game_time().unwrap();
+        let mut work = host.executed_units().count();
+        assert_eq!(
+            host.advance_slow_autocast(caster, *b"Aslo", now, &mut work)
+                .unwrap(),
+            Some(crate::autocast_rules::Outcome::Retry)
+        );
+        assert_eq!(work, 0);
+    }
+    let (mut vm, [caster, _, _, _]) = open_with(Config {
+        slow: vec![("DataC1", "garbage")],
+        ..Config::default()
+    });
+    let now = vm.host().inner.timer_game_time().unwrap();
+    assert!(
+        vm.host()
+            .inner
+            .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+            .is_err()
+    );
+}
+
+#[test]
+fn slow_no_target_evaluation_charges_every_unit_and_refuses_a_potential_attacker() {
+    let (mut vm, [caster, _, enemy, _]) = open();
+    let host = &mut vm.host().inner;
+    let now = host.timer_game_time().unwrap();
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 0)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("work budget"), "{error}");
+    assert_eq!(
+        host.native(
+            "IssueTargetOrder",
+            &[
+                Value::Handle(enemy),
+                Value::Str("beta".into()),
+                Value::Handle(caster)
+            ]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("potential attacking candidate"), "{error}");
+    assert!(host.take_fired_event().is_none());
+}
+
+#[test]
+fn slow_effect_ability_replacement_refuses_the_unqualified_cost_read_point() {
+    let (mut vm, caster, enemy, _) = slow_callbacks(9);
+    step(&mut vm, CAST_POINT);
+    let event = vm.host().inner.take_fired_event().unwrap();
+    let delivery = vm.host().inner.begin_fired_event(&event).unwrap().unwrap();
+    vm.run_thread(&delivery.actions).unwrap();
+    vm.host().inner.finish_fired_event();
+    assert!(
+        vm.host()
+            .inner
+            .next_timer_expiry(1., &mut 100)
+            .unwrap()
+            .is_none()
+    );
+    let error = vm
+        .host()
+        .inner
+        .advance_unit_activity(1., &mut 1000)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("native cost read point is unqualified"),
+        "{error}"
+    );
+    assert_eq!(mana(&mut vm, caster), 200.);
+    assert!(buffs(&mut vm, enemy).is_empty());
+    assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
+    assert!(vm.host().inner.take_fired_event().is_none());
 }

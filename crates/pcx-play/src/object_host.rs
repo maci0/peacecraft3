@@ -915,6 +915,12 @@ impl Host for ObjectHost {
             return Ok(Some(call));
         }
         if let Some(call) = self
+            .begin_synchronous_slow_call(name, args)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(call));
+        }
+        if let Some(call) = self
             .begin_synchronous_destructable_death_call(name, args)
             .map_err(|e| e.to_string())?
         {
