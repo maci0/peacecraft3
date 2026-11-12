@@ -204,3 +204,25 @@ carrier whose type is the militia form (`Amil` `DataB1`, `[ability+0x74]`; the b
 so the native returns false. `unit_host.rs` `town_bell_off_order` implements this scan over live
 units whose type is the militia form and which list `Amil`. When one exists the call refuses: the
 conversion callback `0xbf72f0` and the current-order tests at `0xbf77e2`..`0xbf78a7` are not decoded.
+
+## Town Bell on empty scan (2026-11-12)
+
+Static executable evidence, same verified 1.29.2.9231 SHA-256 as above; no original-client
+runtime observation. `0xbf6b40` initializes the callback match flag to zero at `0xbf6bb1`
+and returns it at `0xbf6bbd`. In `0xbf7740`, the owner comparison is at `0xbf7787`;
+`0xbf7790` selects `Amil` base form at `+0x70` for on and active form at `+0x74` for off.
+A type mismatch exits through `0xbf7851`. Thus no owned base-form carrier means no on
+match, independently of the remaining eligibility and range checks.
+
+This is a static decode only. No new host behavior or tests ship with this note.
+The on order remains unsupported; the existing off-order handling is unchanged.
+The empty-scan rule is a candidate for a future implementation after validation.
+
+Further observed control flow: `0xbf78eb` calls a spatial predicate before setting the
+match flag at `0xbf78fc`; `0xbf7912` calls `0xbf7640` and selects a target or null.
+`0xbf792c` and `0xbf7949` select virtual slots `+0x338` and `+0x33c`, respectively,
+then both invoke `0xbf72f0` with a deferred flag of one. At `0xbf7321`, that flag
+selects order construction; zero instead calls `0xbf6df0` at `0xbf73c1`.
+Consequently calling this routine an immediate form swap is not supported by the evidence.
+Duration, approach completion, form replacement, return destination selection and cargo
+load/unload remain unresolved and refused. Disassembly is local scratch only.
