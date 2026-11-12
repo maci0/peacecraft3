@@ -371,9 +371,9 @@ impl ObjectHost {
         let [Value::Handle(timer)] = args else {
             return Err(fail(Failure::TimerArguments));
         };
-        let run = self
-            .timer_run(*timer, name)?
-            .ok_or_else(|| fail(Failure::TimerState("unstarted timer query is unsupported")))?;
+        let Some(run) = self.timer_run(*timer, name)? else {
+            return Ok(Value::Real(0.0));
+        };
         let elapsed = if let Some(held) = run.paused {
             held
         } else if run.deadline.is_none() {

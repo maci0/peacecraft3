@@ -137,8 +137,10 @@ frame rate, speed mapping or connection to the separate startup-clock input.
 `TimerStart` retains one run on the existing timer identity. Only a finite
 positive timeout that produces a strictly later finite deadline is supported.
 Restart replaces that run and its handler, including null. Destroy revokes the
-identity and clears the run. Fresh-timer queries and `GetExpiredTimer` outside
-an active live-timer callback refuse; no measured initial values are copied.
+identity and clears the run. Fresh-timer elapsed/remaining/timeout queries return
+zero, following the retained original-client observation above. They neither
+start a run nor advance game time. Invalid/retired identities still refuse.
+`GetExpiredTimer` outside an active live-timer callback remains refused.
 Elapsed/remaining/timeout queries use the current run, including callback restart.
 The recreation uses double-precision deadlines and converts query results to
 JASS reals; native rounding and long-timeout segmentation are not reproduced.

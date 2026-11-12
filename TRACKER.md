@@ -7046,3 +7046,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   music-volume, AI, range-enumeration and automatic-cast refusals. These are
   host-state and script-horizon checks, not mission completion, rendered
   fidelity or native tick/RNG parity.
+
+- 2026-11-13: Fresh timer elapsed/remaining/timeout queries return zero, matching
+  the retained original-client probe, instead of refusing Orc02's unchanged
+  script. Queries do not start a run or advance time; malformed and retired
+  identities still refuse. The gameplay library suite passes 2,988 tests with
+  108 explicit ignores; strict native/WASM Clippy, the rebuilt native campaign
+  probe and WASM library build pass. Orc02's opening skip and 300-second idle
+  horizon now pass offscreen and muted. The full pre-fix indexed sweep completed
+  79 maps: 31 passed, 47 refused, one diagnostic timeout. Frontier categories and
+  provenance are recorded in [the sweep](docs/re-notes/chapter-startup-refusals.md#complete-indexed-openingidle-sweep-2026-11-13).
+  These gates do not establish mission completion or native tick/RNG parity.
