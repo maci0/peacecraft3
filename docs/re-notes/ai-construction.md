@@ -227,12 +227,12 @@ map object overrides, establish the native dimension mapping, or run the placeme
 
 - a live unit of the player lists the kind in `Builds`: refuse (`AI construction placement is
   not admitted`, naming the builder type and position);
-- no builder, and the request is not `ugol`: the first idle unit that lists the kind in `Upgrade` pays the target's `goldcost` and `lumbercost` and, after the target's `bldtm` seconds, becomes that unit. Idle means shown, unpaused, not under construction, and holding no queue job. Those stand in for the undecoded counters at `+0x3c` and `+0x40`. The target's `Requires` stands in for check slot `0x328`. A building that cannot be paid for, or a request with no idle upgrader, returns false and orders nothing. Death while the job runs refunds the training share. Completion writes the new type's base life and mana; researched bonuses are not rebased onto that base. A session with a model loader refreshes the model through the replacement form;
+- no builder, and the request is not `ugol`: the first idle unit that lists the kind in `Upgrade` pays the amount derived from the source `RelativeUpgradeCost` mode ([pricing/refund contract](player-production-queues.md#structure-upgrade-cost-and-refund-policy)) and, after the target's `bldtm` seconds, becomes that unit. Idle means shown, unpaused, not under construction, and holding no queue job. Those stand in for the undecoded counters at `+0x3c` and `+0x40`. The target's `Requires` stands in for check slot `0x328`. A building that cannot be paid for, or a request with no idle upgrader, returns false and orders nothing. Death while the job runs refunds the paid amount through `UpgradeRefundRate`; an enabled, unqualified damage penalty refuses admission. Completion writes the new type's base life and mana; researched bonuses are not rebased onto that base. A session with a model loader refreshes the model through the replacement form;
 - otherwise return false, charge nothing, order nothing.
 
 "A unit builds the kind" is the `Builds` profile list standing for the ability check at slot
 `0x270`, and "upgrades into" is the `Upgrade` list standing for the class check at `0xb883e0`;
-neither mapping is decoded. The upgrade order uses that list, the target's costs and build time,
+neither mapping is decoded. The upgrade order uses that list, the source cost mode and target build time,
 and the replacement of the same unit. The other early false answers (state-2 worker, float at
 `+0x188`, tech and count checks) are not modelled; a request that reaches a builder may have been
 false in the original.

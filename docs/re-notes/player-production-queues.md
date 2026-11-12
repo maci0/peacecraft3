@@ -184,8 +184,8 @@ stage or the first-mission playthrough requirement.
 
 Research entries in the shared queue now use `Misc/ResearchRefundRate` for
 explicit cancellation, producer-death cleanup and queue-detail refunds. Ordinary
-training retains `TrainRefundRate`; structure upgrades still use that existing
-policy and remain a separate fidelity gap (`UpgradeRefundRate` is not bound). Both values
+training retains `TrainRefundRate`; structure upgrades use their separate policy
+below. Training and research values
 come from the ordered source profiles, including map overrides; a missing
 research rate refuses a research refund before money, life or queue mutation.
 It does not substitute the training rate. Conversion remains per entry and
@@ -212,3 +212,56 @@ missing/malformed rates, truncated instructions, source identity and numeric
 conversion. These are recreation and source-binding checks; no new matched
 original-client research cancellation/death runtime run was performed. Research
 events, player research commands and transfer/removal semantics remain open.
+
+## Structure-upgrade cost and refund policy
+
+The selected executable's upgrade admission method `0xb63580` and cancellation
+method `0xb63ad0` distinguish `Misc/RelativeUpgradeCost`. When enabled, the target
+unit's gold and lumber fields are the job cost. When disabled, both methods
+subtract the original unit type's corresponding fields. Target-price mode skips
+original-cost metadata reads, matching the conditional native getter path.
+The queue now derives
+that amount for each chosen producer before spending, retains the paid amount
+in the canonical job, and uses it for cancellation and producer-death refunds.
+The target's authored build time remains the job duration; a zero cost does not
+make a job instantaneous. Ordinary training and research retain their own cost
+and refund paths.
+
+Evidence class: GNU objdump 2.47 instruction/data inspection of the selected
+1.29.2.9231 image identified above. Admission reads the mode key at `0xb635c5`
+and calls its integer profile getter at `0xb635d2`; target cost calls
+`0xb635af` / `0xb635bc` are negated. With the mode disabled, original cost calls
+`0xb635e1` / `0xb635ec` are added before bank calls `0xb63622` / `0xb63633`.
+Cancellation reads the same key at `0xb63b5d`, obtains target costs at
+`0xb63b4b` / `0xb63b56`, and conditionally subtracts original costs through
+`0xb63b79` / `0xb63b84`. It calls the upgrade rate method through virtual slot
+`+0x350` at `0xb63b38`; the inspected table entry `0xf24f28` points to
+`0xb63df0`. This method reads `UpgradeRefundRate` at `0xb63dfd` and also reads
+`UpgradeDamageRefundPenalty` at `0xb63e11`. The rule reader checks the profile-key
+operands and the relevant getter, cost, conversion, multiplication, truncation
+and bank call targets against the pinned image.
+
+The ordered game/map profiles supply all three upgrade fields, with no training
+rate substitute. Missing fields and unsupported boolean classes report errors.
+An enabled damage penalty refuses admission before spending: its native damage
+accumulator is not yet modelled. Negative price deltas likewise refuse as an
+unqualified class rather than inventing a clamp or credit policy. With the
+penalty disabled, conversion uses the source numeric policy and per-entry
+truncation, and current life does not scale the refund.
+
+Nonstock regressions use distinct producer/target prices and separate training,
+research and upgrade rates. They exercise both cost modes, affordability at the
+derived delta, source duration and completion, damaged life with the penalty
+disabled, pause, cancellation/death/repeated cleanup, queue-detail refunds,
+missing policy and enabled-penalty refusal. Parser checks cover layered profiles,
+invalid/missing flags, negative deltas, overflow and the explicit local original
+image/profile binding. These checks do not establish original-client upgrade
+runtime parity. Damage-penalty support, transfer/removal, upgrade events and
+intermediate type/pool transitions remain open.
+
+Validation of this slice: 86 training/construction lifecycle tests and five
+source-rule tests passed in a dedicated target directory, including the
+explicit original-image/profile test. Native and WASM library builds and strict
+compile checks passed with workspace warnings denied. The final frozen-source
+binary reran all 86 lifecycle and five rule tests under a private offscreen
+display with null audio; source hashes matched before and after the run.

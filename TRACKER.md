@@ -7167,3 +7167,31 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   complete autocast. See
   [activation](docs/re-notes/ability-autocast-on.md) and
   [evaluation gaps](docs/re-notes/ability-autocast-tick.md).
+
+- 2026-11-13: Campaign cache capture and valid legacy restore reconstruct
+  ordinary abilities in source creation order, then source hero learn-slot
+  ranks. Transient ordinary additions disappear and removed source abilities
+  return without mutating the live unit. Strict payload/source/rank/cooldown
+  checks remain. Both new public cache regressions pass, including remove/readd
+  with colliding command-card slots and a valid older ordered-vector payload.
+  Campaign carryover assertions compare semantic ranks while the dedicated
+  button regression checks source sequence. Main's independent full gameplay
+  package passes 3,159 tests, zero failed, 143 explicit ignores; all six required
+  new cache/upgrade names execute. Strict native/WASM all-target Clippy, both
+  libraries, formatting and the application test-binary rebuild pass with
+  unchanged source hashes. Full world/VM save-load, permanent edits, foreign
+  authored ability changes and original-client/browser parity remain open.
+  See [cache reconstruction](docs/re-notes/script-saved-games.md).
+
+- 2026-11-13: Structure upgrades derive their debit from `RelativeUpgradeCost`
+  and retain that paid cost for independent `UpgradeRefundRate` cancellation,
+  death and queue previews. Target-price mode does not read unneeded original
+  costs. Missing policy, enabled unqualified damage penalties and negative cost
+  deltas refuse before debit. All three new interrupted-lifecycle tests and the
+  ordered-profile policy test pass in the main package run above. Native/WASM
+  checks/builds and the application fixture-feature build pass after restricting
+  an internal fixture helper to tests and fixing an unnecessary closure borrow.
+  The superseded validation attempt is not acceptance evidence. Negative upgrade
+  credits, enabled damage penalties, transfer/removal, intermediate type/pool
+  transitions and original-client timing remain open. See
+  [upgrade policy](docs/re-notes/player-production-queues.md).

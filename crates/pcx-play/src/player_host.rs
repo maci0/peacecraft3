@@ -2260,7 +2260,11 @@ impl ObjectHost {
         Ok(training.queue_slots)
     }
 
-    pub(super) fn training_refund(&self, cost: i32, research: bool) -> Result<i32, Error> {
+    pub(super) fn training_refund(
+        &self,
+        cost: i32,
+        kind: crate::training_rules::RefundKind,
+    ) -> Result<i32, Error> {
         self.training_queue_slots()?;
         let rules = &self
             .players
@@ -2277,15 +2281,44 @@ impl ObjectHost {
             )
         })?;
         let training = rules.training_rules().expect("checked");
-        let refund = if research {
-            training.research_refund(numeric, cost)
-        } else {
-            training.refund(numeric, cost)
-        };
+        let refund = training.refund_for(numeric, cost, kind);
         refund.map_err(|why| {
             self.inner
                 .error("training refund", Failure::UnitActivity(why))
         })
+    }
+
+    pub(super) fn structure_upgrade_costs(
+        &self,
+        original: &pcx_sim::world::Definition,
+        target: [i32; 2],
+    ) -> Result<[i32; 2], Error> {
+        self.training_queue_slots()?;
+        let fail = |why| self.inner.error("SetProduce", Failure::UnitActivity(why));
+        let rules = self
+            .players
+            .as_ref()
+            .expect("checked")
+            .resources
+            .as_ref()
+            .expect("checked")
+            .rules
+            .training_rules()
+            .expect("checked");
+        let original = if rules.upgrade_policy().map_err(fail)?.relative_cost {
+            None
+        } else {
+            let [gold, lumber] = ["goldcost", "lumbercost"].map(|column| {
+                crate::player_unit_cost::amount(original, column).map_err(|why| {
+                    fail(format!(
+                        "upgrade source {:?} {column}: {why}",
+                        original.rawcode
+                    ))
+                })
+            });
+            Some([gold?, lumber?])
+        };
+        rules.upgrade_costs(original, target).map_err(fail)
     }
 
     pub(super) fn prepare_training_debit(
