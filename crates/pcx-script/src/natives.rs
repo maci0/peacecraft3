@@ -27,7 +27,7 @@
 //!
 //! - `StringLength`: byte length through the first NUL, with one native
 //!   trigger-table lookup. See `docs/re-notes/script-string-natives.md` for
-//!   the selected-image evidence and remaining literal-expansion limits.
+//!   the selected-image evidence and native-specific lookup boundary.
 //!
 //! Everything else is refused with its name and the span of the call, which
 //! is what `PLAN.md` requires of a missing native. The other formatting natives

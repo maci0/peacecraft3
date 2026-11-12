@@ -1213,6 +1213,42 @@ impl Host for MapStartupHost {
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.native_call_with_strings(name, args, None)
+    }
+    fn native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: &pcx_script::text::NativeStringLookup<'_>,
+    ) -> Result<Value, String> {
+        self.native_call_with_strings(name, args, Some(strings))
+    }
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .context()
+            .scripts
+            .native_table_string(id)
+    }
+    fn table_string(&self, id: u32) -> Option<String> {
+        self.world().table_string(id)
+    }
+    fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.world().resolve_table_string(id)
+    }
+    fn code_tag(&self, tag: &str) -> Option<String> {
+        self.world().code_tag(tag)
+    }
+}
+
+impl MapStartupHost {
+    fn native_call_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, String> {
         if let Some(result) = self.preload_native(name, args) {
             return result;
         }
@@ -1381,15 +1417,9 @@ impl Host for MapStartupHost {
                 .admit_current_research(&context, pending.entries, pending.budget)
                 .map_err(|error| error.to_string())?;
         }
-        self.world_mut().native(name, args)
-    }
-    fn table_string(&self, id: u32) -> Option<String> {
-        self.world().table_string(id)
-    }
-    fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
-        self.world().resolve_table_string(id)
-    }
-    fn code_tag(&self, tag: &str) -> Option<String> {
-        self.world().code_tag(tag)
+        match strings {
+            Some(strings) => self.world_mut().native_with_strings(name, args, strings),
+            None => self.world_mut().native(name, args),
+        }
     }
 }

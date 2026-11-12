@@ -1178,3 +1178,15 @@ call. Both exact commands and results are retained under
 `/tmp/pc3-group-range-horizon-main/`; the pre-range Undead03 receipt is under
 `/tmp/pc3-undead03-before-range/`. These later runs do not rewrite the baseline
 sweep or establish mission completion, rendered fidelity or native tick parity.
+
+After the raw-string/native-consumer migration and sampled Human construction
+transfer correction, the recreation test executable has SHA-256
+`0e9505f3cfac8c2da4285c38bf9743942fbd93a1f6ef1ff5db6ba655882edfc2`.
+Four unchanged RoC replays use the same selected install and verified private
+display/null audio. Human01 and Undead02 pass the 300-second post-control idle
+horizon. Orc02 refuses automatic `ACcs` acquisition and Human08 refuses `ACwb`,
+both at their source-derived first deadline `0.019999999552965164`. Their older
+positive receipts predate default-on scheduling and are not current horizon
+passes. These four results do not establish that string migration caused the
+refusals or that a mission was completed. Exact commands and results remain in
+`/tmp/pc3-strings-construction-horizons/`.

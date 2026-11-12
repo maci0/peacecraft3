@@ -497,7 +497,11 @@ mod tests {
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                 .unwrap_or(rest.len());
             let name = &rest[..end];
-            if name.ends_with("_native") && rest[end..].starts_with("(name, args)") {
+            let consumer = name.ends_with("_native") || name.ends_with("_native_with_strings");
+            let forwards_arguments = rest[end..]
+                .strip_prefix("(name, args")
+                .is_some_and(|tail| matches!(tail.as_bytes().first(), Some(b')' | b',')));
+            if consumer && forwards_arguments {
                 modules.insert(name.to_string());
             }
             rest = &rest[end..];
@@ -806,6 +810,32 @@ mod tests {
         assert!(
             dispatched_names(body).is_empty(),
             "a contract row was read as a dispatch"
+        );
+    }
+
+    #[test]
+    fn context_dispatch_walk_does_not_treat_declared_only_names_as_implemented() {
+        let source = r#"
+fn native() { self.fixture_root_native_with_strings(name, args, None); }
+fn fixture_root_native_with_strings() { self.fixture_native_with_strings(name, args, strings); }
+fn fixture_native_with_strings() {
+    const CONTRACTS: &[(&str, &[&str])] = &[("DeclaredOnly", &["string"])];
+    match name { "ImplementedFixture" => Ok(()), _ => Err(()) }
+}
+"#;
+        let sources = BTreeMap::from([("object_host.rs".into(), source.into())]);
+        let chain = dispatch_chain(&sources);
+        assert!(chain.contains_key("fixture_root_native_with_strings"));
+        assert!(chain.contains_key("fixture_native_with_strings"));
+        let names = chain
+            .values()
+            .flat_map(|body| dispatched_names(body))
+            .collect::<BTreeSet<_>>();
+        assert!(names.contains("ImplementedFixture"));
+        assert!(!names.contains("DeclaredOnly"));
+        assert!(
+            dispatch_modules("self.fake_native_with_strings(name, args_unrelated, strings)")
+                .is_empty()
         );
     }
 

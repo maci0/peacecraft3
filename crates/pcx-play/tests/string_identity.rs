@@ -1,5 +1,5 @@
 use pcx_play::scripts::{AssetIdentity, MapScripts, ScriptAsset};
-use pcx_script::{HandleId, Host, SourceMap, Stage, Value};
+use pcx_script::{HandleId, Host, Value};
 use std::{cell::RefCell, num::NonZeroU64};
 
 const WTS: &[u8] = b"STRING 0\r\n{\r\n\r\n}\r\nSTRING 7\r\n{\r\nUnrelated table entry\r\n}\r\nSTRING 9\r\n{\r\n\xff\r\n}\r\n";
@@ -37,7 +37,7 @@ fn scripts(source: &str) -> MapScripts {
         },
         ScriptAsset {
             label: "synthetic/common.j",
-            bytes: b"// synthetic prelude\n",
+            bytes: b"native StringLength takes string text returns integer\n",
         },
         ScriptAsset {
             label: "synthetic/Blizzard.j",
@@ -56,7 +56,7 @@ fn scripts(source: &str) -> MapScripts {
 }
 
 #[test]
-fn authored_tag_parts_cannot_fabricate_a_table_reference() {
+fn authored_tag_parts_keep_raw_identity_without_host_substitution() {
     for tag in ["id", "識別"] {
         let source = format!(
             "function Tagged takes nothing returns string\nreturn \"TRIGSTR_^^{tag}^^7\"\nendfunction\n"
@@ -68,9 +68,9 @@ fn authored_tag_parts_cannot_fabricate_a_table_reference() {
         let mut vm = scripts.vm(FixtureHost::new(Some("x")));
         assert_eq!(
             vm.call("Tagged", &[]).unwrap(),
-            Value::Str("TRIGSTR_x7".into())
+            Value::Str(format!("TRIGSTR_^^{tag}^^7"))
         );
-        assert_eq!(vm.host().inner.tags.borrow().as_slice(), [tag]);
+        assert!(vm.host().inner.tags.borrow().is_empty());
         assert_eq!(scripts.identity.source, "caller in-memory inputs");
         assert_eq!(
             scripts
@@ -89,47 +89,46 @@ fn authored_tag_parts_cannot_fabricate_a_table_reference() {
 }
 
 #[test]
-fn unrelated_table_entry_cannot_bypass_missing_tag_refusal() {
+fn unrelated_table_entry_cannot_change_raw_tag_identity() {
     let source =
         "function Tagged takes nothing returns string\nreturn \"TRIGSTR_^^id^^7\"\nendfunction\n";
-    let scripts = scripts(source);
-    let mut vm = scripts.vm(FixtureHost::new(None));
-    let error = vm
-        .call("Tagged", &[])
-        .expect_err("missing authored tag must not return unrelated table entry 7");
-    assert_eq!(error.stage, Stage::Run);
-    assert!(error.message.contains("no substitution"));
-    assert!(error.message.contains("^id^"));
-    assert_eq!(
-        &source[error.span.start as usize..error.span.end as usize],
-        "\"TRIGSTR_^^id^^7\""
-    );
-    assert_eq!(error.locate(&SourceMap::new(source)), (2, 8));
-    assert_eq!(vm.error_source(), Some("the map script"));
-    assert!(
-        scripts
-            .diagnostic(&vm, &error)
-            .starts_with("synthetic/war3map.j:2:8")
-    );
-    assert_eq!(vm.host().inner.tags.borrow().as_slice(), ["id"]);
+    let scripts = std::sync::Arc::new(scripts(source));
+    let mut borrowed = scripts.vm(FixtureHost::new(None));
+    let mut owned = std::sync::Arc::clone(&scripts).owned_vm(FixtureHost::new(Some("7")));
+    let raw = Value::Str("TRIGSTR_^^id^^7".into());
+    assert_eq!(borrowed.call("Tagged", &[]).unwrap(), raw);
+    assert_eq!(owned.call("Tagged", &[]).unwrap(), raw);
+    assert!(borrowed.host().inner.tags.borrow().is_empty());
+    assert!(owned.host().inner.tags.borrow().is_empty());
 }
 
 #[test]
 fn null_empty_unicode_and_requested_table_failures_stay_distinct() {
-    let source = "function Empty takes nothing returns string\nreturn \"\"\nendfunction\nfunction TableEmpty takes nothing returns string\nreturn \"TRIGSTR_0\"\nendfunction\nfunction Absent takes nothing returns string\nreturn null\nendfunction\nfunction Unicode takes nothing returns string\nreturn \"漢字|n|cffaabbccText|r\"\nendfunction\nfunction Missing takes nothing returns string\nreturn \"TRIGSTR_8\"\nendfunction\nfunction BadEncoding takes nothing returns string\nreturn \"TRIGSTR_9\"\nendfunction\n";
+    let source = "function Empty takes nothing returns string\nreturn \"\"\nendfunction\nfunction TableEmpty takes nothing returns string\nreturn \"TRIGSTR_0\"\nendfunction\nfunction Absent takes nothing returns string\nreturn null\nendfunction\nfunction Unicode takes nothing returns string\nreturn \"漢字|n|cffaabbccText|r\"\nendfunction\nfunction Missing takes nothing returns string\nreturn \"TRIGSTR_8\"\nendfunction\nfunction BadEncoding takes nothing returns string\nreturn \"TRIGSTR_9\"\nendfunction\nfunction Length takes string text returns integer\nreturn StringLength(text)\nendfunction\n";
     let scripts = scripts(source);
     let mut vm = scripts.vm(FixtureHost::new(None));
-    for name in ["Empty", "TableEmpty"] {
-        assert_eq!(vm.call(name, &[]).unwrap(), Value::Str(String::new()));
-    }
+    assert_eq!(vm.call("Empty", &[]).unwrap(), Value::Str(String::new()));
+    assert_eq!(
+        vm.call("TableEmpty", &[]).unwrap(),
+        Value::Str("TRIGSTR_0".into())
+    );
     assert_eq!(vm.call("Absent", &[]).unwrap(), Value::Null);
     assert_eq!(
         vm.call("Unicode", &[]).unwrap(),
         Value::Str("漢字|n|cffaabbccText|r".into())
     );
-    let missing = vm.call("Missing", &[]).unwrap_err();
-    assert!(missing.message.contains("TRIGSTR_8 is not in this map"));
-    let encoding = vm.call("BadEncoding", &[]).unwrap_err();
+    for (name, token) in [("Missing", "TRIGSTR_8"), ("BadEncoding", "TRIGSTR_9")] {
+        assert_eq!(vm.call(name, &[]).unwrap(), Value::Str(token.into()));
+    }
+    for token in ["TRIGSTR_0", "TRIGSTR_8"] {
+        assert_eq!(
+            vm.call("Length", &[Value::Str(token.into())]).unwrap(),
+            Value::Int(0)
+        );
+    }
+    let encoding = vm
+        .call("Length", &[Value::Str("TRIGSTR_9".into())])
+        .unwrap_err();
     assert!(
         encoding
             .message

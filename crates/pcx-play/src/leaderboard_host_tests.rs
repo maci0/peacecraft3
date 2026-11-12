@@ -333,10 +333,6 @@ fn leaderboard_invalid_arguments_and_resource_limits_preserve_all_accepted_state
             vec![board.clone(), text(&"x".repeat(65))],
         ),
         (
-            "LeaderboardSetLabel",
-            vec![board.clone(), text("nul\0text")],
-        ),
-        (
             "LeaderboardGetPlayerIndex",
             vec![board.clone(), other_player.clone()],
         ),
@@ -778,4 +774,64 @@ fn leaderboard_display_and_destroy_resolve_only_null_and_typed_tombstones_as_abs
     let fresh = create(&mut h);
     assert_ne!(id(&fresh), id(&other));
     add(&mut h, &fresh, &p, "fresh row", 11);
+}
+
+#[test]
+fn native_string_leaderboard_labels_resolve_at_each_native_boundary() {
+    use std::cell::RefCell;
+    let mut h = host();
+    let b = create(&mut h);
+    let p = player(&mut h, 0);
+    let calls = RefCell::new(Vec::new());
+    let source = |id| {
+        calls.borrow_mut().push(id);
+        Ok(Some("TRIGSTR_23 ^^x^^".into()))
+    };
+    assert!(
+        h.native_with_strings(
+            "LeaderboardSetLabel",
+            &[Value::Null, text("TRIGSTR_7")],
+            &source
+        )
+        .is_err()
+    );
+    assert!(calls.borrow().is_empty());
+    h.native_with_strings(
+        "LeaderboardSetLabel",
+        &[b.clone(), text("TRIGSTR_7")],
+        &source,
+    )
+    .unwrap();
+    h.native_with_strings(
+        "LeaderboardAddItem",
+        &[b.clone(), text("TRIGSTR_8"), Value::Int(4), p],
+        &source,
+    )
+    .unwrap();
+    h.native_with_strings(
+        "LeaderboardSetItemLabel",
+        &[b.clone(), Value::Int(0), text("TRIGSTR_9")],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(*calls.borrow(), [7, 8, 9]);
+    assert_eq!(
+        h.native("LeaderboardGetLabelText", &[b]).unwrap(),
+        text("TRIGSTR_23 ^^x^^")
+    );
+}
+
+#[test]
+fn native_string_leaderboard_c_text_terminates_before_budgets_and_retention() {
+    let mut h = host();
+    let board = create(&mut h);
+    h.native(
+        "LeaderboardSetLabel",
+        &[board.clone(), text(&format!("é\0{}", "x".repeat(100)))],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native("LeaderboardGetLabelText", &[board]).unwrap(),
+        text("é")
+    );
 }

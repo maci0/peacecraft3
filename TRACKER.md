@@ -7235,3 +7235,33 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   acquisition, caster-owned channel state, effects and original-client tick
   parity remain open. See
   [Neutral Heal activation](docs/re-notes/ability-autocast-on.md).
+
+- 2026-11-13: Raw script literals decode escapes and retain code-tag markers
+  through variables, arrays, concatenation and calls. Evidenced native
+  consumers perform their own single WTS lookup after identity/local-recipient
+  checks; no generic native-argument expansion occurs. Missing source, missing
+  entry and malformed text remain distinct. Borrowed/owned sessions, AI,
+  preload and recording decorators preserve the selected map source. Main's
+  affected full package suites pass 3,444 tests, zero failed, 159 explicit
+  ignores, including sixteen actual consumer/forwarding regressions. Strict
+  native/WASM all-target/all-feature Clippy and both libraries pass. Corrected
+  application fixtures retain raw Capture and precise call diagnostics; all 26
+  session/callback cases and the application rebuild pass with core source
+  unchanged. Human01 and Undead02 pass current 300-second idle horizons; Orc02
+  and Human08 reach unsupported `ACcs`/`ACwb` work. Native string rendering,
+  case/hash/formatting and complete mission/tick parity remain open. See
+  [string boundaries](docs/re-notes/script-string-natives.md).
+
+- 2026-11-13: Paid worker-required Human construction sites survive ownership
+  transfer with site identity, HP, elapsed work and banks preserved. The old
+  worker remains observable immediately; ordinary work revalidation releases
+  an owner mismatch without refund/error. Same-owner repair can reenroll and
+  complete already-paid work. Other unqualified site classes still refuse.
+  Four controlled original-client/Wine traces, source-native observations and
+  public lifecycle tests support this sampled slice. All named main transfer
+  tests pass in the complete package run above; native/WASM checks, libraries
+  and application checks pass. The autonomous death/transfer fixtures now
+  actually issue the public request selecting that mode. Assistant builders,
+  exact polling/ownership-event timing, automatic reacquisition and transfer
+  cancellation remain open. See
+  [construction matrix](docs/re-notes/unit-construction.md).

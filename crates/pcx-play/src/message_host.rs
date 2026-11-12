@@ -115,15 +115,21 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         self.messages.as_ref()?;
         if !matches!(name, TIMED | CLEAR) {
             return None;
         }
         self.inner.program.natives().get(name)?;
-        Some(self.message_call(name, args))
+        Some(self.message_call(name, args, strings))
     }
-    fn message_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn message_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         let fail = |why| self.inner.error(name, Failure::Message(why));
         let state = self.messages.as_ref().expect("admitted messages");
         let revision = state
@@ -167,6 +173,8 @@ impl ObjectHost {
         if player != local {
             return Ok(Value::Null);
         }
+        let text = pcx_script::text::native_map_string(text, strings)
+            .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
         let now = self
             .timer_game_time()
             .ok_or_else(|| fail("logical clock is not admitted"))?;
@@ -188,7 +196,7 @@ impl ObjectHost {
         let mut copy = String::new();
         copy.try_reserve_exact(text.len())
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-        copy.push_str(text);
+        copy.push_str(&text);
         let state = self.messages.as_mut().expect("admitted messages");
         state
             .entries

@@ -17,9 +17,9 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-pub(crate) const COMMON: &str = "native Init takes nothing returns integer\nnative Register takes code callback returns nothing\nnative Capture takes string text returns nothing\nnative Refuse takes nothing returns nothing\nnative GetPlayerNeutralPassive takes nothing returns integer\n";
+pub(crate) const COMMON: &str = "native Init takes nothing returns integer\nnative Register takes code callback returns nothing\nnative Capture takes string text returns nothing\nnative Refuse takes nothing returns nothing\nnative GetPlayerNeutralPassive takes nothing returns integer\nnative StringLength takes string text returns integer\n";
 pub(crate) const BJ: &str = "// source position padding\n\nfunction PreludeFail takes nothing returns nothing\ncall Refuse()\nendfunction\n";
-pub(crate) const MAP: &str = "globals\ninteger counter = Init()\nendglobals\nfunction SelectedEntry takes nothing returns nothing\ncall Register(function Callback)\nendfunction\nfunction Callback takes integer amount returns integer\nset counter = counter + amount\ncall Capture(\"TRIGSTR_7\")\nreturn counter\nendfunction\nfunction BadEntry takes nothing returns nothing\ncall Capture(\"TRIGSTR_9\")\nendfunction\nfunction Read takes nothing returns integer\nreturn counter\nendfunction\n";
+pub(crate) const MAP: &str = "globals\ninteger counter = Init()\nendglobals\nfunction SelectedEntry takes nothing returns nothing\ncall Register(function Callback)\nendfunction\nfunction Callback takes integer amount returns integer\nset counter = counter + amount\ncall Capture(\"TRIGSTR_7\")\nreturn counter\nendfunction\nfunction BadEntry takes nothing returns nothing\ncall StringLength(\"TRIGSTR_9\")\nendfunction\nfunction Read takes nothing returns integer\nreturn counter\nendfunction\n";
 pub(crate) const WTS: &[u8] =
     b"STRING 7\r\n{\r\n|cffff0000Authored|r|nText\r\n}\r\nSTRING 9\r\n{\r\n\xff\r\n}\r\n";
 fn identity(label: &str) -> AssetIdentity {
@@ -239,10 +239,7 @@ pub fn admitted_resource_preserves_vm_host_and_callbacks_across_updates() {
             .resource_mut::<MapScriptSession<StatefulHost>>();
         assert_eq!(state.global("counter"), Some(Value::Int(11)));
         assert_eq!(state.host().unwrap().inits, 1);
-        assert_eq!(
-            state.host().unwrap().text,
-            vec!["|cffff0000Authored|r|nText"; 3]
-        );
+        assert_eq!(state.host().unwrap().text, vec!["TRIGSTR_7"; 3]);
         assert_eq!(factories.load(Ordering::SeqCst), 1);
         {
             let active_context = Arc::clone(state.context().unwrap());
@@ -297,7 +294,7 @@ pub fn failed_candidate_keeps_old_context_and_retains_candidate_diagnostics() {
     assert_eq!(failure.function, Some(entry));
     assert_eq!(failure.source_label.as_deref(), Some("the map script"));
     assert!(
-        failure.diagnostic.starts_with("failed-map:war3map.j:13:14"),
+        failure.diagnostic.starts_with("failed-map:war3map.j:13:1"),
         "{}",
         failure.diagnostic
     );
@@ -308,7 +305,7 @@ pub fn failed_candidate_keeps_old_context_and_retains_candidate_diagnostics() {
     );
     assert_eq!(
         &MAP[failure.error.span.start as usize..failure.error.span.end as usize],
-        "\"TRIGSTR_9\""
+        "call StringLength(\"TRIGSTR_9\")"
     );
     assert!(candidate_weak.upgrade().is_none());
     assert!(old_weak.upgrade().is_some());
@@ -453,7 +450,17 @@ pub fn replacement_releases_old_context_and_switches_world_wts_and_state_togethe
         state.call_function(callback, &[Value::Int(2)]).unwrap(),
         Value::Int(27)
     );
-    assert_eq!(state.host().unwrap().text, ["Replacement body"]);
+    assert_eq!(state.host().unwrap().text, ["TRIGSTR_7"]);
+    assert_eq!(
+        state
+            .context()
+            .unwrap()
+            .scripts
+            .table_string(7)
+            .unwrap()
+            .as_deref(),
+        Some("Replacement body")
+    );
     assert_eq!(state.host().unwrap().inits, 1);
     state.clear();
     assert!(new_weak.upgrade().is_none());

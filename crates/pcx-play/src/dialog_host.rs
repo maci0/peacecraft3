@@ -293,6 +293,7 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         self.dialogs.as_ref()?;
         if !NATIVES.iter().any(|(n, _, _, _)| *n == name)
@@ -301,9 +302,14 @@ impl ObjectHost {
             return None;
         }
         self.inner.program.natives().get(name)?;
-        Some(self.dialog_call(name, args))
+        Some(self.dialog_call(name, args, strings))
     }
-    fn dialog_call(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn dialog_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         let state = self.dialogs.as_ref().expect("admitted dialogs");
         let revision = state.revision.checked_add(1).ok_or_else(|| {
             self.inner
@@ -355,6 +361,8 @@ impl ObjectHost {
             }
             ("DialogSetMessage", [dialog, Value::Str(text)]) => {
                 let id = self.dialog_id(dialog, name)?;
+                let text = pcx_script::text::native_map_string(text, strings)
+                    .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
                 let previous = state.dialogs[&id].message.as_ref().map_or(0, String::len);
                 let bytes = state
                     .text_bytes
@@ -363,12 +371,12 @@ impl ObjectHost {
                     .filter(|n| *n <= state.budget.text_bytes)
                     .ok_or_else(|| self.inner.error(name, Failure::Budget("dialog text")))?;
                 let state = self.dialogs.as_mut().expect("dialogs");
-                state.dialogs.get_mut(&id).expect("dialog").message = Some(text.clone());
+                state.dialogs.get_mut(&id).expect("dialog").message = Some(text.into_owned());
                 state.text_bytes = bytes;
                 Value::Null
             }
             ("DialogAddButton", [dialog, Value::Str(text), Value::Int(hotkey)]) => {
-                self.add_dialog_button(dialog, text, *hotkey, None, name)?
+                self.add_dialog_button(dialog, text, *hotkey, None, name, strings)?
             }
             (
                 "DialogAddQuitButton",
@@ -378,7 +386,7 @@ impl ObjectHost {
                     Value::Str(text),
                     Value::Int(hotkey),
                 ],
-            ) => self.add_dialog_button(dialog, text, *hotkey, Some(*score), name)?,
+            ) => self.add_dialog_button(dialog, text, *hotkey, Some(*score), name, strings)?,
             ("DialogDisplay", [Value::Handle(player), dialog, Value::Bool(visible)]) => {
                 let id = self.dialog_id(dialog, name)?;
                 let number = match self
@@ -457,8 +465,11 @@ impl ObjectHost {
         hotkey: i32,
         quit_score_screen: Option<bool>,
         name: &str,
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Result<Value, Error> {
         let id = self.dialog_id(dialog, name)?;
+        let text = pcx_script::text::native_map_string(text, strings)
+            .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
         let state = self.dialogs.as_ref().expect("dialogs");
         if state.buttons >= state.budget.max_buttons {
             return Err(self.inner.error(name, Failure::Budget("dialog buttons")));
@@ -492,7 +503,7 @@ impl ObjectHost {
             .buttons
             .push(DialogButton {
                 id: button,
-                text: text.to_owned(),
+                text: text.into_owned(),
                 hotkey,
                 quit_score_screen,
             });
