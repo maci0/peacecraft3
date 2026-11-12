@@ -7111,3 +7111,25 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   transfer, multi-builder work, native polling/tick behavior and presentation
   parity remain open; the atomic refusal is not a transfer implementation. See
   [construction evidence](docs/re-notes/unit-construction.md).
+
+- 2026-11-13: Queued research cancellation and producer death use the parsed
+  `ResearchRefundRate` independently of training refunds, including the paid
+  research level's cost. Missing research refund policy refuses before state
+  mutation. Main's independent gameplay package run passes 3,143 tests with
+  zero failures and 143 explicit ignores, including all three named new refund
+  regressions and the real-session timer regression below. Strict native/WASM
+  all-target Clippy, both library builds and scoped formatting pass with source
+  hashes unchanged. Evidence is selected-image static code and synthetic host
+  execution; matched original-client research events, transfer/removal behavior
+  and runtime tick parity remain open. See
+  [research refund policy](docs/re-notes/player-production-queues.md#research-refund-policy).
+
+- 2026-11-13: Published timer sessions continue across mandatory construction
+  and morph boundaries before reaching a later timer or AI wake. The real
+  `MapScriptSession` regression verifies an earlier morph, a later timer,
+  reaching every requested target and equivalent chunked advancement. The
+  named regression passes in the independent main package run above; strict
+  native/WASM checks and library builds pass. This is source inspection and
+  synthetic session evidence; native mixed-event ordering, AI-VM comparison,
+  browser execution and tick parity remain open. See
+  [timer catch-up](docs/re-notes/legacy-timer-start.md).
