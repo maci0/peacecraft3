@@ -20,6 +20,7 @@ pub use fresh::{FreshSettings, FreshTriggers, fresh_settings, fresh_triggers};
 pub struct Inputs {
     pub camera: CameraMargins,
     pub numeric: script_numeric::NumericPolicy,
+    pub script_hash: crate::playercolor_host::ScriptHashPolicy,
     pub destructable_restore: crate::playercolor_host::RestoreLifePolicy,
     pub random: profile::Policy,
     pub clock: startup_clock::StartupClock,
@@ -258,6 +259,12 @@ pub fn read(
         full_timeout: window(0x7fbad0, 0xbe, true)?,
         active_elapsed: window(0x7fbb90, 0x34, true)?,
         inactive_elapsed: window(0x4fe470, 0x6f, true)?,
+        pause: window(0x4fe640, 0x46, true)?,
+        resume: window(0x4fe6b0, 0x38, true)?,
+        rearm: window(0x4fe5d0, 0x6a, true)?,
+        stop: window(0x7fbbd0, 0x3c, true)?,
+        dispatch: window(0x4fdf90, 0x4a, true)?,
+        expiry_dispatch: window(0x7fc390, 0x16b, true)?,
     };
     let numeric = script_numeric::NumericPolicy::read(
         image,
@@ -283,6 +290,20 @@ pub fn read(
     .and_then(|numeric| numeric.with_math(image, &math, BUDGET))
     .and_then(|numeric| numeric.with_formatting(image, &formatting, BUDGET))
     .and_then(|numeric| numeric.with_timer_queries(image, &timer_queries, BUDGET))
+    .map_err(|e| e.to_string())?;
+    let script_hash = crate::playercolor_host::ScriptHashPolicy::read(
+        image,
+        crate::playercolor_host::ScriptHashBinding {
+            origin: origin.clone(),
+            image_sha256,
+            handler: window(0x4ac5a0, 33, true)?,
+            raw: window(0x469010, 14, true)?,
+            normalize: window(0x433890, 127, true)?,
+            core: window(0x4347f0, 0x1fb, true)?,
+            tails: window(0x4349ec, 44, false)?,
+        },
+        BUDGET,
+    )
     .map_err(|e| e.to_string())?;
     let destructable_restore = crate::playercolor_host::RestoreLifePolicy::read(
         image,
@@ -411,6 +432,7 @@ pub fn read(
     Ok(Inputs {
         camera,
         numeric,
+        script_hash,
         destructable_restore,
         random,
         clock,

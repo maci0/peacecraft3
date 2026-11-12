@@ -1231,6 +1231,9 @@ impl<W: AiWorld> AiHost<W> {
 }
 
 impl<W: AiWorld> Host for AiHost<W> {
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.world()?.string_hash(bytes)
+    }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.world()?.native_table_string(id)
     }
@@ -4499,6 +4502,26 @@ mod tests {
 #[cfg(test)]
 mod native_string_forwarding_tests {
     use super::*;
+    #[test]
+    fn string_hash_ai_forwards_raw_to_lent_world_and_refuses_unlent_world() {
+        let policy = crate::playercolor_host::ScriptHashPolicy::synthetic_fixture();
+        let expected = policy.hash(b"TRIGSTR_7").unwrap();
+        let world = crate::neutral_player::native_hash_world_fixture(None, Some(policy));
+        let program = world.context().scripts.shared_program();
+        let mut ai = AiHost::new(1, world);
+        let world = ai.world.take().unwrap();
+        assert!(
+            ai.string_hash(b"raw")
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        ai.world = Some(world);
+        let mut vm = pcx_script::Vm::new(&program, ai);
+        assert_eq!(
+            vm.call("hash", &[Value::Str("TRIGSTR_7".into())]).unwrap(),
+            Value::Int(expected)
+        );
+    }
     #[test]
     fn native_string_ai_world_is_selected_and_unlent_world_has_no_fallback() {
         let world = crate::neutral_player::native_string_world_fixture(Some(

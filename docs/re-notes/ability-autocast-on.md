@@ -214,3 +214,80 @@ The unchanged Undead05 replay now publishes 194 units; it no longer refuses
 The exact executable hash and failed command are retained under
 `/tmp/pc3-neutral-heal-horizon-main/`. This is recreation frontier evidence,
 not an observed `Anhe` cast or original-client parity.
+
+## Spell Steal and Orb of Annihilation default activation (2026-11-13)
+
+The unchanged TFT startup receipts under `/tmp/pc3-thematic-horizon-main`
+refuse default activation for `Asps` in HumanX01, HumanX03Interlude and UndeadX04,
+and `Afak` in HumanX02. The selected local `War3x.mpq` unprefixed
+`Units/AbilityData.slk` binds `Asps` to code `Asps` (Spell Steal), and `Afak` to
+code `Afak` (Orb of Annihilation). `ANak` is another authored alias for `Afak`.
+The native class name alone must not determine the effect. `UnitAbilities.slk`
+gives `hspt` and `nbel` default `auto=Asps`, and `ubsp` default `auto=Afak`.
+HumanX02's failing line 1987 creates `ubsp`; the other three scripts create the
+corresponding `hspt`/`nbel` units. These are shipped-byte joins, not new mission
+horizon observations.
+
+Static disassembly of the same reviewed image identifies `CAbilitySpellSteal`
+(vtable `f6b6b8`, code getter `bf8320`) and `CAbilityFlamingAttack` (vtable
+`f966c8`, code getter `c4a620`). Their factories `bf8f60` and `c4a810` call
+`b2ac80`; their complete post-base embedded timer initialization before the
+class-vtable write is byte-identical to Heal's. Neither adds a separate state
+flag write. Their ON/OFF wrappers, ON/OFF handlers, update hooks, activation,
+deactivation, timer-event dispatch and retry/minimum getters equal Heal's:
+`b81080`/`b2a310`, `b99a80`/`b99b50`, `bdb5e0`/`bdb5f0`, `b9c590`,
+`b9c5c0`, `b9c5f0`, and `b9cbb0`/`b9cbd0`. The shared activation reads its
+first delay through the same image operand at `10db05c`. The existing decoder
+continues deriving those rules and exclusion groups from the image.
+
+The selected-image gate exposed an additional discovery boundary: Spell Steal's
+name-getter address also occurs as operand bytes in executable code. The PE's
+initialized ranges include that code; treating all of them as class data made
+the pointer search ambiguous. Discovery now excludes the parsed executable
+ranges from its initialized-data scan. Code getter discovery remains in code,
+and the existing bounded scans, source hash and true data ambiguity refusals
+remain strict. A nonstock regression distinguishes executable pointer
+coincidences from duplicate pointers in actual data; the selected-image gates
+exercise the corrected PE range selection.
+
+The two class names are now admitted through that existing decoder. The patch
+changes no clock, common loop, target acquisition or cast implementation.
+Spell Steal's cast/ON/OFF getters join the native registry's `spellsteal`,
+`spellstealon` and `spellstealoff`, matching `HumanAbilityFunc.txt`. Orb of
+Annihilation's native getters join `flamingattacktarg`, `flamingattack` and
+`unflamingattack`; its `UndeadAbilityFunc.txt` row contains no order keys.
+No profile order alias is invented, and the existing strict cross-check remains.
+Default activation issues no explicit ON/cast order. Their cast flags and ranking
+virtuals differ, so common-toggle equality does not qualify either actual spell.
+
+The selected-image class gate now checks both bindings and compares their
+activation/tick fields with other decoded classes. Two additional explicit
+selected-image caller gates feed the parsed class codes and activation delays
+into synthetic unit definitions whose ability alias differs from the code.
+They exercise public creation at nonzero time, the last representable host time
+before the first boundary, exact-boundary unsupported-work refusal, repeated
+refusal with unchanged unit/RNG/handle/event state, and OFF/removal disarming.
+Fixture toggle names are synthetic and make no claim about original order
+spelling. Existing malformed/unknown-rule tests retain their strict boundary.
+These checks qualify native input and canonical callers; they do not measure
+original-client deadlines or prove spell effects, startup horizons or tick parity.
+
+Local read-only qualification receipts, source hashes and bounded byte-join
+assertions remain at `/tmp/pc3-sol61-08-autocast-qualification.{md,json}`.
+REA session discovery failed with a provider cleanup error; these observations
+use direct PE/disassembly evidence rather than a new decompiler dossier.
+No original asset bytes are committed.
+
+Branch validation passes all 52 focused autocast tests with all four local-image
+gates explicitly enabled, including both new public lifecycle gates and
+`executable_getter_pointer_coincidence_keeps_true_data_ambiguity_strict`.
+Strict native all-target/all-feature Clippy, WASM all-feature Clippy, both
+all-feature library builds, and formatting of the three changed Rust files pass.
+The driver used two jobs, the lane's isolated range target, and verified private
+Xvfb/null audio. Checked Rust hashes remain unchanged. Command/exit receipts,
+exact named-gate results and complete logs remain local under
+`/tmp/pc3-sol61-08-autocast-{sources.sha256,validation-receipt.json,verified.log}`.
+The initial failed image-discovery run is preserved separately as
+`autocast-failed-anchor.log` and `autocast-failed-anchor-receipt.json` under the
+same local prefix. No application rebuild or unchanged-mission horizon was run
+in this branch; native clock alignment, acquisition and spell effects remain open.

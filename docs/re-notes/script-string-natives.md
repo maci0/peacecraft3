@@ -2,7 +2,7 @@
 
 Image: Warcraft III.exe 1.29.2.9231, SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-Static assembly observations; no original-client execution.
+Static assembly and explicitly scoped original-client observations below.
 
 ## StringLength implementation and trigger lookup
 
@@ -67,7 +67,78 @@ length/case. The helper uppercases ASCII a..z, replaces slash with backslash,
 and admits at most `0x3ff` bytes into its stack buffer before calling
 `0x4347f0` with zero as its third argument. Non-ASCII bytes pass through
 this preprocessing.
-The full hash is not yet implemented, so this native remains refused.
+The complete hash now runs through the real VM builtin and a selected-image
+`ScriptHashPolicy`, installed by `campaign_client::read` and map startup.
+The readonly Host hook refuses nonempty input without that policy. Initial null,
+empty and NUL-first input return zero before policy demand. StringHash never
+performs WTS, dictionary or tag lookup; raw trigger tokens remain raw.
+
+The policy reads both raw/native wrappers, normalizer, hash core and tail jump
+table from the complete fingerprinted image. Capacity, prefix cap, case range,
+case delta, slash mapping, initial lane word, seed and all nine mix directions
+and shift counts come from those windows. The parser checks call/data joins,
+source ranges, byte-packing tail fallthrough, both mix copies and their register
+roles. Unsupported source shapes remain errors. Three wrapping 32-bit lanes
+consume little-endian words, add the normalized prefix length, pack the tail
+with the third lane's low byte reserved, then run the final mix. The signed
+integer result is the third lane. This is byte preprocessing, including prefixes
+that end inside UTF-8; the byte policy does not decode or replace those bytes.
+
+Borrowed/owned localization, recording, selected-map neutral wrappers, map
+startup, lent AI and preload hosts forward the readonly policy. No AI native
+whitelist expansion or preload cross-program callback relaxation is involved.
+Missing policy and an unlent world remain explicit errors; pure builtins retain
+the existing recording behavior without duplicate host-native events.
+
+### Original-client byte-string observation
+
+Bounded static REA evidence is
+`ev_7a1f9f97eac380a4b5ac960dba5177c4f3c9f27340e8bffaa0c339d3eb290ec2`.
+A private copy of the CRC-fixed diagnostic recipe retains Booty Bay main/terrain,
+changes only script/attributes CRC, and resolves against selected common/Blizzard
+scripts. One private offscreen Xvfb/Pulse-null Wine container captured 83 cases
+plus BEGIN/END and stopped; Docker exited/PID-zero and unchanged raw trace hash
+were verified before releasing the native slot. Raw trace SHA-256:
+`5e565636ab170a9c70c164a05ab91e9e60e46378549dc5eb7638f10a95177cce`.
+Original image, map, disassembly and captures remain local.
+
+The matrix records ordered index/label, native hash/length and null/empty/equality
+bits as ASCII metadata, so invalid UTF-8 results are not decoded lossily. Its 38
+dedicated Hash expressions cover all tails, multiple full blocks, case/slash,
+punctuation, UTF-8, raw trigger tokens and byte lengths 1022/1023/1024/1025/2048.
+`string_hash_selected_image_matches_38_original_expressions_through_vm` reads the
+selected image and explicit local receipt, verifies image/raw trace identities,
+installs the real ObjectHost policy and compares every captured Hash expression
+through the actual VM. This is controlled Wine behavior, not native Windows or
+complete campaign parity.
+
+The same native matrix qualifies byte-value migration needs. SubString on é
+with range 0..1 returns byte C3; 1..2 returns A9 (each uniquely identified by its
+one-byte hash). Valid empty ranges produce an empty string, while null/empty
+input and an out-of-range start produce null. A positive reversed range 3..1 on
+abcdef produces def. Indices narrow to 16 bits; negative effective offsets can
+touch outside the allocation, so inventing unsigned clamps is unsupported.
+Four large SubString cases did not record the actual producer's raw length;
+their requested repeat counts must not be treated as witnessed input lengths.
+
+StringCase's CRT entries test mutable locale state at `0x11b4454`; the zero
+branch uses encoded byte ranges, while the nonzero branch uses locale wrappers.
+Observed UTF-8 inputs follow the C-like ASCII path in this run. That does not
+qualify all locale states. Case can cut 1022 a bytes + é after byte C3. Current
+`Value::Str(String)` cannot preserve these outputs: Case/SubString stay refused
+until the byte value/consumer migration and locale/bounds policies are complete.
+No Rust Unicode or lossy UTF-8 substitution is supported.
+
+### Hash validation (2026-11-13)
+
+From `d73f9224`, the isolated worktree target passes the complete script/trig/play
+suites with `pcx-play/test-fixtures`: 3,504 passed, zero failed, 164 explicit
+ignores. All ten new ordinary Hash regressions run by name. The separately
+selected original-input test passes all 38 expressions through VM/ObjectHost.
+Strict native/WASM all-target/all-feature Clippy and both library builds pass
+with warnings denied. Checked Rust source hashes remain unchanged across those
+gates. Application startup/session integration remains a separate main-checkout
+gate; these checks do not establish full campaign or rendered byte-text parity.
 
 ## Real formatting correction
 
@@ -173,7 +244,7 @@ library gates do not establish full campaign or rendered parity.
 
 ## Remaining scope
 
-S2I/S2R, case/substring boundaries and the full hash remain unimplemented. Additional map-string wrapper families remain refused until their
+S2I/S2R and case/substring byte, locale and index boundaries remain unimplemented. Additional map-string wrapper families remain refused until their
 real native consumers are implemented. No native/runtime parity or campaign
 validation is claimed.
 

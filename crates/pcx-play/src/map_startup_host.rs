@@ -304,6 +304,7 @@ pub struct ResolvedObservations {
 pub mod sound_playback;
 
 pub struct MapStartupInputs {
+    pub thematic_music_rules: Option<crate::playercolor_host::ThematicMusicRules>,
     /// Map members from the receiving chapter's selected source archive generation.
     pub cached_unit_source_maps: Vec<pcx_assets::AssetPath>,
     pub unit_decay: Option<crate::unit_decay::Rules>,
@@ -372,6 +373,7 @@ pub struct MapStartupInputs {
     pub terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
+    pub script_hash: Option<crate::playercolor_host::ScriptHashPolicy>,
     pub destructable_restore: Option<crate::playercolor_host::RestoreLifePolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
@@ -683,6 +685,7 @@ fn assemble_inner(
     inputs: MapStartupInputs,
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
+        thematic_music_rules,
         cached_unit_source_maps,
         unit_decay,
         unit_blend,
@@ -732,6 +735,7 @@ fn assemble_inner(
         random,
         terrain_pathing,
         numeric,
+        script_hash,
         destructable_restore,
         experience_handicap,
         health_handicap,
@@ -812,6 +816,9 @@ fn assemble_inner(
         .with_unit_id_lookup(Arc::clone(&defend.tables))?;
     if let Some(rules) = unit_blend {
         object.admit_unit_blend(rules)?;
+    }
+    if let Some(rules) = thematic_music_rules {
+        object = object.with_thematic_music_rules(rules)?;
     }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
@@ -982,6 +989,9 @@ fn assemble_inner(
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
+    }
+    if let Some(policy) = script_hash {
+        object = object.with_script_hash(policy);
     }
     if let Some(policy) = destructable_restore {
         object = object.with_destructable_restore(policy)?;
@@ -1189,6 +1199,12 @@ fn assemble_inner(
 }
 
 impl Host for MapStartupHost {
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .string_hash(bytes)
+    }
     fn begin_script_call(
         &mut self,
         name: &str,

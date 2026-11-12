@@ -182,3 +182,294 @@ synthetic inventory/powerup tests pass. The original-install attribute gate stay
 explicitly skipped. The isolated WebAssembly library build and touched-file
 formatting/diff checks pass with compiler warnings denied. No native runtime or
 browser presentation comparison was added.
+
+## Private original-client probes (2026-11-13)
+
+Runtime source is the same executable identity above, under private
+Docker/Wine/Xvfb, not native Windows. The runtime image is
+`sha256:ab778c3e5be5de42cbe35f7d649cab2c0688630838fbcb1a27e476a0f825ec6e`.
+The container has no network, host display/audio sockets or audio devices, drops
+all capabilities and uses a read-only root. The only writable bind is its private
+run directory. Before launching the client, the copied harness verifies its Xvfb
+geometry and a single Pulse null sink. Modified diagnostic map scripts use the
+working map-patching recipe, update the script's MPQ attributes CRC, and verify
+extraction round trips. They are bounded experiments, not unchanged-map evidence.
+Original maps, generated maps, profiles and saves remain local and uncommitted.
+
+The path/Exists probe at
+`/tmp/pc3-sol10-save-probes-1794517623829270155/native-status.json` completed.
+Its final synthetic trace was checked for each before/after witness:
+
+- A controller-created zero-byte ordinary file returns true from SaveGameExists.
+  This corroborates the inspected wrapper's lack of save-header validation.
+- Null, empty, parent traversal, nested parent traversal, colon and drive-colon
+  names return false from Exists before and after SaveGame. Both SaveGame and
+  LoadGame return to the caller for these names, retaining its local value. The
+  private custom-save directory contains only the ordinary-file control and the
+  valid save control after the run. This does not qualify every path spelling,
+  filename root or map-identity transformation.
+- A valid control changes Exists from false to true before the next script
+  statement. The resulting extensionless file is under the private profile's
+  `CustomSaves/PCXSaveProbe` directory; it is 1,357,666 bytes with SHA-256
+  `95b601be17e42463214baafc3ca3079128c667434cb87182f4ab7f5a42fc3e23`.
+  Only filename, size and digest were recorded for the payload.
+
+A separate timer-callback probe retains a helper's local value across SaveGame,
+then completes its enclosing arithmetic assignment. LoadGame returns to the old
+caller far enough for a following statement and local-value witness to execute.
+The same immediate witnesses occur when the map is launched through the original
+Single Player/Custom Game menu with a newly created private profile. No registered
+GAME_SAVE callback appears in those captured intervals. These observations do not
+establish which VM instruction point was stored or the eventual fate of the old
+thread after successful publication.
+
+The extensionless scripted-load attempts encounter an access violation at
+`0x8744d7`. REA/Ghidra evidence
+`ev_3c05fe74039c00c2e8246e7f800b43602dc6a5556d57f9f4f9ecbfc54d60626a`
+resolves the caller at `0x521800` to `0x5214b0`: its failure path builds
+`NETERROR_BADMAPDATA` and calls the dialog helper leading to that dereference.
+The actual Load Saved Game menu, opened in a new private process and copied
+profile, lists the diagnostic directory but omits the extensionless file. These
+are filename/admission controls, not successful restore evidence.
+
+### Successful save/load execution boundary
+
+Matching `.w3z` names load successfully in both the direct timer and nested
+TriggerExecute arms. Local evidence and checked synthetic witnesses are in
+`/tmp/pc3-sol10-save-probes-1794518196713646522/witness-verification.json`.
+The two saves are 1,362,856 and 1,362,784 bytes, respectively, with SHA-256
+`8cc3dfc6d6922906b620e9eeb04636be3d462cb7cde6646e0fa9c25d36706916` and
+`3ecb67fafb5be20fd5d435eccd1b98936a6f86e5d304245b78eb6769be56ea46`.
+No payload contents were inspected or retained in the repository.
+
+The helper sets a phase marker to 11, then calls SaveGame while an outer
+arithmetic assignment is pending. Live execution returns from SaveGame, sets
+the marker to 12, completes the assignment and later calls LoadGame. Its old
+caller then executes a following statement setting the marker to 33.
+
+After publication, GAME_LOADED instead observes marker 11 and the uncompleted
+assignment's original value. The next two periodic callbacks advance their
+counter from 1 to 2 and 3 while retaining those values. The helper's after-save
+tail and its active timer caller do not resume during that interval. The nested
+case likewise retains its before-trigger marker but does not replay its
+after-trigger tail. Saving at tick end or restoring these active frames and
+finishing their pending assignment would contradict these observations.
+
+This does not establish omission of all VM execution state. A separate paired
+probe parks a trigger action with a local value before saving. Its uninterrupted
+control wakes once. After loading, the parked action also wakes once with the
+same local value, while its start counter remains one. Twelve later timer
+callbacks retain the saved marker and pending assignment values above. Evidence
+is in `/tmp/pc3-sol10-save-probes-1794518777723079019/native-status.json`.
+Thus these parked map threads survive, even though the active save-calling
+execution does not resume. A fresh original process, with prior trace files
+excluded from its copied private profile, bootstraps the same map and loads that
+existing save. Its new final trace exactly matches the same-process loaded trace,
+including the parked local and single wake. The checked receipt is
+`sleep-witness-verification.json` in the same directory. The unsuccessful direct
+`-loadfile` saved-file experiments are not used as cold-load evidence.
+
+A further paired probe preserves an already evaluated left operand, the sleeping
+callee's local, its caller's local and the remaining TriggerAddAction tail. Its
+evaluation/start/wake/tail counters each remain one after load. Both uninterrupted
+and loaded sleeping actions see their original Begin timer from GetExpiredTimer,
+not a later periodic timer. GAME_LOADED instead sees a null expired timer. Split
+records avoid the original Preload trace's long-line truncation. Complete local
+records are at `/tmp/pc3-sol10-save-probes-1794519945945109409`.
+
+The same split records separate expired identity from timer queries. During
+GAME_LOADED the periodic timer reports elapsed equal to its timeout and remaining
+zero despite GetExpiredTimer returning null. The earlier one-shot Begin timer
+retains its inactive elapsed/remaining values when its sleeping action resumes.
+These are finite-real query witnesses, using a bounded sign/exponent/mantissa
+normalizer with separate arithmetic controls, not assumptions about the native
+clock quantum or a copied query implementation.
+
+### Pending expiry replay after load
+
+Saving inside the first registered expiry subscription distinguishes native
+delivery from the active script call tree. At that point the first subscription
+has started, but its tail, the second subscription and the direct handler have
+not run. GAME_LOADED sees exactly those saved counters.
+
+At the same saved long-timer clock point, a fresh firing then starts again with
+the first subscription, followed by the second subscription and direct handler.
+An early observer scheduled by GAME_LOADED sees that complete fresh firing;
+the following normal periodic firing occurs later. Local evidence is
+`/tmp/pc3-sol10-save-probes-1794520242410567573`. This is neither resuming the
+old subscription halfway through nor waiting a full new period before firing.
+
+Consequently an internal scheduler that advances a periodic deadline before
+calling script cannot save only that advanced Run. Its saved pending-expiry
+projection must reproduce the native fresh firing. Idle/menu checkpoint
+round trips can compare uninterrupted continuation; a script save during an
+active expiry must instead compare this qualified load behavior. Specific Resume
+and parked-AI cases are qualified below; reentrant mutations, other event families
+and presentation still need separate qualification. No result here permits dropping retained spell
+payments or unrelated pending native jobs.
+
+### Session delivery cursor foundation
+
+The existing production timer dispatcher now retains its expiry snapshot,
+subscription index, condition index/combined result and action/handler phase in
+the published session. It still evaluates every condition, skips subscriptions
+retired before their turn, clears trigger context before the direct handler and
+finishes an expiry even on callback failure. This is recreation-owned dispatch
+state, not a claim that original save payloads contain the same cursor.
+
+The two new `timer_delivery_cursor_*` regressions run through the production
+factory and published VM. Both pass, as do all eight affected trigger-delivery
+tests. Strict native and WebAssembly pcx-play Clippy checks, the WebAssembly
+library build, the application test's WebAssembly compile check and strict native
+application-test Clippy check pass in the isolated lane target, with unchanged
+source hashes. Browser execution remains unchecked.
+
+Full SaveGame/LoadGame remains unsupported in the recreation. No save codec,
+VM checkpoint barrier or production save/menu route accompanies this foundation.
+
+### Retained expired-timer response
+
+Parked script-thread contexts now retain the expired-timer identity observed at
+their sleep. Resuming installs that response; returning or failing restores the
+caller's response. An explicitly retained null differs from having no override,
+so it cannot fall through to an unrelated current expiry. The getter retains its
+existing handle-family/lifetime validation. No timer query epoch or old clock
+point is installed by this context change.
+
+The three new regressions exercise nested trigger calls, a second sleep, the
+remaining action tail, explicit null under another prepared expiry, and failure
+unwinding through the real owned VM and host. They and all 13 filtered trigger/
+runtime tests pass. All eight affected published-session trigger tests also pass
+after merging the released baseline. Strict native/WebAssembly pcx-play
+all-target Clippy and the WebAssembly library build pass with unchanged source
+hashes. This fixes a script-visible continuation field; it does not implement
+durable world saves or establish every expired-timer lifetime behavior.
+
+### Handler selection after expiry subscriptions
+
+Replicated isolated original-client probes on the selected 1.29.2.9231 image
+show that a subscription's TimerStart replacement affects the direct handler of
+that same firing. A null replacement omits it, and the final replacement across
+multiple subscriptions wins. DestroyTimer instead retains the latest handler
+record while GetExpiredTimer becomes null. Replacing with a handler and then
+destroying still calls that handler; replacing with null and then destroying
+calls none. Local witnesses are `/tmp/pc3-sol02-subscription-witness.json` and
+`/tmp/pc3-sol02-subscription-destroy-witness.json`; both have identical replicated
+records and the cleanup receipt confirms all four private clients stopped.
+
+The production session now resolves that retained record after its subscription
+cursor finishes. A successful TimerStart updates the record after fallible
+preparation and commit; destruction clears only the active expired identity.
+Subscription snapshots and expiry source/sequence validation remain in place.
+Six published-session regressions exercise replacement, null, final replacement,
+destruction and both replacement/destruction combinations, including trigger
+context cleanup and a following independent expiry. Component regressions also
+check unrelated timer edits and failed-restart atomicity. The original prepared
+callback field remains historical diagnostic data, not the delivery read point.
+
+This adds another active-delivery field to the full-save inventory. Saved handler
+replacement/destruction projections remain unqualified. The ordinary pending-
+expiry replay witness does not settle the distinct Resume case qualified below.
+
+### Parked campaign AI and pending spell settlement
+
+A synthetic imported campaign AI stores a local computed from its player's gold,
+sleeps, writes that local plus one, sleeps again, and writes it plus two. Saving
+while the AI is parked preserves the initial value, then both uninterrupted and
+loaded runs produce those two later values. Restarting the AI entry function
+would produce a different value. A fresh original process loads the same save
+through the same map's bootstrap, with prior trace files excluded from its private
+profile. Its newly written final trace matches all 118 records from the
+same-process load. The verifier also checks map hashes, complete short records,
+the selected executable identity, private display and single null audio sink.
+Local evidence is
+`/tmp/pc3-sol10-save-probes-1794522021268861851/ai-witness-verification.json`.
+The fresh client was independently inspected stopped with process ID zero.
+This qualifies the parked AI program counter and retained local in this probe;
+it does not qualify every AI/native callback or original save-file interoperation.
+
+A separate same-process probe saves inside Slow's EFFECT callback before the
+native mana payment, buff, cooldown and backswing settlement. GAME_LOADED restores
+the prepayment mana, absent buff/cooldown and accepted cast order. All 128 loaded
+observations through two seconds after the saved callback retain that state,
+without another EFFECT, FINISH or ENDCAST. Its checked local receipt is
+`/tmp/pc3-sol04-slow-effect-save-receipt.json`. The active script's after-save tail
+also does not resume. This bounded result prevents assuming the pending-expiry
+timer replay policy applies to retained spell payments. Cold loading that spell
+state, later manual interruption and other ability families remain unqualified.
+
+The full-save root therefore needs family-specific native-job projections as
+well as parked map/AI continuations. Keeping a live retained payment for ordinary
+callback completion and deciding its saved projection are separate operations.
+No recreation SaveGame/LoadGame or menu route is enabled by these observations.
+
+### Resident spawned-thread boundaries
+
+The VM's existing native Spawn path now uses its ordinary activation driver
+instead of recursively driving a child while retaining the caller stack in Rust
+locals. Parent activations stay resident. Each active spawn records the child's
+stack boundary, the caller's depth, remaining callbacks and native call span.
+Its return expression retains a native-spawn zipper. A sleeping child moves only
+its own activation slice and callback tail into the existing host-ticket thread;
+the caller continues through its retained expression. Nested spawns use this same
+path. Finishing or parking leaves the spawned host context once, and invokes its
+follow-up once; an execution error uses the existing abort path without running
+that follow-up.
+
+Eight new synthetic VM regressions cover nested spawns, retained locals/arrays
+and expression operands, sleep/repark and callback tails, error source/span,
+invalid tail signatures, maximum depth, leave/follow-up failure, reused tickets,
+empty callbacks and global initializers. The existing work-exhaustion regression
+also checks follow-up/leave counts and subsequent VM reuse. The affected script
+suite passes 146 tests with four explicit local-input ignores.
+
+This is used execution ownership, not a durable snapshot interface. The current
+statement still temporarily lends its frame until the activation driver restores
+it, and session work queues need explicit checkpoint ownership.
+No whole-world checkpoint barrier, persisted VM codec or full-save route is
+provided by this refactor. A future barrier must stop after restoring the current
+activation and collect the complete map, AI, host and application graph.
+
+### Top-level thread entry ownership
+
+The existing run_thread/resume_thread driver now retains its remaining callback
+queue, root span and leave-on-finish policy in a VM-owned ThreadEntry. A park
+moves the callback tail into the existing parked thread; a resumed root leaves
+its host context once after either finishing or parking again. An execution
+failure follows the existing abort path without a successful leave/follow-up.
+The callback queue's allocation is checked before publishing the entry.
+
+Two new regressions exercise a top-level callback tail across repeated sleeps and
+a nested spawn, plus invalid-tail failure in both newly started and resumed
+roots. The affected script suite passes 148 tests with four explicit local-input
+ignores. This completes ownership of that existing driver queue; it introduces
+no checkpoint disposition, storage implementation or save route.
+
+### Save inside the distinct Resume dispatch
+
+Native-code evidence joins Resume through 4fe6b0 and 7fbf80 to message 80272.
+Its 4fdf90 dispatch calls subscription/direct-handler delivery and then 4fe5d0
+conditional rearm. Ordinary message 80204 does not perform that latter call.
+The local source evidence is `/tmp/pc3-sol02-callback-rea-evidence.json`.
+
+A separate paired runtime probe starts, pauses and resumes a timer, then saves
+inside its first handler. An independent observer is already registered before
+Resume, so completion does not depend on another saved timer callback. The live
+control executes that handler and one later handler. After loading, GAME_LOADED
+retains the saved first-handler counter and before-save marker. Sixteen later
+observer callbacks, through two seconds after the save point, retain that
+counter. The old script tail and the control's later handler do not execute.
+The observed elapsed/remaining/timeout values also remain at the saved response;
+this observation does not establish the native timer's internal structure.
+
+A fresh original process bootstraps the same map and loads that existing save,
+with old trace files excluded from its copied private profile. Its new final
+trace matches all 110 same-process loaded records exactly. The checked local
+receipt is `/tmp/pc3-sol10-save-probes-1794524083657825691/resume-witness-verification.json`;
+all three private clients were independently inspected stopped with process ID
+zero. Save payloads were inspected only for filename, size and hash.
+
+Thus the observed Resume post-handler work cannot be projected using the
+ordinary periodic-expiry fresh-replay policy. This qualifies one cold-loaded
+case over a bounded two-second interval, not permanent inactivity or every
+reentrant replacement/resume variant. Full recreation saves remain unsupported.

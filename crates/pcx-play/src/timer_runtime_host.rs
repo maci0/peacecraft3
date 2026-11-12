@@ -21,6 +21,7 @@ pub(crate) struct Run {
 struct QueryRun {
     epoch: crate::script_numeric::timer_query::Epoch,
     cached_remaining: f32,
+    resume_dispatch: bool,
 }
 
 pub(super) struct State {
@@ -37,6 +38,8 @@ struct Expired {
     timeout: f64,
     query_now: Option<f32>,
     query_epoch: Option<crate::script_numeric::timer_query::Epoch>,
+    resume_dispatch: bool,
+    retained_callback: Option<FunctionId>,
 }
 
 /// One prepared expiry. Finish it even when its callback fails.
@@ -45,12 +48,14 @@ struct Expired {
 /// order. The session delivers each trigger's conditions and actions before
 /// the direct `callback`: expiry-trigger actions observe the expired timer
 /// first, and the direct handler runs with cleared trigger/event context.
-/// Snapshots are prepared before the deadline is consumed, so callback-list
-/// edits apply on the next firing.
+/// Subscription snapshots are prepared before the deadline is consumed, so
+/// subscription-list edits apply on the next firing. Resolve the direct handler with
+/// `current_timer_callback` after the subscription actions have finished.
 #[derive(Debug)]
 pub struct TimerExpiry {
     source: HandleId,
     sequence: u64,
+    /// Handler when prepared, useful for diagnostics; delivery resolves the current record.
     pub callback: Option<FunctionId>,
     triggers: Vec<super::TriggerDelivery>,
 }
@@ -63,6 +68,14 @@ impl TimerExpiry {
 }
 
 impl ObjectHost {
+    pub(super) fn active_expired_timer(&self) -> Option<Option<HandleId>> {
+        self.timers
+            .as_ref()?
+            .active
+            .as_ref()
+            .map(|active| active.timer)
+    }
+
     pub(super) fn timer_delivery_active(&self) -> bool {
         self.timers
             .as_ref()
@@ -304,6 +317,7 @@ impl ObjectHost {
                     .map(|epoch| QueryRun {
                         epoch,
                         cached_remaining: rules.zero(),
+                        resume_dispatch: false,
                     })
                     .map_err(|_| {
                         fail(Failure::TimerState(
@@ -312,6 +326,17 @@ impl ObjectHost {
                     })
             })
             .transpose()?;
+        if let Some(query) = run.query {
+            let rules = self
+                .numeric
+                .as_ref()
+                .and_then(|n| n.timer_queries())
+                .expect("query constructed above");
+            run.deadline = Some(
+                deadline(run.start, rules.delivery_delay(query.epoch, timeout))
+                    .ok_or_else(|| fail(Failure::TimerState("native timer deadline overflow")))?,
+            );
+        }
         if let Some(query) = &mut run.query
             && let Some(previous) = previous
         {
@@ -334,6 +359,14 @@ impl ObjectHost {
             *slot = Some(run);
         }
         self.commit_timer_sequence(&run);
+        if let Some(active) = self
+            .timers
+            .as_mut()
+            .and_then(|state| state.active.as_mut())
+            .filter(|active| active.source == *timer)
+        {
+            active.retained_callback = handler;
+        }
         Ok(Value::Null)
     }
 
@@ -396,16 +429,48 @@ impl ObjectHost {
             ("PauseTimer", None, Some(_)) => {
                 run.paused = Some((now - run.start).clamp(0.0, run.timeout));
                 run.deadline = None;
+                if let Some(query) = &mut run.query {
+                    run.periodic = false;
+                    query.resume_dispatch = false;
+                }
             }
             ("ResumeTimer", Some(held), _) => {
                 run.start = now - held;
                 run.deadline = Some(run.start + run.timeout);
+                if let Some(query) = &mut run.query {
+                    let rules = self
+                        .numeric
+                        .as_ref()
+                        .and_then(|n| n.timer_queries())
+                        .expect("query checked above");
+                    run.deadline = Some(
+                        deadline(
+                            now,
+                            rules.delivery_delay(query.epoch, f64::from(query.cached_remaining)),
+                        )
+                        .ok_or_else(|| {
+                            fail(Failure::TimerState("native resume deadline overflow"))
+                        })?,
+                    );
+                    query.resume_dispatch = true;
+                    run.start = now;
+                    run.sequence = self
+                        .timers
+                        .as_ref()
+                        .expect("admitted above")
+                        .sequence
+                        .checked_add(1)
+                        .ok_or_else(|| fail(Failure::Capacity))?;
+                }
                 run.paused = None;
             }
             _ => return Ok(Value::Null),
         }
         if let Entry::Timer { run: slot, .. } = self.inner.entry_mut(timer)? {
             *slot = Some(run);
+        }
+        if name == "ResumeTimer" && run.query.is_some() {
+            self.commit_timer_sequence(&run);
         }
         Ok(Value::Null)
     }
@@ -475,10 +540,11 @@ impl ObjectHost {
             if !args.is_empty() {
                 return Err(fail(Failure::TimerArguments));
             }
-            let active = state
-                .active
+            let expired = self
+                .thread_expired_timer()
+                .or_else(|| state.active.as_ref().map(|active| active.timer))
                 .ok_or_else(|| fail(Failure::TimerState("no expiry callback")))?;
-            let Some(timer) = active.timer else {
+            let Some(timer) = expired else {
                 return Ok(Value::Null);
             };
             self.timer_run(timer, name)?;
@@ -544,7 +610,7 @@ impl ObjectHost {
             run.timeout
         } else if let Some(active) = state
             .active
-            .filter(|active| active.timer == Some(*timer) && active.sequence == run.sequence)
+            .filter(|active| active.source == *timer && active.sequence == run.sequence)
         {
             active.timeout
         } else {
@@ -624,6 +690,10 @@ impl ObjectHost {
         {
             return Err(fail(Failure::TimerState("timer query policy changed")));
         }
+        let resume_dispatch = run.query.is_some_and(|q| q.resume_dispatch);
+        if let Some(query) = &mut run.query {
+            query.resume_dispatch = false;
+        }
         let query_now = run.query.map(|q| q.epoch.expiry);
         let mut query_epoch = run.query.map(|q| q.epoch);
         if run.periodic
@@ -661,8 +731,19 @@ impl ObjectHost {
         run.start = at;
         run.deadline = if run.periodic {
             Some(
-                deadline(at, run.timeout)
-                    .ok_or_else(|| fail(Failure::TimerState("periodic deadline overflow")))?,
+                deadline(
+                    at,
+                    run.query
+                        .map(|q| {
+                            self.numeric
+                                .as_ref()
+                                .and_then(|n| n.timer_queries())
+                                .expect("query checked above")
+                                .delivery_delay(q.epoch, run.timeout)
+                        })
+                        .unwrap_or(run.timeout),
+                )
+                .ok_or_else(|| fail(Failure::TimerState("periodic deadline overflow")))?,
             )
         } else {
             None
@@ -678,6 +759,8 @@ impl ObjectHost {
             timeout: run.timeout,
             query_now,
             query_epoch,
+            resume_dispatch,
+            retained_callback: run.handler,
         });
         match &mut self.inner.arena[index] {
             Entry::Timer { run: slot, .. } => *slot = Some(run),
@@ -708,12 +791,68 @@ impl ObjectHost {
         Ok(())
     }
 
-    /// Clear callback context without overwriting a callback's restart or destroy.
+    pub(super) fn retire_timer_delivery_identity(&mut self, timer: HandleId) {
+        if let Some(active) = self
+            .timers
+            .as_mut()
+            .and_then(|state| state.active.as_mut())
+            .filter(|active| active.timer == Some(timer))
+        {
+            active.timer = None;
+        }
+    }
+
+    /// Read after expiry subscriptions: restart/null replacement changes this firing's handler.
+    /// Destruction revokes the timer identity but the active delivery retains its callback record.
+    pub fn current_timer_callback(
+        &self,
+        expiry: &TimerExpiry,
+    ) -> Result<Option<FunctionId>, Error> {
+        self.check_timer_expiry(expiry)?;
+        Ok(self
+            .timers
+            .as_ref()
+            .and_then(|state| state.active)
+            .expect("checked above")
+            .retained_callback)
+    }
+
+    /// Finish the source resume-dispatch rearm, then clear callback context.
+    /// Normal expiries preserve a callback's restart or destroy.
     pub fn finish_timer_expiry(&mut self, expiry: TimerExpiry) -> Result<(), Error> {
         self.check_timer_expiry(&expiry)?;
         self.finish_timer_trigger();
+        let active = self
+            .timers
+            .as_ref()
+            .and_then(|s| s.active)
+            .expect("checked above");
+        let rearm = if active.resume_dispatch {
+            active
+                .timer
+                .and_then(|timer| match self.inner.entry(timer) {
+                    Ok(Entry::Timer {
+                        live: true,
+                        run: Some(run),
+                    }) => run.handler.map(|handler| (timer, *run, handler)),
+                    _ => None,
+                })
+        } else {
+            None
+        };
+        let result = if let Some((timer, run, handler)) = rearm {
+            self.start_timer(&[
+                Value::Handle(timer),
+                Value::Real(run.timeout as f32),
+                Value::Bool(run.periodic),
+                Value::Code(handler),
+            ])
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
         self.timers.as_mut().expect("checked above").active = None;
-        Ok(())
+        result
     }
 }
 

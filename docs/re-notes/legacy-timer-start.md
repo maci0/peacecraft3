@@ -257,7 +257,7 @@ refusals preserve prior runs and identities. Disabled periodic events consume
 their scheduled deadlines without callbacks, retaining their phase. Destroying a
 trigger prevents future delivery without recycling its token.
 
-The scheduler prepares bounded callback snapshots before consuming a deadline.
+The scheduler prepares bounded trigger-delivery snapshots before consuming a deadline.
 `MapScriptSession::advance_timers` enters every registered condition in order
 through the current session's callback tickets and VM. It combines their results
 after evaluating them all, then executes the ordered action list when accepted.
@@ -269,10 +269,11 @@ replacement retains the previous published VM, arena and clock.
 
 The caller bounds expiries; snapshot preparation is bounded by arena size and
 retained subscriptions, and execution retains the VM's cumulative step limit.
-Callback-list edits take effect on the next firing under the current snapshot
-policy. Mid-firing edits, yielding/nested delivery, native precision/long-timeout
-segmentation, equal-deadline fidelity and an automatic application clock remain
-unqualified. Other event families remain registrations without world delivery.
+Edits to retained subscription, condition and action lists follow the snapshot
+policy. This does not apply to the direct timer handler: the qualified follow-up
+below resolves its current record after all subscription actions. Other
+mid-firing edits, arbitrary yielding/nested delivery, complete native timing,
+equal-deadline fidelity and an automatic application clock remain unqualified. Other event families remain registrations without world delivery.
 
 Validation passes 446 Host tests on native and actual WASI, with six explicit
 local-input gates ignored; 19 application-library and 107 map-loading tests,
@@ -459,3 +460,152 @@ periodic source path restarts before dispatch; the new bit witness does not
 qualify every periodic or yielding/reentrant combination. Resume with a non-null
 handler has a separate retained-callback rearm path at `0x4fe5d0`; its complete
 schedule remains unqualified here. No application-wide tick parity is claimed.
+
+## Resume dispatch and callback readpoints (2026-11-13)
+
+A second source-bound lifecycle slice extends the query policy above. Two fresh
+private Wine runs produced identical normalized 58-record traces with 18 script
+callbacks. Their raw digests are
+`766b83522653e177255ca908c4da8812bdfc02e3543bfca7f0e28934ab7e76f2` and
+`60d3ffa00132375330bdae1a4bcf9b2408caff55b67b4c54f2e431d8193e75c0`.
+Both clients were independently verified stopped/PID 0. The local collector,
+bit witness and cleanup receipts are `/tmp/pc3-sol02-callback-run.py`,
+`/tmp/pc3-sol02-callback-witness.json` and
+`/tmp/pc3-sol02-callback-cleanup.json`. The same controlled-map, source-image,
+headless/null-sink and native-Windows limitations apply.
+
+The source join adds pause, resume, stop, object dispatch, post-resume rearm and
+extended expiry dispatch windows to the numeric policy's same-image admission.
+REA evidence `ev_04aa4a440eb83c02a7bca20f7a2eef7344428db96a2565f9fc87e6b31d5dc253`
+shows `0x4fe5d0` rearming the current raw timeout only when the retained callback
+is non-null. Object dispatch `0x4fdf90` calls the handler first for message
+`0x80272`, then performs that rearm. Stop `0x7fbbd0` clears the periodic bit;
+resume `0x4fe6b0` reads the cleared flag. Extended dispatch evidence
+`ev_07a42ad7adb72e67d200581a6b7e5798f3da2b619995b4b220a5b4a1f55a73f6`
+and stop evidence
+`ev_d1584a885a001ea3110397383847ed041041e87fffce40657f6f538d344eb1d1`
+bind the corresponding source branches. These static instructions explain,
+but do not independently substitute for, the runtime observations below.
+
+- Both an originally one-shot and an originally periodic 2-second timer,
+  paused at 0.5 and resumed at 1, invoke their non-null handler at reference
+  elapsed 2.5 and 4.5, then remain silent through the 123-second observation.
+  Pause therefore loses periodicity. The first partial expiry's handler sees
+  inactive raw-timeout-minus-cache queries; its return rearms the full timeout
+  once. The subsequent ordinary one-shot does not rearm again.
+- A regular periodic callback observes the old epoch's period and zero
+  remaining. Pausing and resuming from that handler invalidates the old query
+  snapshot. The zero cached remainder receives the source minimum delay;
+  its partial expiry then rearms one full-timeout one-shot.
+- Restarting with a null handler from the partial-resume callback suppresses
+  the post-handler rearm. The restarted timer retains its earlier pause cache.
+  Ordinary callback restart and destruction retain their earlier qualified
+  behavior.
+- An exact segment timeout goes through a residual request even when that
+  residual is zero. Its callback occurs after the image-derived minimum delay.
+  Segmented periodic callbacks observe the next epoch prepared before the
+  handler, including the source arithmetic's small nonzero elapsed readpoint.
+
+The selected timer policy now retains a pending resume-dispatch marker, finishes
+its conditional rearm after the handler, and clears callback context even when
+finishing fails. It clears periodicity on pause and gives resumed requests a new
+sequence so queries cannot reuse an earlier periodic snapshot. The independent
+legacy partial mode retains its old reconstruction behavior. Only qualified
+source minimum/residual edges adjust the double-precision delivery delay;
+ordinary nonzero deadlines keep their previous arithmetic. No universal quantum,
+application producer, queue wrap or arbitrary equal-expiry policy is inferred.
+
+`selected_native_timer_callback_matrix_matches_public_lifecycle` drives the
+public runtime API through the complete witness, checking every emitted query
+and both independent clock channels, callback counts and order. Its original
+216-field query witness still passes. Actual VM regressions
+`vm_resumed_callbacks_rearm_once_and_respect_handler_replacement` and
+`vm_pause_resume_inside_periodic_callback_uses_minimum_then_full_oneshot`
+execute the script handlers. A nonstock segment/minimum boundary regression
+rejects early delivery and preserves a budget-refused expiry. The synthetic
+numeric fixture deliberately changes decimal parsing, so those scripts express
+dyadic inputs using power-of-two division rather than assuming decimal values.
+These synthetic tests prove the recreation's called lifecycle, not new native
+cases.
+
+Fresh/inactive `ResumeTimer`, arbitrary nested/yielding callbacks, destroyed
+identities retained across resumed callbacks and application/save-load delivery
+state still require their own qualification. This closes the listed bounded
+callback cases, not the full timer feature or tick-parity goal. The separate
+canonical queue bridge must preserve current extended-segment entries and
+counts across rebasing instead of treating a projected unwrapped final expiry
+as a native queue entry.
+
+
+## Direct handler after expiry-subscription mutation (2026-11-13)
+
+The blanket next-firing callback claim above is superseded for the direct timer
+handler. Static source `0x4fe540` invokes the object's expiry-subscription virtual
+slot first, then reads the callback record at object `+0x40` and invokes
+`0x4e4720`, which reads the record's current function. Retained REA evidence
+`ev_79d949712349b524138f071d935c93d159ab5a35b12049db7f03b8687d281298`
+records that ordering. The local 22-record bundle is
+`/tmp/pc3-sol02-subscription-rea-evidence.json`; the analysis session was closed.
+This is a static source join, independently corroborated by the runtime cases.
+
+Four fresh private, muted, networkless Wine runs use the same selected executable
+and controlled-map recipe identified above. The primary pair has 103 records per
+capture; a second pair has 101. Each pair agrees after removing its nonce/prefix.
+All four containers were independently verified exited with PID 0, and their raw
+hashes rechecked. The local witnesses and cleanup receipt are
+`/tmp/pc3-sol02-subscription-witness.json`,
+`/tmp/pc3-sol02-subscription-destroy-witness.json` and
+`/tmp/pc3-sol02-subscription-cleanup.json`. The primary raw digests are
+`dac2036fa62ca7dbfdc074a2a0e40ba8210d47e9838ee0b2f5e16c7afd051253` and
+`8f670023c50d7617350e8112346670dd7d387f76b643dadd0fdb97d3662c9674`;
+the destruction-variant digests are
+`7859825e5a7d8a4d1b056c42269cf85cf96c18336fe60d899ae418fd8a6a1d48` and
+`aebf5100c7d5ccb3670c6e5a1cc49c37a39cf1c447302c95ed37615e38ae46d7`.
+No original map bytes or captured contents are committed.
+
+The first collector expected the earlier experiment's END-with-suffix form,
+while this shorter experiment emitted an exact END marker. Its admission timed
+out after the complete capture existed. The corrected strict collector validated
+that retained capture offline, including identity, bit controls, record counters
+and END; the independently launched replica then passed normal admission. The
+original diagnostic remains explicit in
+`/tmp/pc3-sol02-subscription-a-corrected-admission.json`. No timeout was counted
+as a native pass.
+
+The observed cases distinguish subscription snapshots from the retained direct
+handler record:
+
+- Replacing A with B using `TimerStart` in an expiry subscription invokes B in
+  that same firing, with the new timer run already visible. Replacing A with a
+  null handler suppresses A in that firing.
+- Two subscriptions that replace A with B, then B with C, invoke C after both
+  subscriptions. The later scheduled firing also invokes C.
+- Destroying the timer in its subscription still invokes the retained direct
+  handler, while `GetExpiredTimer()` returns null. Installing B before destruction
+  invokes B with that null identity. Installing null before destruction invokes
+  no direct handler. The original preparation-time handler is therefore not a
+  sufficient fallback, and skipping every retired timer is also incorrect.
+- Periodic restart, pause, and pause/resume from subscriptions retain the
+  separately qualified timer lifecycle and query readpoints. The captures include
+  both short and long clock channels and bounded integer bit encodings; they do
+  not infer an application clock from formatted time strings.
+
+The joint called fix retains the latest handler in active expiry metadata and
+updates it only after successful `TimerStart` preparation, arena replacement and
+sequence commit. Destruction clears the active timer identity while preserving
+that retained handler, source and delivery sequence. The session resolves
+`current_timer_callback` after all subscription actions and invokes it once.
+`TimerExpiry.callback` remains historical preparation data for compatibility.
+Raw queries on retired timer aliases still refuse; previously parked thread
+identity rules are not broadly relaxed by this active-delivery correction.
+
+The runtime components have 17 passing cases, including handler/null replacement,
+replacement followed by destruction, unrelated timer isolation and rejected-start
+atomicity. The joint session change has 14 passing published-VM cases, including
+six new native-backed mutation variants, plus strict native/WASM checks and the
+WASM library/application checks recorded in
+`/tmp/pc3-sol10-current-handler-validation/`. This validates the called recreation
+path; the instrumented Wine observations remain bounded evidence rather than
+native Windows or complete tick parity. Yielding subscription mutation, arbitrary
+subscription-list edits, save-point projection and destroyed identities retained
+by earlier parked threads remain separate qualification work.

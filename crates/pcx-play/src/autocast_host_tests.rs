@@ -533,9 +533,7 @@ fn default_activation_delay_starts_at_creation_in_an_advanced_session() {
             .contains("automatic cast of X002")
     );
 }
-#[test]
-#[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
-fn selected_original_neutral_heal_activation_reaches_the_default_evaluation() {
+fn selected_original_rules() -> crate::autocast_rules::Rules {
     use std::io::Read;
     const IMAGE_BUDGET: usize = 32 << 20;
     let mut image = Vec::new();
@@ -548,7 +546,7 @@ fn selected_original_neutral_heal_activation_reaches_the_default_evaluation() {
         image.len() <= IMAGE_BUDGET,
         "selected image exceeds test budget"
     );
-    let rules = crate::autocast_rules::Rules::read(
+    crate::autocast_rules::Rules::read(
         &image,
         crate::scripts::AssetIdentity {
             source: "explicit selected Legacy image".into(),
@@ -556,7 +554,12 @@ fn selected_original_neutral_heal_activation_reaches_the_default_evaluation() {
             version: "1.29.2.9231".into(),
         },
     )
-    .unwrap();
+    .unwrap()
+}
+#[test]
+#[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
+fn selected_original_neutral_heal_activation_reaches_the_default_evaluation() {
+    let rules = selected_original_rules();
     let class = rules
         .classes
         .iter()
@@ -867,4 +870,86 @@ fn removed_autocast_unit_does_not_force_a_clock_boundary() {
         vm.host().inner.next_timer_activity_boundary(now + 20.),
         None
     );
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
+fn selected_original_spell_steal_and_orb_defaults_reach_the_exact_first_boundary() {
+    let rules = selected_original_rules();
+    for code in [b"Asps", b"Afak"] {
+        let class = rules
+            .classes
+            .iter()
+            .find(|class| class.code == *code)
+            .unwrap();
+        let activation = class.enable.expect("source-bound activation");
+        let default = std::str::from_utf8(&class.code).unwrap();
+        // Toggle names and X002 are synthetic; the class code and delay come from the image.
+        let mut vm =
+            open_setup_vm_with_code(default, "X002", PROFILE, Some(activation), class.code);
+        let created_at = vm.host().inner.timer_game_time().unwrap() + 7.;
+        advance(&mut vm, created_at).unwrap();
+        vm.call("listen_player", &[]).unwrap();
+        vm.call("main", &[]).unwrap();
+        let Value::Handle(unit) = vm.global("U") else {
+            panic!("unit")
+        };
+        assert_ne!(class.code, *b"X002");
+        assert_eq!(state(&mut vm, unit, b"X002"), Some(true));
+        assert!(!modified(&mut vm, unit));
+        assert_eq!(vm.global("Seen"), Value::Int(0));
+        assert_eq!(current(&mut vm, unit), 0);
+        let due = created_at + f64::from(activation.first_tick);
+        advance(&mut vm, due.next_down()).unwrap();
+        let before = vm.host().inner.executed_unit(unit).unwrap().clone();
+        let random = vm.host().inner.script_random_state().cloned();
+        let handles = vm.host().inner.inner().handles();
+        for _ in 0..2 {
+            let error = advance(&mut vm, due).unwrap_err();
+            assert!(
+                error.contains("automatic cast of X002"),
+                "{code:?}: {error}"
+            );
+            assert_eq!(vm.host().inner.executed_unit(unit).unwrap(), &before);
+            assert_eq!(vm.host().inner.script_random_state().cloned(), random);
+            assert_eq!(vm.host().inner.inner().handles(), handles);
+            assert_eq!(vm.global("Seen"), Value::Int(0));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
+fn selected_original_spell_steal_and_orb_default_off_and_removal_disarm() {
+    let rules = selected_original_rules();
+    for code in [b"Asps", b"Afak"] {
+        let class = rules
+            .classes
+            .iter()
+            .find(|class| class.code == *code)
+            .unwrap();
+        let activation = class.enable.expect("source-bound activation");
+        let default = std::str::from_utf8(&class.code).unwrap();
+        for remove in [false, true] {
+            let mut vm =
+                open_setup_vm_with_code(default, "X002", PROFILE, Some(activation), class.code);
+            let created_at = vm.host().inner.timer_game_time().unwrap() + 11.;
+            advance(&mut vm, created_at).unwrap();
+            vm.call("main", &[]).unwrap();
+            let Value::Handle(unit) = vm.global("U") else {
+                panic!("unit")
+            };
+            if remove {
+                vm.host()
+                    .inner
+                    .native("RemoveUnit", &[Value::Handle(unit)])
+                    .unwrap();
+            } else {
+                assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+                assert_eq!(state(&mut vm, unit, b"X002"), Some(false));
+            }
+            advance(&mut vm, created_at + f64::from(activation.first_tick)).unwrap();
+            advance(&mut vm, created_at + 2.).unwrap();
+        }
+    }
 }
