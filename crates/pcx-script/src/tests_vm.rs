@@ -2225,6 +2225,68 @@ fn spawn_boundary_reused_ticket_preserves_the_previously_parked_thread() {
 }
 
 #[test]
+fn root_thread_entry_keeps_callback_tail_across_repark_and_nested_spawn() {
+    let source = format!(
+        "{SPAWN_PROBE}function first takes nothing returns nothing\nlocal integer retained=901\ncall Sleep(1.0)\ncall Observe(retained)\ncall Sleep(2.0)\ncall Observe(retained+1)\nendfunction\nfunction last takes nothing returns nothing\ncall Spawn(function empty,function tail)\ncall Observe(9)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    vm.run_thread(&[
+        program.function_id("first").unwrap(),
+        program.function_id("last").unwrap(),
+    ])
+    .unwrap();
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (0, 0));
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.host().observed, [901]);
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [2]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (1, 0));
+    vm.resume_thread(2).unwrap();
+    assert_eq!(vm.host().observed, [901, 902, 4, 9]);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (3, 1, 0)
+    );
+    assert_eq!(vm.parked_threads().count(), 0);
+    vm.run_thread(&[]).unwrap();
+    assert_eq!(vm.host().leaves, 3);
+}
+
+#[test]
+fn root_thread_entry_tail_failure_aborts_without_running_leave_or_followup() {
+    for resumes in [false, true] {
+        let source = format!(
+            "{SPAWN_PROBE}function first takes nothing returns nothing\n{}call Observe(1)\nendfunction\nfunction bad takes integer value returns nothing\nendfunction\n",
+            if resumes { "call Sleep(1.0)\n" } else { "" }
+        );
+        let program = program_of(&source);
+        let mut vm = Vm::new(&program, SpawnProbe::default());
+        let start = vm.run_thread(&[
+            program.function_id("first").unwrap(),
+            program.function_id("bad").unwrap(),
+        ]);
+        let error = if resumes {
+            start.unwrap();
+            vm.resume_thread(1).unwrap_err()
+        } else {
+            start.unwrap_err()
+        };
+        assert!(error.message.contains("callback must take nothing"));
+        assert_eq!(error.span, crate::Span::EMPTY);
+        assert_eq!(vm.host().observed, [1]);
+        assert_eq!(
+            (vm.host().leaves, vm.host().followups, vm.host().aborts),
+            (0, 0, 1)
+        );
+        assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+        vm.run_thread(&[program.function_id("tail").unwrap()])
+            .unwrap();
+        assert_eq!(vm.host().observed, [1, 4]);
+    }
+}
+
+#[test]
 fn empty_spawn_boundary_returns_through_parent_expression_once() {
     let source = format!(
         "{SPAWN_PROBE}function main takes nothing returns integer\nreturn 11+Spawn(null,null)*3\nendfunction\n"

@@ -303,9 +303,9 @@ Consequently an internal scheduler that advances a periodic deadline before
 calling script cannot save only that advanced Run. Its saved pending-expiry
 projection must reproduce the native fresh firing. Idle/menu checkpoint
 round trips can compare uninterrupted continuation; a script save during an
-active expiry must instead compare this qualified load behavior. Reentrant
-restart/resume cases, other event families, AI threads and presentation still
-need separate qualification. No result here permits dropping retained spell
+active expiry must instead compare this qualified load behavior. Specific Resume
+and parked-AI cases are qualified below; reentrant mutations, other event families
+and presentation still need separate qualification. No result here permits dropping retained spell
 payments or unrelated pending native jobs.
 
 ### Session delivery cursor foundation
@@ -367,9 +367,9 @@ context cleanup and a following independent expiry. Component regressions also
 check unrelated timer edits and failed-restart atomicity. The original prepared
 callback field remains historical diagnostic data, not the delivery read point.
 
-This adds another active-delivery field to the full-save inventory. Its saved
-projection and the pending Resume dispatch still need their own save/load
-qualification; the ordinary pending-expiry replay witness does not settle them.
+This adds another active-delivery field to the full-save inventory. Saved handler
+replacement/destruction projections remain unqualified. The ordinary pending-
+expiry replay witness does not settle the distinct Resume case qualified below.
 
 ### Parked campaign AI and pending spell settlement
 
@@ -425,7 +425,51 @@ suite passes 146 tests with four explicit local-input ignores.
 
 This is used execution ownership, not a durable snapshot interface. The current
 statement still temporarily lends its frame until the activation driver restores
-it, and top-level thread/session work queues need explicit checkpoint ownership.
+it, and session work queues need explicit checkpoint ownership.
 No whole-world checkpoint barrier, persisted VM codec or full-save route is
 provided by this refactor. A future barrier must stop after restoring the current
 activation and collect the complete map, AI, host and application graph.
+
+### Top-level thread entry ownership
+
+The existing run_thread/resume_thread driver now retains its remaining callback
+queue, root span and leave-on-finish policy in a VM-owned ThreadEntry. A park
+moves the callback tail into the existing parked thread; a resumed root leaves
+its host context once after either finishing or parking again. An execution
+failure follows the existing abort path without a successful leave/follow-up.
+The callback queue's allocation is checked before publishing the entry.
+
+Two new regressions exercise a top-level callback tail across repeated sleeps and
+a nested spawn, plus invalid-tail failure in both newly started and resumed
+roots. The affected script suite passes 148 tests with four explicit local-input
+ignores. This completes ownership of that existing driver queue; it introduces
+no checkpoint disposition, storage implementation or save route.
+
+### Save inside the distinct Resume dispatch
+
+Native-code evidence joins Resume through 4fe6b0 and 7fbf80 to message 80272.
+Its 4fdf90 dispatch calls subscription/direct-handler delivery and then 4fe5d0
+conditional rearm. Ordinary message 80204 does not perform that latter call.
+The local source evidence is `/tmp/pc3-sol02-callback-rea-evidence.json`.
+
+A separate paired runtime probe starts, pauses and resumes a timer, then saves
+inside its first handler. An independent observer is already registered before
+Resume, so completion does not depend on another saved timer callback. The live
+control executes that handler and one later handler. After loading, GAME_LOADED
+retains the saved first-handler counter and before-save marker. Sixteen later
+observer callbacks, through two seconds after the save point, retain that
+counter. The old script tail and the control's later handler do not execute.
+The observed elapsed/remaining/timeout values also remain at the saved response;
+this observation does not establish the native timer's internal structure.
+
+A fresh original process bootstraps the same map and loads that existing save,
+with old trace files excluded from its copied private profile. Its new final
+trace matches all 110 same-process loaded records exactly. The checked local
+receipt is `/tmp/pc3-sol10-save-probes-1794524083657825691/resume-witness-verification.json`;
+all three private clients were independently inspected stopped with process ID
+zero. Save payloads were inspected only for filename, size and hash.
+
+Thus the observed Resume post-handler work cannot be projected using the
+ordinary periodic-expiry fresh-replay policy. This qualifies one cold-loaded
+case over a bounded two-second interval, not permanent inactivity or every
+reentrant replacement/resume variant. Full recreation saves remain unsupported.

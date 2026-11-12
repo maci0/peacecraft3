@@ -384,6 +384,12 @@ struct Thread {
     remaining: std::collections::VecDeque<crate::value::FunctionId>,
 }
 
+struct ThreadEntry {
+    remaining: std::collections::VecDeque<crate::value::FunctionId>,
+    span: Span,
+    leave_on_finish: bool,
+}
+
 struct Spawn {
     base: usize,
     caller_depth: u32,
@@ -431,6 +437,7 @@ pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
     /// Parked threads by host ticket.
     parked: BTreeMap<u64, Thread>,
     spawns: Vec<Spawn>,
+    thread_entry: Option<ThreadEntry>,
     #[cfg(test)]
     copied_argument_expressions: usize,
 }
@@ -476,6 +483,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             suspended_span: None,
             parked: BTreeMap::new(),
             spawns: Vec::new(),
+            thread_entry: None,
             #[cfg(test)]
             copied_argument_expressions: 0,
         }
@@ -634,8 +642,17 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         &mut self,
         functions: &[crate::value::FunctionId],
     ) -> Result<(), crate::Error> {
+        let mut remaining = std::collections::VecDeque::new();
+        remaining.try_reserve(functions.len()).map_err(|_| {
+            crate::Error::run(Span::EMPTY, "script thread callback allocation failed")
+        })?;
+        remaining.extend(functions.iter().copied());
         self.enter_thread()?;
-        let result = self.run_functions(functions.iter().copied().collect(), Span::EMPTY);
+        let result = self.run_functions(ThreadEntry {
+            remaining,
+            span: Span::EMPTY,
+            leave_on_finish: false,
+        });
         self.exit_thread(result)
     }
 
@@ -659,13 +676,11 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         if let Some(top) = self.stack.last_mut() {
             top.incoming = Some(Value::Null);
         }
-        let result = self
-            .run_functions(thread.remaining, Span::EMPTY)
-            .and_then(|()| {
-                self.host
-                    .leave_thread()
-                    .map_err(|why| crate::Error::run(Span::EMPTY, why))
-            });
+        let result = self.run_functions(ThreadEntry {
+            remaining: thread.remaining,
+            span: Span::EMPTY,
+            leave_on_finish: true,
+        });
         self.exit_thread(result)
     }
 
@@ -700,14 +715,36 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
 
     /// Drive the current stack, then each remaining callback, until the thread
     /// finishes or parks. A park moves the whole stack into `parked`.
-    fn run_functions(
-        &mut self,
-        mut remaining: std::collections::VecDeque<crate::value::FunctionId>,
-        span: Span,
-    ) -> Result<(), crate::Error> {
+    fn run_functions(&mut self, entry: ThreadEntry) -> Result<(), crate::Error> {
+        if self.thread_entry.is_some() {
+            return Err(broken(entry.span, "script thread entry is already active"));
+        }
+        self.thread_entry = Some(entry);
+        let result = self.drive_thread();
+        let entry = self
+            .thread_entry
+            .take()
+            .expect("active script thread entry");
+        result.and_then(|()| {
+            if entry.leave_on_finish {
+                self.host
+                    .leave_thread()
+                    .map_err(|why| crate::Error::run(entry.span, why))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn drive_thread(&mut self) -> Result<(), crate::Error> {
         loop {
+            let entry = self
+                .thread_entry
+                .as_mut()
+                .expect("active script thread entry");
+            let span = entry.span;
             if self.stack.is_empty() {
-                let Some(id) = remaining.pop_front() else {
+                let Some(id) = entry.remaining.pop_front() else {
                     return Ok(());
                 };
                 self.push_thread_callback(id, span)?;
@@ -724,7 +761,13 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 let thread = Thread {
                     stack: std::mem::take(&mut self.stack),
                     depth: std::mem::replace(&mut self.depth, 0),
-                    remaining,
+                    remaining: std::mem::take(
+                        &mut self
+                            .thread_entry
+                            .as_mut()
+                            .expect("active script thread entry")
+                            .remaining,
+                    ),
                 };
                 self.parked.insert(ticket, thread);
                 return Ok(());
