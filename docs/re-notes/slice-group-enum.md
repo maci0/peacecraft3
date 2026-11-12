@@ -119,3 +119,100 @@ native and WASM Clippy and both library builds pass. These nineteen test
 executions include actual named regressions rather than a zero-test filtered
 run. The unchanged Undead03 application horizon and original-client comparison
 are not covered by these library checks.
+
+## Type and counted enumeration (2026-11-13)
+
+The additional entry points are `GroupEnumUnitsOfType`,
+`GroupEnumUnitsOfTypeCounted`, `GroupEnumUnitsInRectCounted`,
+`GroupEnumUnitsInRangeCounted`, and `GroupEnumUnitsInRangeOfLocCounted`.
+They use the existing owned-VM continuation and canonical group membership.
+Type queries share the lazy raw-name table with `UnitId`; admitting only a type
+query does not admit an undeclared `UnitId`. The existing table's UnitUI-name
+loader inference and ambiguous-registration-order refusal remain in force.
+There is no rawcode-string fallback, query trimming, or WTS conversion in this
+lookup. ASCII case normalization is shared with `UnitId`.
+
+### Static native evidence
+
+The selected executable identity is unchanged from the range section above.
+Bounded local disassembly `/tmp/pc3-type-enum-wrappers.txt` identifies the type
+wrappers at `498280` and `4982e0`. Both resolve a script string through `469010`
+and look up the resulting raw text through `4770c0`, the same helper called by
+`UnitId` at `4af290`. A null or unknown name returns before resolving the group,
+filter, or count and before clearing destination membership. A known type
+resolves the group, resolves its predicate, and calls `502580`; the counted
+wrapper forwards its integer argument, whereas the uncounted wrapper reads a
+signed immediate at `4982d1`.
+
+`502580` initializes enumeration through `503310`, then scans the global unit
+list through `7f4ba0`/`7f4c00`. That scan checks the backing record and widget,
+resolves actual units, and excludes retired objects. This path does not use the
+spatial shown-state eligibility check. Type queries therefore include hidden
+extant canonical units. In `5028e0`, the type comparison at `50295a` reads the
+unit's current type field, rather than a creation-request or base type. Canonical
+queries compare `record.definition.rawcode`; removed-unit entries are excluded.
+Life, owner, pause and sleep restrictions are not added to a type query.
+
+The shared state initializer reads the caller limit into the group field at
+`50336b..50336e` and initializes the insertion counter with an immediate at
+`50337b`. At `50292a..502934`, TEST/JE bypasses the quota check for a zero limit;
+CMP/JAE compares the insertion counter and limit as **unsigned** values.
+Consequently zero bypasses the limit, while negative script integers represent
+large unsigned limits. There is no invented count cap or negative-to-zero clamp.
+After predicate acceptance, `5029a9..5029b0` calls group insertion and increments
+the counter only if that insertion succeeds as new. A predicate that manually
+adds its candidate can therefore add membership without consuming an enumeration
+insertion. Rejected predicates do not consume the quota. Once the quota is full,
+remaining predicates do not run.
+
+`unit_group_count.rs` reads default/reset operands from the admitted native PE
+and validates the bounded zero-bypass, unsigned-comparison and insertion-only
+instruction grammar. The uncounted type default is checked against the existing
+rectangle, range, location-range and player wrapper operands. All read bytes
+are charged to the placement profile budget. An unqualified image or changed
+instruction grammar remains an explicit query error; ordinary placement remains
+available. No native image operands are copied into production rule constants.
+
+### Execution and limits
+
+Counted queries reuse their existing shape/eligibility calculations. Null-filter
+queries cap candidates before membership-budget preflight and replace the group
+atomically. Filtered queries clear first and increment a frame-local quota only
+for actual new insertions; nested calls preserve the outer quota and
+`GetFilterUnit`. Existing callback errors retain prior script effects and unwind
+the frame. Early null/unknown-name and null-location returns preserve destination
+membership even if later arguments would be invalid. The counted rectangle form
+also returns early for a null group or rectangle.
+
+The synthetic checks exercise raw host strings, compiled function string
+arguments and computed `TRIGSTR` prefixes; the old branch's global literal-WTS
+rewrite is a separate migration. Native traversal order and mutation during
+iteration remain qualified: these queries retain the canonical creation-order
+snapshot. The counted rectangle path also retains the existing centre-containment
+and shown-state qualifications. Static decoding and synthetic executions do not
+establish original-client runtime parity or advance an unchanged-map horizon.
+
+Validation on this branch used verified private Xvfb/null audio and the isolated
+`/tmp/pc3-fidelity-sol61-08-range-target`, with two Cargo jobs. All nine driver
+stages pass: 22 enumeration tests, two range-rule/refusal tests, the new nonstock
+count-rule test, six UnitId tests, the explicitly executed selected-image gate,
+strict native Clippy including tests, strict WASM Clippy, and both library builds.
+The broad `group_count` filter additionally ran one unrelated control-group test;
+there were 33 successful test executions in total, including that incidental
+match. The selected-image gate remains ignored in the ordinary test sweep and
+was separately executed successfully with its required local image path.
+
+Named new regressions are
+`type_enumeration_uses_raw_names_and_current_type_including_hidden_not_removed`,
+`unknown_type_and_null_subject_short_circuit_before_group_filter_and_count`,
+`all_counted_queries_treat_zero_as_unlimited_and_negative_as_unsigned`,
+`counted_predicate_counts_only_new_insertions_and_restores_nested_filter_context`,
+`counted_early_exit_stops_predicate_effects_and_preflight_uses_capped_membership`,
+`counted_callback_failures_unwind_and_ambiguous_names_preserve_destination`,
+`type_only_lookup_does_not_admit_undeclared_unit_id`, and
+`nonstock_group_count_operands_unsigned_zero_and_decode_refusals`.
+The existing selected-image gate now also checks the count operands and grammar.
+Source hashes, per-stage command/exit receipts and complete output remain local
+at `/tmp/pc3-sol61-08-type-{sources.sha256,validation-receipt.json,verified.log}`.
+The literal-WTS migration, full application rebuild and unchanged-map horizons
+are outside these branch checks.

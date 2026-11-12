@@ -345,6 +345,13 @@ impl ObjectHost {
             "GetFilterUnit",
             "GetUnitX",
             "GetUnitY",
+            "GroupEnumUnitsInRange",
+            "GroupEnumUnitsInRangeOfLoc",
+            "GroupEnumUnitsOfType",
+            "GroupEnumUnitsOfTypeCounted",
+            "GroupEnumUnitsInRectCounted",
+            "GroupEnumUnitsInRangeCounted",
+            "GroupEnumUnitsInRangeOfLocCounted",
             "GroupEnumUnitsInRect",
             "GroupEnumUnitsOfPlayer",
             // unit_range_runtime_host.rs
