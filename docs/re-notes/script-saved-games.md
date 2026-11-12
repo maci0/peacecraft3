@@ -326,3 +326,21 @@ source hashes. Browser execution remains unchecked.
 
 Full SaveGame/LoadGame remains unsupported in the recreation. No save codec,
 VM checkpoint barrier or production save/menu route accompanies this foundation.
+
+### Retained expired-timer response
+
+Parked script-thread contexts now retain the expired-timer identity observed at
+their sleep. Resuming installs that response; returning or failing restores the
+caller's response. An explicitly retained null differs from having no override,
+so it cannot fall through to an unrelated current expiry. The getter retains its
+existing handle-family/lifetime validation. No timer query epoch or old clock
+point is installed by this context change.
+
+The three new regressions exercise nested trigger calls, a second sleep, the
+remaining action tail, explicit null under another prepared expiry, and failure
+unwinding through the real owned VM and host. They and all 13 filtered trigger/
+runtime tests pass. All eight affected published-session trigger tests also pass
+after merging the released baseline. Strict native/WebAssembly pcx-play
+all-target Clippy and the WebAssembly library build pass with unchanged source
+hashes. This fixes a script-visible continuation field; it does not implement
+durable world saves or establish every expired-timer lifetime behavior.

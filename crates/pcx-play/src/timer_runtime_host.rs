@@ -63,6 +63,14 @@ impl TimerExpiry {
 }
 
 impl ObjectHost {
+    pub(super) fn active_expired_timer(&self) -> Option<Option<HandleId>> {
+        self.timers
+            .as_ref()?
+            .active
+            .as_ref()
+            .map(|active| active.timer)
+    }
+
     pub(super) fn timer_delivery_active(&self) -> bool {
         self.timers
             .as_ref()
@@ -475,10 +483,11 @@ impl ObjectHost {
             if !args.is_empty() {
                 return Err(fail(Failure::TimerArguments));
             }
-            let active = state
-                .active
+            let expired = self
+                .thread_expired_timer()
+                .or_else(|| state.active.as_ref().map(|active| active.timer))
                 .ok_or_else(|| fail(Failure::TimerState("no expiry callback")))?;
-            let Some(timer) = active.timer else {
+            let Some(timer) = expired else {
                 return Ok(Value::Null);
             };
             self.timer_run(timer, name)?;
