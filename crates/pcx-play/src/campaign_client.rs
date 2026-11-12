@@ -233,6 +233,18 @@ pub fn read(
             cosine: window(0x9a0fe0, 289, true)?,
         }),
     };
+    let formatting = script_numeric::FormatBinding {
+        image_sha256,
+        r2s: window(0x4a4b10, 104, true)?,
+        r2sw: window(0x4a4b80, 106, true)?,
+        body: window(0x9a0870, 0x2b0, true)?,
+        floor: window(0x9a1520, 152, true)?,
+        truncate: window(0x9a07b0, 80, true)?,
+        rounding: window(0x10db0a8, 4, false)?,
+        large_limit: window(0x10db134, 4, false)?,
+        format: window(0xed9f30, 9, false)?,
+        integer_format: window(0xe6ddd8, 3, false)?,
+    };
     let numeric = script_numeric::NumericPolicy::read(
         image,
         script_numeric::Binding {
@@ -255,6 +267,7 @@ pub fn read(
         4096,
     )
     .and_then(|numeric| numeric.with_math(image, &math, BUDGET))
+    .and_then(|numeric| numeric.with_formatting(image, &formatting, BUDGET))
     .map_err(|e| e.to_string())?;
     let destructable_restore = crate::playercolor_host::RestoreLifePolicy::read(
         image,

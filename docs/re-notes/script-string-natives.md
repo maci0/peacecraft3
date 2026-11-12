@@ -82,13 +82,98 @@ at nine (`0x9a0980`..`0x9a09e4`), computes a fractional rounded integer through
 the game's real arithmetic helpers, and handles carry at `0x9a0abb`.
 Negative precision also removes trailing fractional zeros down to one digit
 (`0x9a0ac4`..`0x9a0af2`). Large magnitudes take a separate path at `0x9a08b1`.
-Exact arithmetic-helper rounding and exceptional values remain unqualified;
-both formatting natives remain refused rather than use Rust formatting.
+The formatter now uses those decoded branches through `RealOps::real_to_string`,
+`NumericPolicy::with_formatting`, and the normal campaign client reader. The VM
+validates both native signatures and performs its existing integer-to-real
+argument conversion before invoking the formatter. An absent selected runtime
+or unadmitted formatter remains an error; no host float formatter is used.
+
+The profile reads both wrappers, the formatter, floor/truncation helpers,
+rounding/large-limit cells, and integer format strings from the exact selected
+image. Buffer capacity comes from the wrapper's buffer/cookie displacements;
+default width/precision, negative/default precision, cap, radix/scale identity,
+padding minima, separators, sign, fill and infinity marker come from their own
+instructions/data. Arithmetic call targets must match the admitted numeric
+policy. The existing wide `script_numeric::Binding` remains unchanged.
+
+For ordinary magnitudes below the signed integer boundary, the implementation
+extracts the integer/fraction parts, converts the generated scale with the native
+integer helper, multiplies/adds through the existing integer real helpers and
+truncates the nonnegative rounded result. This preserves the native floor's
+observable result. Carry and negative-precision trimming follow their source
+branches. The final `%*d.%0*d` uses integer decimal conversion: padding belongs
+after an already-emitted minus sign. Precision zero still produces a decimal
+separator and one integer zero digit.
+
+The large branch repeatedly multiplies by its source-encoded factor, renders
+the truncated integer and appends zeros. It ignores width and uses the raw
+precision with a separate minimum, without the ordinary precision cap. The
+source maximum-finite comparison emits the encoded infinity marker, including
+for infinities. Zero-exponent fractions cannot reach an integer under the
+admitted bounded scale/bias, so their fractional integer is zero while a
+nonzero negative input retains its sign. NaN behavior remains refused. Every
+output branch checks the derived native buffer capacity before allocating;
+unsafe oversized native output is not replaced by a truncated string.
+
+### Original-client formatter observation
+
+A private copy of the current construction probe recipe was adapted before
+changes; the selected Booty Bay map's main/terrain remain intact and only its
+script and `(attributes)` script CRC were updated. The original map digest is
+`e1c5984189cd046b112ae59b870cf1d585b2b2445368858ea64c7685d4180268`.
+The generated script resolves against the selected common/Blizzard scripts.
+Competing melee AI/victory are disabled only in this controlled diagnostic.
+
+A fresh, networkless, device-free Wine/software-Mesa container with private
+Xvfb and verified Pulse null sink captured 194 cases plus BEGIN/END, then
+stopped. Each row has its ordered index, expression label, explicit string
+boundaries and native `StringLength`; the collector checks identity, count,
+order and exact byte length. The raw CRLF trace digest is
+`b7c68f97df001314282011dbfd5134fd673af578d9588b800ae0c04f5a2df62b`.
+Original assets, generated map and trace remain local.
+
+The matrix covers signed/negative zero, dyadic ties, adjacent decimal literals,
+carry, negative/zero/over-cap precision, signed padding through width 128, and
+large values. Examples: `R2SW(0.125,0,2)` gives `0.13`;
+`R2SW(-0.5,8,3)` gives `-    0.500`; precision zero on 0.5 gives `1.0`.
+The literal 9.9995 gives default `9.999`, because selected literal/arithmetic
+conversion delivers a lower input; reparsing with host floats would lose this.
+Large-value precision 16 retains 16 zeros while the ordinary branch caps at 9.
+
+A source-derived integer prototype matches all 194 rows. More importantly, the
+explicit local-input regression
+`real_formatter_selected_image_matches_original_capture_through_vm` reads the
+selected image plus the retained probe receipt, installs the real numeric and
+formatter policies, compiles every original expression, and compares the actual
+`R2S`/`R2SW` VM results with all 194 captured outputs. This check passed before
+the final gates. It remains explicitly ignored without its original local
+inputs. This is original-client Wine behavior, not native Windows parity.
+
+The static REA records are `ev_d6ef7de70a29cb3cd3012fc21ee7709660e7b3d8ff4f7cf5d1009ecd4af20655`
+(identity) and `ev_8062272af1fb4e713a2ee624caa9b5bc9124fabad2911f9e07250cd01ebbb1b7`
+(bounded formatter disassembly). Infinity/subnormal assertions are supported by
+native-code reasoning and synthetic tests; they were not extra original-client
+runtime cases in the 194-row matrix.
+
+### Formatter validation (2026-11-13)
+
+From `efa0dbce`, the isolated lane target passes complete `pcx-script`,
+`pcx-trig`, and `pcx-play` suites with `pcx-play/test-fixtures`: 3,450 passed,
+zero failed, 160 explicit ignores. All six new ordinary regressions actually run:
+four source-policy/nonstock/capacity/lifecycle tests and two VM normalization/
+signature tests. The separately selected original-capture replay passes one
+named test comparing all 194 expressions through the real VM callers.
+
+Strict native and WASM Clippy with all targets/features and both explicit-target
+all-feature library builds pass. All eight touched Rust source hashes stayed
+unchanged through those gates, run under verified private offscreen display and
+null audio. Formatting and diff checks pass. No original data/copies are committed.
+Application rebuild/mission checks remain downstream integration work; these
+library gates do not establish full campaign or rendered parity.
 
 ## Remaining scope
 
-S2I/S2R, case/substring boundaries, the full hash and real formatting remain
-unimplemented. Additional map-string wrapper families remain refused until their
+S2I/S2R, case/substring boundaries and the full hash remain unimplemented. Additional map-string wrapper families remain refused until their
 real native consumers are implemented. No native/runtime parity or campaign
 validation is claimed.
 
@@ -227,8 +312,9 @@ The app's shared script-session fixture now retains raw Capture arguments and
 demands invalid WTS text through `StringLength`. Its `map_loading` and
 `script_audio_session` integration targets require downstream validation in the
 application build; they were not run by these library gates. No original client,
-GPU window or audio playback was launched. Native runtime/rendered parity,
-case/substring/hash boundaries and custom real formatting remain unqualified.
+GPU window or audio playback was launched by those library gates. That migration
+did not qualify native runtime/rendered parity or case/substring/hash behavior;
+the separate formatter investigation above has its own evidence and gates.
 
 Independent main integration runs all affected script, trigger and gameplay
 package suites: 3,444 passed, zero failed, 159 explicit ignores. All sixteen

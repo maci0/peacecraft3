@@ -143,9 +143,8 @@ impl Value {
 
 impl std::fmt::Display for Value {
     /// Rendering is for diagnostics and for a caller that wants to show a
-    /// value. It is deliberately not the engine's `I2S`/`R2S`, whose
-    /// formatting is unverified and which therefore stay unimplemented in
-    /// [`crate::natives`].
+    /// value. Engine `I2S` and source-qualified `R2S`/`R2SW` use their own
+    /// native paths in [`crate::natives`].
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Null => f.write_str("null"),
