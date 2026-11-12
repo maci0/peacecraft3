@@ -41,6 +41,8 @@ pub struct Rules {
     /// Class code of the ability `UnitIgnoreAlarm` looks up. `None` when the source was not read
     /// from the image, so the natives refuse.
     pub alarm_code: Option<[u8; 4]>,
+    /// Lower bound passed by CUnit's mana initialization; `None` when not admitted.
+    pub mana_minimum: Option<f32>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
 const CLASS_NAMES: [&str; 18] = [
@@ -108,6 +110,7 @@ impl Rules {
                 .ok_or_else(|| "autocast mapped window truncated".into())
         };
         let alarm_code = Self::alarm_code(&mut read)?;
+        let mana_minimum = Self::mana_minimum(&mut read)?;
         let mut rules = Self::decode(
             origin,
             sha256(image),
@@ -118,8 +121,70 @@ impl Rules {
             read,
         )?;
         rules.alarm_code = Some(alarm_code);
+        rules.mana_minimum = Some(mana_minimum);
         Ok(rules)
     }
+    fn mana_minimum(
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<f32, String> {
+        // CUnit binds its +1c0 mana proxy to Float::Init, whose fifth argument is the minimum.
+        let ctor = read(0x675835, 10, true)?;
+        shape(&ctor, 0, &[0xc7, 0x86, 0xc0, 0x01, 0, 0])?;
+        let init_slot = word(&ctor, 6)?
+            .checked_add(0x18)
+            .ok_or("mana vtable overflow")?;
+        let helper = word(&read(init_slot, 4, false)?, 0)?;
+        let config = read(
+            helper.checked_add(0x30).ok_or("mana helper overflow")?,
+            0x61,
+            true,
+        )?;
+        shape(&config, 0, &[0x8b, 0x45, 0x18, 0xff, 0x75, 0x20])?;
+        shape(
+            &config,
+            0x14,
+            &[0x8b, 0x10, 0x8b, 0x45, 0x1c, 0x89, 0x55, 0xe0],
+        )?;
+        shape(
+            &config,
+            0x4d,
+            &[0x8d, 0x45, 0xd0, 0x50, 0x56, 0xff, 0x75, 0x08],
+        )?;
+        shape(&config, 0x5c, &[0xe8])?;
+        if helper.wrapping_add(0x91).wrapping_add(word(&config, 0x5d)?) != 0x801c50 {
+            return Err("mana descriptor forwarding changed".into());
+        }
+        let init = read(0x670a10, 40, true)?;
+        shape(
+            &init,
+            0,
+            &[0x8b, 0x86, 0xc0, 0x01, 0, 0, 0x8d, 0x8e, 0xc0, 0x01, 0, 0],
+        )?;
+        shape(&init, 12, &[0x6a, 0, 0x68])?;
+        shape(&init, 19, &[0x68])?;
+        shape(&init, 24, &[0x68])?;
+        shape(&init, 37, &[0xff, 0x50, 0x18])?;
+        // The descriptor's +10 lower bound becomes the resource's +80 clamp operand.
+        let bounds = read(0x8c3ee9, 28, true)?;
+        shape(
+            &bounds,
+            0,
+            &[
+                0x8b, 0x46, 0x10, 0x89, 0x45, 0xf8, 0x8b, 0x46, 0x14, 0x89, 0x45, 0xfc, 0x8d, 0x97,
+                0x80, 0, 0, 0, 0x8b, 0x01, 0x8b, 0x49, 0x04, 0x89, 0x02, 0x89, 0x4a, 0x04,
+            ],
+        )?;
+        shape(
+            &read(0x8c47d0, 14, true)?,
+            0,
+            &[
+                0xf3, 0x0f, 0x10, 0x83, 0x80, 0, 0, 0, 0x8d, 0xb3, 0x80, 0, 0, 0,
+            ],
+        )?;
+        shape(&read(0x8c4817, 4, true)?, 0, &[0xf3, 0x0f, 0x10, 0x06])?;
+        bootstrap_real(0x401300, word(&init, 20)?, read)
+    }
+
     /// The class code `UnitIgnoreAlarm` (`0x4af2d0`) and `UnitIgnoreAlarmToggled` (`0x4af330`)
     /// pass to the unit's ability lookup (`0x6d6570`), read from the getter both call
     /// (`0xb167f0`), after checking that each sets, clears or reads state bit `0x80`.
@@ -297,6 +362,7 @@ impl Rules {
             classes,
             groups,
             alarm_code: None,
+            mana_minimum: None,
         })
     }
     /// Decodes the shared ON handler, its update hook and the timer the activation arms.
@@ -414,25 +480,32 @@ impl TickTiming {
             &[0x55, 0x8b, 0xec, 0x8b, 0x45, 0x08, 0x8b, 0x0d],
         )?;
         shape(&getter, 12, &[0x89, 0x08, 0x5d, 0xc2, 0x04, 0x00])?;
-        // The bootstrap converts its integer operand into the getter's mutable real global.
-        let init = read(initializer, 16, true)?;
-        shape(&init, 0, &[0x6a])?;
-        shape(&init, 2, &[0x68])?;
-        shape(&init, 7, &[0xe8])?;
-        shape(&init, 12, &[0x83, 0xc4, 0x08, 0xc3])?;
-        if word(&getter, 8)? != word(&init, 3)?
-            || initializer.wrapping_add(12).wrapping_add(word(&init, 8)?) != 0x9a1620
-        {
-            return Err("autocast tick delay initialization differs".into());
-        }
-        let bits = crate::script_random::real::from_i32(i32::from(init[1] as i8))
-            .map_err(|e| format!("autocast tick delay conversion: {e}"))?;
-        let delay = f32::from_bits(bits);
+        let delay = bootstrap_real(initializer, word(&getter, 8)?, read)?;
         if !delay.is_finite() || delay <= 0. {
             return Err("autocast tick delay must be finite and positive".into());
         }
         Ok(delay)
     }
+}
+
+fn bootstrap_real(
+    initializer: u32,
+    global: u32,
+    read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+) -> Result<f32, String> {
+    let init = read(initializer, 16, true)?;
+    shape(&init, 0, &[0x6a])?;
+    shape(&init, 2, &[0x68])?;
+    shape(&init, 7, &[0xe8])?;
+    shape(&init, 12, &[0x83, 0xc4, 0x08, 0xc3])?;
+    if global != word(&init, 3)?
+        || initializer.wrapping_add(12).wrapping_add(word(&init, 8)?) != 0x9a1620
+    {
+        return Err("autocast real initialization differs".into());
+    }
+    crate::script_random::real::from_i32(i32::from(init[1] as i8))
+        .map(f32::from_bits)
+        .map_err(|e| format!("autocast real initialization conversion: {e}"))
 }
 
 /// The first `len` code bytes of the function a class table's `slot` points to.
