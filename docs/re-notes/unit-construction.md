@@ -91,8 +91,9 @@ Ordinary work uses source-duration interpolation; native polling/sub-tick
 arithmetic is not claimed identical. Native snap/approach fidelity and the
 source-default-facing equivalence need further qualification. The Human and unattended
 Undead styles, stationary footprints, supported placement tokens and zero building
-food reservation are accepted. Shoreline placement, other styles and multiple
-builders refuse. Worker style is selected by matching the authored worker race and build list
+food reservation are accepted. Shoreline placement and other styles refuse.
+Human assistant participation is described in the later qualification below.
+Worker style is selected by matching the authored worker race and build list
 to the ability's source race; native implicit enrollment is not established. The unattended
 worker is released at site creation, while the probe only bounds the original release between
 successive one-second samples. A worker with an existing build request/participation must stop
@@ -227,7 +228,7 @@ Rep1/Rep2/Rep3/Rep4 to DataA/B/C/D: repair cost ratio, repair time ratio,
 powerbuild cost and powerbuild rate. These records must be read through the
 selected ability tables and map overlays.
 
-The native time-source join remains unresolved: `0x67c3d0` reads the established
+At that stage the native time-source join remained unresolved: `0x67c3d0` reads the established
 cached build duration, while the distinct getter `0x69b8b0`, used with repair
 DataB, reads the adjacent cache field. The `reptm` source loader at `0x6b423f`
 is distinct from `bldtm` at `0x6b4227`; the full join to the repair cache getter
@@ -254,8 +255,8 @@ stop, death, removal, target retirement and owner revalidation must remove only
 the departing participant's contribution. Nonstock synthetic ratios and distinct
 build/repair durations must test the getter distinction, multiple helpers,
 fractional charging, depleted banks and completion cleanup. Until those inputs
-and arithmetic are qualified, the current additional-worker refusal remains an
-explicit fidelity gap.
+and arithmetic were qualified, the additional-worker refusal remained an
+explicit fidelity gap. The following slice replaces it for Human construction.
 
 Validation of the Human transfer slice used
 `/tmp/pc3-fidelity-sol61-06-target`: the construction selection passed 58 tests,
@@ -280,3 +281,105 @@ autonomous setup is included. Source hashes and per-command receipts are under
 `/tmp/pc3-strings-construction-app-validation/`. This qualifies the sampled
 Human transfer slice; it does not implement assistant builders or prove exact
 native polling, automatic reacquisition or cancellation after transfer.
+
+## Called Human assistant lifecycle, 2026-11-13
+
+Public source repair orders now enroll assistants through the existing request,
+travel and arrival path. The canonical paid site retains its primary worker and
+a collection of independently keyed assistants. Each assistant retains its
+selected ability alias/rank, source DataC cost contributions and DataD work
+contribution. There is no fixed one-helper cap. The existing activity roster and
+order queries include every participant; completion and target retirement remove
+all participation. Construction work accounting includes the assistant roster.
+
+The rules reader derives the Repair class identifier from its selected class
+name, virtual code getter and constructor. It also follows the build-in-progress
+event virtual to the shared resource handler and reads the two negative debit
+operands. Gold/lumber operands must agree and represent a debit; a missing or
+changed relationship refuses admission. That derived quantum controls actual
+charges and periods. Synthetic image and runtime fixtures deliberately use a
+different Repair class and a three-unit quantum. No original alias, measured
+work rate, cost ratio or currency quantum is copied into implementation constants.
+
+The distinct duration join is now qualified by bounded selected-image inspection:
+
+| Source path | Selected native join |
+| --- | --- |
+| `bldtm` | Loader `0x6b4227` addresses expanded field `+0x2fc`; getter `0x6acde0` supplies the cache writer at `0x67d070`, stored at type-cache `+0x18`. Ordinary getter `0x67c3d0` reads that field. |
+| `reptm` | Loader `0x6b423f` addresses expanded field `+0x308`; getter `0x6b8610` supplies the writer at `0x67d07e`, stored at type-cache `+0x1c`. Getter `0x69b8b0` reads that distinct field. |
+| Cache identity | Initializer `0x67c4c0` obtains the record through `0x695fc0` using global `0x113e8d8`; both duration getters resolve that same cache through `0x6993a0`. |
+
+Repair startup `0xbb5cc0` computes ordinary repair duration from DataB and the
+repair-time getter. Its assistant branch separately retains the build-time
+getter, DataC multiplied by each authored building cost, and DataD. The assistant
+implementation follows that branch. It does not substitute build duration for
+ordinary repair duration or implement completed-building repairs. Pooled work is
+the ordinary construction rate plus the retained DataD contributions. Native
+`0xb91630`/`0xb925c0` and the wrapper division helper `0x5bceb0` establish the
+charge-period relationship: build duration divided by pooled work rate, divided
+by the pooled resource cost, scaled by the derived debit quantum. The admitted
+numeric policy performs these operations, including integer conversion; synthetic
+tests use its intentionally nonstock reciprocal table rather than assuming IEEE
+division for expected deadlines.
+
+Three additional controlled original-client runs use the same selected image,
+source map and private Wine/Xvfb/null-Pulse harness. They retain 665, 663 and 667
+records for two assistants, funding interruption and primary death, respectively.
+Each contains one START and samples 1–128. All containers were stopped.
+`/tmp/pc3-sol06-assistant-probes/runtime-evidence-receipt.json` independently
+verifies loaded map/executable hashes, raw trace hashes, sequence coverage, null
+audio, cleanup and the lifecycle assertions. It retains the exact controlled
+conditions and inputs; maps and extracted bytes remain local.
+
+- Two assistants add their work contributions. Stopping one preserves the other
+  participant and its added work. Re-enrollment restores the departing contribution.
+- Emptying both banks stops the assistant while the primary keeps working.
+  Restoring funding alone does not reenroll that worker.
+- After the primary dies, the surviving assistant keeps its repair order,
+  reclaims the primary role and resumes ordinary construction without another
+  full debit or subsequent assistant charges. STOP, repair and death continue
+  through that same site.
+
+The implementation settles pooled debit deadlines with bounded arithmetic,
+without one iteration per currency unit. A membership change retains the pending
+resource deadline and updates following periods from the new contributions.
+Failed funding removes the affected participation without a refund or automatic
+reenrollment. Stop, movement, death, removal and owner transfer remove the
+departing participant; a surviving build-capable assistant can reclaim the
+primary role. Target death/removal cancels arriving requests and clears charge
+wakes. Ownership revalidation removes old-owner participants without charging
+the new owner. Invalid profiles and unsupported states retain explicit errors.
+
+These are source-derived recreation timing choices, not an assertion of exact
+native cost-event phase. The two-assistant native arm preserves an earlier
+pending debit after enrollment, but one later STOP sample contains two lumber
+debits. Exact same-tick timer reconfiguration, callback ordering and full integer
+cost parity across membership transitions remain unqualified. Reclamation uses
+canonical unit order; native simultaneous reclamation ordering remains open.
+Assistant pause/rank-change during participation explicitly refuses rather than
+inventing its projection. Arbitrary native automatic reacquisition, ordinary
+completed-building repair, damaged cancellation and other races remain separate
+work. The long reference timer's elapsed-query precision also does not establish
+a scheduler quantum; the new observations retain the same quarter-second bounds.
+
+Regressions exercise public multi-assistant travel/enrollment/completion,
+independent stop/death/removal/transfer cleanup, primary reclamation, depleted
+banks without automatic resumption, map overrides, distinct build/repair durations,
+malformed profiles, assisted site transfer and enrolled/arriving helper cleanup
+after target death. The existing strict ranked reader and marker-aware Slow
+reader keep their prior behavior; the new general reader selects the actual unit
+ability tables/overlay and shares the same validation body.
+
+Final validation used the isolated target
+`/tmp/pc3-fidelity-sol61-06-target`: 69 construction tests passed, with the
+explicit local-source test ignored in that selection; the supplied-image
+`selected_original_construction_rules` passed separately. The affected library
+suite passed 3,103 tests with zero failures and 114 explicit ignores. All eleven
+new named regressions actually ran, including preservation of a zero-cost helper
+after pooled funding exhaustion and strict/marker rank-validation error priority.
+Native/WASM all-target Clippy with `-D warnings`, both library builds, scoped
+formatting and diff checks passed. Exact Rust source hashes and per-command logs
+are retained in `/tmp/pc3-sol06-phase3-verification.json`; those sources were
+unchanged throughout the successful final run. Earlier failed fixture attempts
+and successful pre-review runs are preserved separately. No rendered comparison,
+native Windows run or full-workspace integration is claimed by these checks.
