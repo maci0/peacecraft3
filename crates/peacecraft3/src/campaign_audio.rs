@@ -12,6 +12,7 @@ use crate::menu_skin::SkinTable;
 use bevy::prelude::*;
 use pcx_assets::Resolver;
 use pcx_play::map_startup_host::MapStartupHost;
+use pcx_play::playercolor_host::ThematicMusicRequest;
 use peacecraft3::{
     browser_configuration::SelectedMapSources, campaign_startup::CampaignSeed,
     map_requests::MapRequests, map_script_session::MapScriptSession,
@@ -293,6 +294,8 @@ pub(crate) struct CampaignAudio {
     playlist: Option<Playlist>,
     /// A thematic file that played to its end; map music covers the rest of the request.
     finished_thematic: Option<String>,
+    thematic_revision: Option<u64>,
+    thematic_position_revision: Option<u64>,
     /// The request that failed to start; it is not retried until the script changes it.
     failed: Option<Request>,
     /// Accepted player commands already voiced.
@@ -323,6 +326,19 @@ enum Step {
 }
 
 impl CampaignAudio {
+    fn accept_thematic_request(&mut self, request: Option<&ThematicMusicRequest>) {
+        let revision = request.map(|request| request.revision);
+        if self.thematic_revision != revision {
+            self.thematic_revision = revision;
+            self.thematic_position_revision = None;
+            self.finished_thematic = None;
+            self.failed = None;
+            if matches!(self.playing, Some(Request::Thematic(_))) {
+                self.playing = None;
+            }
+        }
+    }
+
     /// Chooses the next action for the script's music state and whether music is audible.
     fn step(
         &mut self,
@@ -573,7 +589,12 @@ fn drive_music(
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
     mut assets: ResMut<Assets<AudioSource>>,
     sources: Sources,
-    music: Query<(Entity, &CampaignMusic)>,
+    mut music: Query<(
+        Entity,
+        &CampaignMusic,
+        &mut PlaybackSettings,
+        Option<&AudioSink>,
+    )>,
 ) {
     let witness = session.session_witness();
     let same = match (&audio.session, &witness) {
@@ -586,7 +607,7 @@ fn drive_music(
             session: witness.clone(),
             ..default()
         };
-        for (entity, _) in &music {
+        for (entity, _, _, _) in &music {
             commands.entity(entity).despawn();
         }
     }
@@ -597,7 +618,7 @@ fn drive_music(
         Some(host) => {
             let objects = host.objects();
             (
-                objects.thematic_music().map(str::to_owned),
+                objects.thematic_music_request().cloned(),
                 objects.map_music_selection().map(|selection| MapMusic {
                     name: selection.name.clone(),
                     random: selection.random,
@@ -607,15 +628,38 @@ fn drive_music(
         }
         None => return,
     };
+    audio.accept_thematic_request(thematic.as_ref());
     if thematic.is_some() || map.is_some() {
         audio.ensure_bank(&sources, &mut session);
     }
     let audible = !music.is_empty();
-    let step = audio.step(thematic.as_deref(), map, audible);
+    if let Some(request) = &thematic
+        && audio.playing == Some(Request::Thematic(request.path.clone()))
+        && audio.thematic_position_revision != Some(request.position_revision)
+    {
+        for (_, _, mut playback, sink) in &mut music {
+            if let Some(position) = request.position {
+                if let Some(sink) = sink {
+                    use bevy::audio::AudioSinkPlayback;
+                    if let Err(error) = sink.try_seek(position) {
+                        audio.report(format!("thematic music seek {}: {error}", request.path));
+                    }
+                } else {
+                    playback.start_position = Some(position);
+                }
+            }
+        }
+        audio.thematic_position_revision = Some(request.position_revision);
+    }
+    let step = audio.step(
+        thematic.as_ref().map(|request| request.path.as_str()),
+        map,
+        audible,
+    );
     match step {
         Ok(Step::Keep) => {}
         Ok(Step::Stop) => {
-            for (entity, track) in &music {
+            for (entity, track, _, _) in &music {
                 debug!("campaign music stops {}", track.member);
                 commands.entity(entity).despawn();
             }
@@ -629,11 +673,19 @@ fn drive_music(
             match bytes {
                 Ok(bytes) => {
                     let volume = sources.settings.audio.effective_music();
+                    let mut playback =
+                        PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(volume));
+                    if let Some(request) = &thematic
+                        && audio.playing == Some(Request::Thematic(request.path.clone()))
+                    {
+                        playback.start_position = request.position;
+                        audio.thematic_position_revision = Some(request.position_revision);
+                    }
                     commands.spawn((
                         AudioPlayer(assets.add(AudioSource {
                             bytes: bytes.into(),
                         })),
-                        PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(volume)),
+                        playback,
                         CampaignMusic { member },
                         AuthoredVolume(1.0),
                     ));
@@ -881,6 +933,43 @@ mod tests {
             bank: Some(bank),
             ..default()
         }
+    }
+
+    #[test]
+    fn thematic_revision_restarts_same_path_and_seek_preserves_track_identity() {
+        let mut audio = audio_with(bank(false, &["Human"]));
+        let mut request = ThematicMusicRequest {
+            path: "theme.mp3".into(),
+            revision: 1,
+            position: Some(std::time::Duration::from_millis(9580)),
+            position_revision: 1,
+        };
+        audio.accept_thematic_request(Some(&request));
+        assert_eq!(
+            audio.step(Some(&request.path), None, false),
+            Ok(Step::Play(request.path.clone()))
+        );
+        request.position_revision = 2;
+        request.position = Some(std::time::Duration::from_millis(37));
+        audio.accept_thematic_request(Some(&request));
+        assert_eq!(audio.step(Some(&request.path), None, true), Ok(Step::Keep));
+        request.revision = 3;
+        request.position_revision = 3;
+        audio.accept_thematic_request(Some(&request));
+        assert_eq!(audio.step(Some(&request.path), None, true), Ok(Step::Stop));
+        assert_eq!(
+            audio.step(Some(&request.path), None, false),
+            Ok(Step::Play(request.path.clone()))
+        );
+        assert_eq!(audio.step(Some(&request.path), None, false), Ok(Step::Keep));
+        request.revision = 4;
+        audio.accept_thematic_request(Some(&request));
+        assert_eq!(
+            audio.step(Some(&request.path), None, false),
+            Ok(Step::Play(request.path.clone()))
+        );
+        audio.accept_thematic_request(None);
+        assert_eq!(audio.step(None, None, true), Ok(Step::Stop));
     }
 
     #[test]

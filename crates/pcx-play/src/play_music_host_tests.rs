@@ -314,3 +314,120 @@ fn missing_create_timer_with_music_natives_is_a_source_failure() {
         matches!(host(&common, map).with_play_music(8), Err(e) if e.failure == Failure::Source)
     );
 }
+
+#[test]
+fn thematic_public_vm_calls_interleave_without_accepting_regular_music() {
+    let common = COMMON.replacen("globals", "native SetMapMusic takes string name, boolean random, integer index returns nothing\nnative PlayThematicMusic takes string path returns nothing\nnative EndThematicMusic takes nothing returns nothing\nglobals", 1);
+    let map = "function main takes nothing returns nothing\ncall PlayThematicMusicEx(\"theme.mp3\",9580)\ncall PlayThematicMusic(\"theme.mp3\")\ncall SetThematicMusicPlayPosition(2401)\ncall EndThematicMusic()\ncall SetThematicMusicPlayPosition(-200)\ncall PlayThematicMusicEx(\"theme.mp3\",3007)\nendfunction\n";
+    let mut vm = host(&common, map)
+        .with_map_music_selection(64)
+        .unwrap()
+        .with_play_music(64)
+        .unwrap()
+        .with_thematic_music_rules(super::super::music::thematic_rules::tests::rules())
+        .unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let request = vm.host().thematic_music_request().unwrap();
+    assert_eq!(request.path, "theme.mp3");
+    assert_eq!(
+        request.position,
+        Some(std::time::Duration::from_millis(3007))
+    );
+    assert_eq!(request.revision, 4);
+    assert_eq!(request.position_revision, 4);
+    for (name, args) in [
+        ("SetMusicVolume", vec![Value::Int(91)]),
+        ("SetMusicPlayPosition", vec![Value::Int(931)]),
+        ("PlayMusic", vec![Value::Str("regular.mp3".into())]),
+    ] {
+        assert!(
+            vm.host()
+                .native(name, &args)
+                .unwrap_err()
+                .contains("unqualified")
+        );
+    }
+    assert_eq!(vm.host().thematic_music_request().unwrap().revision, 4);
+}
+
+#[test]
+fn thematic_shared_surface_refuses_foreign_map_music_declarations() {
+    let map = "native SetMapMusic takes string name, boolean random, integer index returns nothing\nnative PlayThematicMusic takes string path returns nothing\nnative EndThematicMusic takes nothing returns nothing\n";
+    let host = host(COMMON, map)
+        .with_map_music_selection(64)
+        .unwrap()
+        .with_play_music(64)
+        .unwrap();
+    assert!(
+        matches!(host.with_thematic_music_rules(super::super::music::thematic_rules::tests::rules()), Err(error) if error.failure == Failure::Source)
+    );
+}
+
+#[test]
+#[ignore = "requires selected PCX_THEMATIC_IMAGE, PCX_THEMATIC_COMMON and PCX_THEMATIC_BLIZZARD"]
+fn thematic_selected_blizzard_offset_helpers_reach_the_shared_request() {
+    let read = |key| std::fs::read_to_string(std::env::var_os(key).unwrap()).unwrap();
+    let mut common = pcx_script::parse_script(&read("PCX_THEMATIC_COMMON")).unwrap();
+    let mut blizzard = pcx_script::parse_script(&read("PCX_THEMATIC_BLIZZARD")).unwrap();
+    // Execute the unchanged helper bodies, without unrelated prelude startup.
+    for item in &mut common.items {
+        if let pcx_script::ast::Item::Globals(globals, _) = item {
+            globals.retain(|global| global.ty.kind.name() == "playercolor");
+        }
+    }
+    blizzard.items.retain(|item| matches!(item, pcx_script::ast::Item::Function(function)
+        if ["PlayThematicMusicExBJ", "SetThematicMusicOffsetBJ", "EndThematicMusicBJ"].contains(&function.name.as_str())));
+    let map = pcx_script::parse_script("").unwrap();
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &map,
+            &[
+                Prelude::new("Scripts\\common.j", &common),
+                Prelude::new("Scripts\\Blizzard.j", &blizzard),
+            ],
+        )
+        .unwrap(),
+    );
+    let enum_host = EnumHost::checked_selected(
+        program,
+        "selected:thematic-helper",
+        &["ConvertPlayerColor"],
+        Limits {
+            max_handles: 128,
+            admission_steps: 20_000,
+            expression_depth: 64,
+            expression_work: 20_000,
+        },
+    )
+    .unwrap();
+    let image = std::fs::read(std::env::var_os("PCX_THEMATIC_IMAGE").unwrap()).unwrap();
+    let rules = crate::playercolor_host::ThematicMusicRules::read(&image).unwrap();
+    let mut vm = ObjectHost::checked(enum_host)
+        .unwrap()
+        .with_map_music_selection(64)
+        .unwrap()
+        .with_play_music(64)
+        .unwrap()
+        .with_thematic_music_rules(rules)
+        .unwrap()
+        .into_vm();
+    vm.call(
+        "PlayThematicMusicExBJ",
+        &[Value::Str("synthetic-theme.mp3".into()), Value::Real(3.125)],
+    )
+    .unwrap();
+    assert_eq!(
+        vm.host().thematic_music_request().unwrap().position,
+        Some(std::time::Duration::from_millis(3125))
+    );
+    vm.call("SetThematicMusicOffsetBJ", &[Value::Real(0.875)])
+        .unwrap();
+    assert_eq!(
+        vm.host().thematic_music_request().unwrap().position,
+        Some(std::time::Duration::from_millis(875))
+    );
+    vm.call("EndThematicMusicBJ", &[]).unwrap();
+    assert!(vm.host().thematic_music_request().is_none());
+}
