@@ -7222,3 +7222,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   destroyed groups remain unqualified. See
   [group arena](docs/re-notes/script-group-arena.md) and
   [chapter receipts](docs/re-notes/chapter-startup-refusals.md).
+
+- 2026-11-13: The source `Anh2` alias now binds the decoded `Anhe` Neutral Heal
+  class for default activation. Native order IDs remain distinct from ordinary
+  Heal; no profile alias or actual cast is fabricated. Independent main checks
+  pass: full gameplay package 3,169 passed, 145 explicit ignores; all 36 autocast
+  tests with both selected-image gates enabled; strict native/WASM all-target
+  Clippy, both libraries, formatting and application rebuild. Local image reads
+  are bounded before allocation, and source hashes remain unchanged. Unchanged
+  Undead05 now publishes 194 units instead of refusing creation, then reaches
+  the existing `ACbl` acquisition refusal at the first deadline. Actual Heal
+  acquisition, caster-owned channel state, effects and original-client tick
+  parity remain open. See
+  [Neutral Heal activation](docs/re-notes/ability-autocast-on.md).
