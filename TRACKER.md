@@ -7097,3 +7097,17 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   distinguished. Other string natives, runtime/campaign comparisons and full
   native tick parity remain open. See
   [string native evidence](docs/re-notes/script-string-natives.md).
+
+- 2026-11-13: Construction completion scheduling ignores terminal dead sites;
+  repair enrollment rejects terminal/unready/autonomous targets and cannot
+  replace an existing participant. An unqualified incomplete-site owner transfer
+  now refuses before changing participants, resources or ownership. Worker
+  transfers retain pending-reservation refunds or detach paid work. All five
+  named new lifecycle regressions pass in main's independent complete gameplay
+  package suite: 3,140 passed, zero failed, 143 explicit ignores. Strict
+  native/WASM all-target Clippy, both library builds, formatting and the native
+  campaign-probe rebuild pass with unchanged source hashes. The source-admission
+  gate also passed on the selected 1.29.2.9231 input. Actual incomplete-site
+  transfer, multi-builder work, native polling/tick behavior and presentation
+  parity remain open; the atomic refusal is not a transfer implementation. See
+  [construction evidence](docs/re-notes/unit-construction.md).

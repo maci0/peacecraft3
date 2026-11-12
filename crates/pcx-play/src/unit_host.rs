@@ -1792,6 +1792,12 @@ impl ObjectHost {
         } else {
             None
         };
+        if self.executed_unit(*unit)?.construction.is_some() {
+            return Err(self.inner.error(
+                SET_OWNER,
+                Failure::UnitState("incomplete construction ownership transfer is not qualified"),
+            ));
+        }
         // Producer-transfer cleanup: a transferred producer keeps no training
         // queue. Refund remaining entries per-entry with the admitted rate and
         // release active food, without training events, before the owner
