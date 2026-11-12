@@ -161,6 +161,7 @@ fn open_setup_vm_with_code(
         alarm_code: Some(*b"X005"),
         mana_minimum: None,
         clock: None,
+        slow: None,
     };
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = autocast.image_sha256;

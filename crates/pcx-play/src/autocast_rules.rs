@@ -8,6 +8,14 @@ use crate::{
 
 #[path = "autocast_clock.rs"]
 pub mod clock;
+#[path = "autocast_slow_rules.rs"]
+pub mod slow;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Outcome {
+    Retry,
+    Accepted { rearm_after: f32 },
+}
 
 /// What the shared ON handler does beyond the state bit, decoded from the class.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +55,7 @@ pub struct Rules {
     /// Lower bound passed by CUnit's mana initialization; `None` when not admitted.
     pub mana_minimum: Option<f32>,
     pub clock: Option<clock::Rules>,
+    pub slow: Option<slow::Rules>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
 const CLASS_NAMES: [&str; 18] = [
@@ -114,6 +123,7 @@ impl Rules {
                 .ok_or_else(|| "autocast mapped window truncated".into())
         };
         let alarm_code = Self::alarm_code(&mut read)?;
+        let slow = slow::Rules::read(&mut read)?;
         let mana_minimum = Self::mana_minimum(&mut read)?;
         let clock = clock::Rules::read(&mut read)?;
         let mut rules = Self::decode(
@@ -126,6 +136,7 @@ impl Rules {
             read,
         )?;
         rules.alarm_code = Some(alarm_code);
+        rules.slow = Some(slow);
         rules.mana_minimum = Some(mana_minimum);
         rules.clock = Some(clock);
         Ok(rules)
@@ -370,6 +381,7 @@ impl Rules {
             alarm_code: None,
             mana_minimum: None,
             clock: None,
+            slow: None,
         })
     }
     /// Decodes the shared ON handler, its update hook and the timer the activation arms.

@@ -17,8 +17,10 @@
 //! A nonzero `Cast` refuses the cast, because the ranked casting time of a non-channeled
 //! spell is not decoded. Orders replace each other as for the other spell hosts. The caster
 //! walks into `Rng` (center distance, no collision radii), faces the target, plays `spell`
-//! and applies the effect at the cast point. Mana, cooldown and the spell-effect events are
-//! taken then. Backswing (`castbsw`) is not modelled: orders cancel it at once.
+//! and applies the effect at the cast point. Slow emits EFFECT before payment and buff
+//! commitment, and completes after the source `castbsw`; interruption retains payment
+//! once EFFECT has begun. Other classes still apply before EFFECT and use animation backswing.
+//! Turning remains an instant-facing approximation; see `slow-autocast-qualification.md`.
 //!
 //! Slow multiplies the target's move speed by `1 - factor` (clamped by the selected speed
 //! limits) and subtracts the attack factor from the attack speed multiplier the combat step
@@ -51,6 +53,9 @@ use super::{Entry, Error, EventSubject, Failure, ObjectHost, combat};
 use pcx_objects::editor::{FieldKind, SlkId};
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
+
+#[path = "autocast_slow_host.rs"]
+pub(super) mod slow;
 
 /// Refusals for speed buffs and a polymorph on one unit. The movement object keeps the buff
 /// decreases in its multiplier, but which writes the type change of a polymorph makes to it is
@@ -138,6 +143,9 @@ enum Stage {
     Walking,
     Casting { effect_at: f64 },
     Backswing,
+    SlowEffect,
+    SlowBackswing { until: f64 },
+    SlowEnding,
 }
 
 struct Cast {
@@ -147,6 +155,7 @@ struct Cast {
     stage: Stage,
     /// Sequence index and start of the cast animation, to return to stand when it is unchanged.
     animation: Option<(usize, f64)>,
+    slow: Option<slow::Cast>,
 }
 
 struct ActiveSlow {
@@ -183,6 +192,7 @@ pub(super) struct State {
     slows: BTreeMap<HandleId, ActiveSlow>,
     polymorphs: BTreeMap<HandleId, ActivePolymorph>,
     conversions: BTreeMap<HandleId, ActiveConversion>,
+    slow_lifecycle: slow::State,
 }
 
 struct Filter {
@@ -457,6 +467,7 @@ impl ObjectHost {
             slows: BTreeMap::new(),
             polymorphs: BTreeMap::new(),
             conversions: BTreeMap::new(),
+            slow_lifecycle: slow::State::default(),
         });
         Ok(())
     }
@@ -731,6 +742,9 @@ impl ObjectHost {
         let Some((alias, kind)) = self.curse_alias_for_order(caster, order)? else {
             return Ok(false);
         };
+        if kind == Kind::Slow && self.slow_effect_in_progress(caster) {
+            return Ok(true);
+        }
         let now = self
             .timer_game_time()
             .ok_or_else(|| self.curse_error("clock missing"))?;
@@ -741,6 +755,9 @@ impl ObjectHost {
             || self.curse_unready(caster, alias, &spell, now)
         {
             return Ok(false);
+        }
+        if kind == Kind::Slow {
+            self.prepare_slow_windup(caster)?;
         }
         self.unit_ordered(caster);
         self.cancel_inventory_order(caster);
@@ -754,6 +771,7 @@ impl ObjectHost {
                     target,
                     stage: Stage::Walking,
                     animation: None,
+                    slow: None,
                 },
             );
         }
@@ -774,21 +792,23 @@ impl ObjectHost {
 
     /// Drops a pending cast when its caster takes another order, dies or is removed.
     pub(super) fn forget_curse_cast(&mut self, caster: HandleId) {
+        self.end_interrupted_slow(caster);
         if let Some(state) = &mut self.curses {
             state.pending.remove(&caster);
         }
     }
 
     pub(super) fn resume_curse_cast(&mut self, caster: HandleId, elapsed: f64) {
-        if let Some(Cast {
-            stage: Stage::Casting { effect_at },
-            ..
-        }) = self
+        if let Some(cast) = self
             .curses
             .as_mut()
             .and_then(|state| state.pending.get_mut(&caster))
         {
-            *effect_at += elapsed;
+            match &mut cast.stage {
+                Stage::Casting { effect_at } => *effect_at += elapsed,
+                Stage::SlowBackswing { until } => *until += elapsed,
+                _ => {}
+            }
         }
     }
 
@@ -842,6 +862,9 @@ impl ObjectHost {
         let Some(state) = self.curses.as_ref() else {
             return Ok(());
         };
+        if let Some(fault) = &state.slow_lifecycle.fault {
+            return Err(self.curse_error(fault.clone()));
+        }
         let casters: Vec<HandleId> = state.pending.keys().copied().collect();
         let slows: Vec<HandleId> = state
             .slows
@@ -885,10 +908,16 @@ impl ObjectHost {
             return Ok(());
         };
         let (alias, kind, target) = (cast.alias, cast.kind, cast.target);
+        if kind == Kind::Slow {
+            return self.step_slow_cast(caster, now);
+        }
         let stage = match &cast.stage {
             Stage::Walking => None,
             Stage::Casting { effect_at } => Some(Some(*effect_at)),
             Stage::Backswing => Some(None),
+            Stage::SlowEffect | Stage::SlowBackswing { .. } | Stage::SlowEnding => {
+                return Err(self.curse_error("Slow stage belongs to a different curse class"));
+            }
         };
         let Some(unit) = self.curse_caster(caster) else {
             self.forget_curse_cast(caster);
@@ -908,6 +937,7 @@ impl ObjectHost {
     }
 
     fn cancel_curse_cast(&mut self, caster: HandleId, now: f64) -> Result<(), Error> {
+        self.end_interrupted_slow(caster);
         let animation = self
             .curses
             .as_mut()
@@ -977,6 +1007,9 @@ impl ObjectHost {
             self.steer_unit(caster, None, NATIVE)?;
         }
         let delay = self.curse_cast_point(caster)?;
+        if kind == Kind::Slow {
+            self.prepare_slow_windup(caster)?;
+        }
         let facing = (to[1] - from[1])
             .atan2(to[0] - from[0])
             .to_degrees()
@@ -1006,6 +1039,9 @@ impl ObjectHost {
             cast.stage = Stage::Casting {
                 effect_at: now + delay,
             };
+        }
+        if kind == Kind::Slow {
+            return self.begin_slow_windup(caster, now);
         }
         if delay <= 0.0 {
             return self.apply_curse_cast(caster, target, alias, kind, now);
@@ -1498,6 +1534,7 @@ impl ObjectHost {
 
     /// A dead or removed unit keeps no cast, slow or polymorph state; a dead polymorph stays a sheep.
     pub(super) fn forget_curse_unit(&mut self, unit: HandleId) {
+        self.forget_curse_cast(unit);
         let Some(state) = &mut self.curses else {
             return;
         };
