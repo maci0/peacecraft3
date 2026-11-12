@@ -116,9 +116,10 @@ of arbitrary runtime additions/removals. No new original-client run was made.
 Capture now projects onto the source ordinary abilities plus live hero learn-slot
 ranks. Added ordinary aliases are omitted, removed source aliases are reinstated,
 and ordinary ranks come from source creation. Cooldown overrides for omitted
-aliases are omitted too. The recreation's existing live sequence is retained
-for surviving aliases; missing source entries return at their creation indices.
-Native ordering and cooldown-override persistence remain unqualified. The existing
+aliases are omitted too. Ordinary entries follow fresh source creation order;
+learned ranks follow the parsed hero slots, as in the inspected native loop.
+Absolute native command-card ordering and cooldown-override persistence remain
+unqualified. The existing
 restore validator runs before profile mutation, retaining strict errors for
 unsupported persisted progress. The payload version is unchanged.
 
@@ -134,11 +135,50 @@ implement `SaveGame` or `LoadGame`.
 The existing restore validator still refuses receiving-map authored ability-list
 mismatches; cross-map changes to those definitions are outside this correction.
 Previously written snapshots containing unsupported transient edits still refuse;
-this correction changes capture, without migrating those old records.
+valid old snapshots with a different ordinary traversal order now reconstruct
+source creation order after the same alias/rank/cooldown validation.
 
-Validation: 13 targeted cache tests and 218 affected synthetic inventory/powerup
+Initial projection validation: 13 targeted cache tests and 218 affected synthetic inventory/powerup
 tests pass in an independent build directory under a private offscreen display
 and null audio sink. The original-install attribute gate was explicitly skipped.
 The affected WebAssembly library build and touched-file formatting checks pass;
 workspace compiler warnings remain errors. These checks do not establish native
 runtime or browser execution parity.
+
+### Remove and re-add order correction
+
+The initial projection retained the live order of surviving ordinary aliases.
+Removing an ordinary alias and adding it again appends it to the live list, so
+the snapshot could preserve transient order even when its aliases and ranks
+matched source. That contradicted reconstructing the ordinary state through the
+same source factory used by fresh creation (`0x518ce3` calls `0x687ca0`). The
+source creation loop at `0x66ffda` instantiates the parsed `abilList`; the cache
+writer above does not encode its live traversal order.
+
+The affected observable consumer is `ObjectHost::learned_ability_buttons`, which
+iterates these entries, then `campaign_command_card::display_only`, which selects
+the first display-only button for each authored `Buttonpos`. Two ordinary aliases
+sharing a slot can therefore change the displayed icon and tooltip candidate.
+This is a traced recreation behavior, not a new native UI observation.
+
+`cached_remove_readd_restores_fresh_source_button_order` gives two synthetic
+ordinary aliases different Art values and the same Buttonpos. Removing and
+re-adding the first changes the live first candidate. Store/save and continuation
+must reconstruct both the source ability sequence and the fresh ordered button
+input, without changing the edited live unit. Both hero and ordinary-unit cases
+use the public natives. No command-card implementation change is needed.
+
+The hero case learns two nonstock skills in reverse source-slot order. Its fresh
+control learns the same ranks in source order. The test then restores both the
+newly captured profile and an older valid PC3UNIT vector carrying the edited
+ordinary and learned traversal sequence. Both must match the fresh control.
+Capture and restore share the same source/slot projection; restore retains all
+existing unsupported/corrupt-data checks before constructing the candidate state.
+This is private-record normalization, not original W3V or world-save migration.
+
+Follow-up validation: all 14 targeted cache tests, including the named order
+regression and existing invalid-record/refusal tests, and all 219 affected
+synthetic inventory/powerup tests pass. The original-install attribute gate stays
+explicitly skipped. The isolated WebAssembly library build and touched-file
+formatting/diff checks pass with compiler warnings denied. No native runtime or
+browser presentation comparison was added.

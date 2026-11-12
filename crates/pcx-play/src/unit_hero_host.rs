@@ -336,8 +336,37 @@ impl UnitAbilities {
         self.levels.remove(index);
         true
     }
-    pub(in super::super) fn is_learnable(&self, ability: [u8; 4]) -> bool {
+    fn is_learnable(&self, ability: [u8; 4]) -> bool {
         self.learnable.iter().any(|skill| skill.alias == ability)
+    }
+    /// Project ranks onto freshly prepared source abilities and hero slots.
+    pub(in super::super) fn cache_levels(
+        &self,
+        ranks: &[([u8; 4], i32)],
+    ) -> Result<Vec<([u8; 4], i32)>, String> {
+        let mut levels = Vec::new();
+        levels
+            .try_reserve_exact(
+                self.levels
+                    .len()
+                    .checked_add(ranks.len())
+                    .ok_or("cached ability count overflow")?,
+            )
+            .map_err(|_| "cached ability allocation failed")?;
+        levels.extend_from_slice(&self.levels);
+        for skill in &self.learnable {
+            if let Some(&(alias, rank)) = ranks.iter().find(|(alias, _)| *alias == skill.alias) {
+                if rank <= 0 {
+                    return Err("cached learned rank is not positive".into());
+                }
+                if let Some((_, level)) = levels.iter_mut().find(|(saved, _)| *saved == alias) {
+                    *level = rank;
+                } else {
+                    levels.push((alias, rank));
+                }
+            }
+        }
+        Ok(levels)
     }
     /// Cooldown overrides or autocast state keyed by `ability`.
     fn has_alias_overrides(&self, ability: [u8; 4]) -> bool {
@@ -397,11 +426,7 @@ impl UnitAbilities {
                 return Err("cached ability is absent from current unit data".into());
             }
         }
-        let mut levels = Vec::new();
-        levels
-            .try_reserve_exact(saved.abilities.len())
-            .map_err(|_| "cached ability allocation failed")?;
-        levels.extend_from_slice(&saved.abilities);
+        let levels = self.cache_levels(&saved.abilities)?;
         let mut candidate = self.clone();
         if let (Some(hero), Some(experience_rules), Some(experience)) =
             (&hero, &rules.experience, saved.experience)
