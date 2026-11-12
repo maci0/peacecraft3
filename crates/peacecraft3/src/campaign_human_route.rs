@@ -1170,7 +1170,9 @@ fn continue_campaign(app: &mut App, mut runtime: CampaignRuntime) {
         let abilities = unit.abilities.as_ref().expect("admitted hero abilities");
         (
             abilities.hero.clone(),
-            abilities.levels().collect::<Vec<_>>(),
+            abilities
+                .levels()
+                .collect::<std::collections::BTreeMap<_, _>>(),
         )
     };
     assert!(
@@ -1255,7 +1257,13 @@ fn continue_campaign(app: &mut App, mut runtime: CampaignRuntime) {
             .unwrap();
         let abilities = unit.abilities.as_ref().expect("restored hero abilities");
         assert_eq!(abilities.hero, progress);
-        assert_eq!(abilities.levels().collect::<Vec<_>>(), levels);
+        // Restore rebuilds source button order; this route checks carried ranks.
+        assert_eq!(
+            abilities
+                .levels()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            levels
+        );
         println!(
             "Human02 actual carryover: identity={identity:?} hero={restored:?} rawcode={:?} vitals={:?} hero_state={:?}",
             unit.definition.rawcode, unit.vitals, abilities.hero

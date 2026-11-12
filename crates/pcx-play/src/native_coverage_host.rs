@@ -347,6 +347,8 @@ impl ObjectHost {
             "GetUnitX",
             "GetUnitY",
             "GroupEnumUnitsInRect",
+            "GroupEnumUnitsInRange",
+            "GroupEnumUnitsInRangeOfLoc",
             "GroupEnumUnitsOfPlayer",
             // unit_range_runtime_host.rs
             "GetEnteringUnit",

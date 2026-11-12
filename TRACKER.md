@@ -7167,3 +7167,71 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   complete autocast. See
   [activation](docs/re-notes/ability-autocast-on.md) and
   [evaluation gaps](docs/re-notes/ability-autocast-tick.md).
+
+- 2026-11-13: Campaign cache capture and valid legacy restore reconstruct
+  ordinary abilities in source creation order, then source hero learn-slot
+  ranks. Transient ordinary additions disappear and removed source abilities
+  return without mutating the live unit. Strict payload/source/rank/cooldown
+  checks remain. Both new public cache regressions pass, including remove/readd
+  with colliding command-card slots and a valid older ordered-vector payload.
+  Campaign carryover assertions compare semantic ranks while the dedicated
+  button regression checks source sequence. Main's independent full gameplay
+  package passes 3,159 tests, zero failed, 143 explicit ignores; all six required
+  new cache/upgrade names execute. Strict native/WASM all-target Clippy, both
+  libraries, formatting and the application test-binary rebuild pass with
+  unchanged source hashes. Full world/VM save-load, permanent edits, foreign
+  authored ability changes and original-client/browser parity remain open.
+  See [cache reconstruction](docs/re-notes/script-saved-games.md).
+
+- 2026-11-13: Structure upgrades derive their debit from `RelativeUpgradeCost`
+  and retain that paid cost for independent `UpgradeRefundRate` cancellation,
+  death and queue previews. Target-price mode does not read unneeded original
+  costs. Missing policy, enabled unqualified damage penalties and negative cost
+  deltas refuse before debit. All three new interrupted-lifecycle tests and the
+  ordered-profile policy test pass in the main package run above. Native/WASM
+  checks/builds and the application fixture-feature build pass after restricting
+  an internal fixture helper to tests and fixing an unnecessary closure borrow.
+  The superseded validation attempt is not acceptance evidence. Negative upgrade
+  credits, enabled damage penalties, transfer/removal, intermediate type/pool
+  transitions and original-client timing remain open. See
+  [upgrade policy](docs/re-notes/player-production-queues.md).
+
+- 2026-11-13: Both group range natives use source-decoded normalized inclusive
+  centre geometry, canonical accepted positions and existing same-VM filter
+  continuations. Location snapshots, null/retired-location no-ops, bounded
+  preflight and callback unwind are covered. Main's independent complete
+  gameplay package passes 3,169 tests, zero failed, 144 explicit ignores;
+  all ten new range/membership names execute, and the selected-image range gate
+  separately passes. Strict native/WASM all-target Clippy, both libraries,
+  formatting and the application rebuild pass with unchanged source hashes.
+  The native-coverage inventory includes the actual two new consumers.
+  Undead03 still refuses earlier `ACsw` automatic acquisition before reaching
+  its historical range call; no horizon improvement is claimed there. Spatial
+  iteration/mutation order, special eligibility and original-client numeric
+  comparison remain open; known Locust candidates explicitly refuse. See
+  [range enumeration](docs/re-notes/slice-group-enum.md).
+
+- 2026-11-13: Native-qualified null membership queries return false in the
+  selected unit-first resolution order while retaining strict malformed,
+  wrong-family and nonnull-unit/destroyed-group boundaries. Real CreateUnit/
+  RemoveUnit coverage verifies canonical membership cleanup and typed tombstone
+  queries without allocation. All three named membership regressions pass in
+  the main package run above. The rebuilt unchanged Undead02 replay now reaches
+  player control and passes 300 seconds of idle script advancement. This is
+  not mission completion or original-client timing parity; nonnull queries on
+  destroyed groups remain unqualified. See
+  [group arena](docs/re-notes/script-group-arena.md) and
+  [chapter receipts](docs/re-notes/chapter-startup-refusals.md).
+
+- 2026-11-13: The source `Anh2` alias now binds the decoded `Anhe` Neutral Heal
+  class for default activation. Native order IDs remain distinct from ordinary
+  Heal; no profile alias or actual cast is fabricated. Independent main checks
+  pass: full gameplay package 3,169 passed, 145 explicit ignores; all 36 autocast
+  tests with both selected-image gates enabled; strict native/WASM all-target
+  Clippy, both libraries, formatting and application rebuild. Local image reads
+  are bounded before allocation, and source hashes remain unchanged. Unchanged
+  Undead05 now publishes 194 units instead of refusing creation, then reaches
+  the existing `ACbl` acquisition refusal at the first deadline. Actual Heal
+  acquisition, caster-owned channel state, effects and original-client tick
+  parity remain open. See
+  [Neutral Heal activation](docs/re-notes/ability-autocast-on.md).

@@ -105,7 +105,15 @@ fn fixture_with_training_configured(
     fixture_with_training_refunds_configured(
         overrides,
         capacity,
-        (refund_rate, Some(refund_rate)),
+        (
+            refund_rate,
+            Some(refund_rate),
+            Some(crate::training_rules::UpgradePolicy {
+                refund_rate,
+                relative_cost: true,
+                damage_penalty: false,
+            }),
+        ),
         admit_numeric,
         orders,
         heroes,
@@ -116,7 +124,11 @@ fn fixture_with_training_configured(
 fn fixture_with_training_refunds_configured(
     overrides: &[([u8; 4], ObjectField)],
     capacity: usize,
-    refund_rates: (f32, Option<f32>),
+    refund_rates: (
+        f32,
+        Option<f32>,
+        Option<crate::training_rules::UpgradePolicy>,
+    ),
     admit_numeric: bool,
     orders: (
         std::sync::Arc<crate::order_registry::Registry>,
@@ -174,7 +186,8 @@ fn fixture_with_training_refunds_configured(
                 3,
                 refund_rates.0,
                 refund_rates.1,
-            );
+            )
+            .with_upgrade_fixture(refund_rates.2);
             training.image_sha256 = resources.image_sha256;
             training.ai_production = Ok(crate::campaign_production_rules::Rules::fixture(
                 resources.image_sha256,
@@ -1544,7 +1557,15 @@ fn ai_production_fixture_with_refund(
     fixture_with_training_refunds_configured(
         overrides,
         4,
-        (0.37, research_rate),
+        (
+            0.37,
+            research_rate,
+            Some(crate::training_rules::UpgradePolicy {
+                refund_rate: 0.37,
+                relative_cost: true,
+                damage_penalty: false,
+            }),
+        ),
         true,
         super::super::super::activity::rules(),
         false,
@@ -2490,4 +2511,191 @@ fn queued_slots_are_incomplete_units_until_they_finish() {
             [(2, 4), (0, 0)]
         ]
     );
+}
+
+struct UpgradeCatalog(Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>);
+impl pcx_sim::world::ObjectCatalog for UpgradeCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.0.resolve(code)?;
+        definition.fields.get_mut(b"T009").unwrap().value = Ok(FieldValue::Cell(
+            if code == *b"b001" { "d001" } else { "" }.into(),
+        ));
+        if code == *b"b001" || code == *b"d001" {
+            definition.fields.get_mut(b"F001").unwrap().value = Ok(FieldValue::Cell("1".into()));
+            for (id, value) in [
+                (b"T003", if code == *b"b001" { "31" } else { "74" }),
+                (b"T004", if code == *b"b001" { "7" } else { "23" }),
+            ] {
+                definition.fields.get_mut(id).unwrap().value = Ok(FieldValue::Cell(value.into()));
+            }
+        }
+        Ok(definition)
+    }
+}
+
+fn upgrade_fixture(
+    policy: Option<crate::training_rules::UpgradePolicy>,
+) -> (Vm, HandleId, HandleId) {
+    fixture_with_training_refunds_configured(
+        &[profile_field(b"T009", "Upgrade", "unitList", "")],
+        4,
+        (0.37, Some(0.61), policy),
+        true,
+        super::super::super::activity::rules(),
+        false,
+        (EVENTS, |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradeCatalog(catalog)));
+            host
+        }),
+    )
+}
+
+#[test]
+fn structure_upgrade_source_cost_mode_and_rate_survive_pause_cancel_and_death_once() {
+    for relative_cost in [false, true] {
+        for death in [false, true] {
+            let policy = crate::training_rules::UpgradePolicy {
+                refund_rate: 0.23,
+                relative_cost,
+                damage_penalty: false,
+            };
+            let (mut vm, actor, producer) = upgrade_fixture(Some(policy));
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            assert!(
+                h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .unwrap()
+            );
+            let (gold, lumber, refund_gold, refund_lumber) = if relative_cost {
+                (74, 23, 17, 5)
+            } else {
+                (43, 16, 9, 3)
+            };
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 100 - gold);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 100 - lumber);
+            let detail = h.unit_training_details(producer).unwrap();
+            assert_eq!((detail[0].gold, detail[0].lumber), (gold, lumber));
+            assert_eq!(
+                (detail[0].refund_gold, detail[0].refund_lumber),
+                (refund_gold, refund_lumber)
+            );
+            step(&mut vm, 2.);
+            let life_state = vm.global("UNIT_STATE_LIFE");
+            let h = &mut vm.host().inner;
+            assert_eq!(
+                h.executed_unit(producer).unwrap().definition.rawcode,
+                *b"b001"
+            );
+            let life = h.executed_unit(producer).unwrap().vitals.unwrap().life;
+            h.native(
+                "SetUnitState",
+                &[Value::Handle(producer), life_state, Value::Real(life * 0.5)],
+            )
+            .unwrap();
+            h.native("PauseUnit", &[Value::Handle(producer), Value::Bool(true)])
+                .unwrap();
+            if death {
+                h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+                h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+            } else {
+                assert!(h.cancel_unit_training(producer, 0).unwrap());
+                assert!(!h.cancel_unit_training(producer, 0).unwrap());
+            }
+            assert_eq!(
+                bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+                100 - gold + refund_gold
+            );
+            assert_eq!(
+                bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+                100 - lumber + refund_lumber
+            );
+            assert!(h.unit_training_queue(producer).unwrap().is_empty());
+            step(&mut vm, 20.);
+            assert_eq!(
+                vm.host()
+                    .inner
+                    .executed_unit(producer)
+                    .unwrap()
+                    .definition
+                    .rawcode,
+                *b"b001"
+            );
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_missing_policy_and_unqualified_damage_refuse_before_debit() {
+    for policy in [
+        None,
+        Some(crate::training_rules::UpgradePolicy {
+            refund_rate: 0.23,
+            relative_cost: false,
+            damage_penalty: true,
+        }),
+    ] {
+        let (mut vm, actor, producer) = upgrade_fixture(policy);
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        fund(&mut vm, owner, 100, 100);
+        let h = &mut vm.host().inner;
+        let error = h
+            .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("upgrade"), "{error}");
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 100);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 100);
+        assert!(h.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(
+            h.executed_unit(producer).unwrap().definition.rawcode,
+            *b"b001"
+        );
+    }
+}
+
+#[test]
+fn structure_upgrade_checks_the_derived_delta_for_funds_and_completes_after_source_time() {
+    let policy = crate::training_rules::UpgradePolicy {
+        refund_rate: 0.23,
+        relative_cost: false,
+        damage_penalty: false,
+    };
+    let (mut vm, actor, producer) = upgrade_fixture(Some(policy));
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 42, 100);
+    let h = &mut vm.host().inner;
+    assert!(
+        !h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 42);
+    fund(&mut vm, owner, 43, 16);
+    assert!(
+        vm.host()
+            .inner
+            .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    step(&mut vm, 8.);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(producer)
+            .unwrap()
+            .definition
+            .rawcode,
+        *b"b001"
+    );
+    step(&mut vm, 10.);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        h.executed_unit(producer).unwrap().definition.rawcode,
+        *b"d001"
+    );
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 0);
 }

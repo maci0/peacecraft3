@@ -277,7 +277,18 @@ fn ambiguous_or_malformed_source_refuses() {
 #[test]
 #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
 fn selected_original_autocast_classes_bind() {
-    let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE")).unwrap();
+    use std::io::Read;
+    const IMAGE_BUDGET: usize = 32 << 20;
+    let mut image = Vec::new();
+    std::fs::File::open(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE"))
+        .unwrap()
+        .take(IMAGE_BUDGET as u64 + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    assert!(
+        image.len() <= IMAGE_BUDGET,
+        "selected image exceeds test budget"
+    );
     let rules = Rules::read(
         &image,
         AssetIdentity {

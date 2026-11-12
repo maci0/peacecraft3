@@ -532,7 +532,18 @@ fn default_activation_delay_starts_at_creation_in_an_advanced_session() {
 #[test]
 #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
 fn selected_original_neutral_heal_activation_reaches_the_default_evaluation() {
-    let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE")).unwrap();
+    use std::io::Read;
+    const IMAGE_BUDGET: usize = 32 << 20;
+    let mut image = Vec::new();
+    std::fs::File::open(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE"))
+        .unwrap()
+        .take(IMAGE_BUDGET as u64 + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    assert!(
+        image.len() <= IMAGE_BUDGET,
+        "selected image exceeds test budget"
+    );
     let rules = crate::autocast_rules::Rules::read(
         &image,
         crate::scripts::AssetIdentity {

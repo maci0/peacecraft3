@@ -200,3 +200,17 @@ alias, creates it at nonzero game time through `CreateUnit`, and checks the exac
 boundary without changing unit state on refusal. This is a native-input/caller regression, not
 an original-client or unchanged-mission runtime parity result. Ghidra import timed out before
 returning a function dossier; the new native observations here are direct PE/disassembly evidence.
+
+Independent main validation passes the full gameplay package (3,169 passed,
+zero failed, 145 explicit ignores) and all 36 autocast tests with both explicit
+selected-image gates enabled. Strict native/WASM all-target Clippy, both
+libraries, formatting and the application test-binary rebuild pass with source
+hashes unchanged. The local image gates bound file reads before allocation.
+Receipts are retained in `/tmp/pc3-neutral-heal-main-validation/`.
+
+The unchanged Undead05 replay now publishes 194 units; it no longer refuses
+`CreateUnit` for `Anh2`. It then refuses automatic `ACbl` acquisition at
+`0.019999999552965164`, so it does not complete the opening or idle horizon.
+The exact executable hash and failed command are retained under
+`/tmp/pc3-neutral-heal-horizon-main/`. This is recreation frontier evidence,
+not an observed `Anhe` cast or original-client parity.
