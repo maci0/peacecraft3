@@ -392,19 +392,26 @@ complete campaign progression.
 
 `StoreUnit` sorted the saved ability ranks by alias, so a live hero carrying
 `AHer`, `AHhb`, `AInv` (creation/learn sequence) was stored and restored as
-`AInv`, `AHer`, `AHhb`. The score-screen continuation requires the restored
-unit to carry the stored sequence, so Human01 `continue_campaign` refused. The
-payload now preserves the live order through store, encode, decode and
-restore; validation rejects a duplicated alias in any position instead of
-requiring ascending order. Previously written sorted payloads still decode.
-Native restore order is unqualified; this is a recreation-owned round-trip
-contract, and command-card presentation reads the same order.
+`AInv`, `AHer`, `AHhb`. The route test's `continue_campaign` compared ordered
+vectors, so it refused. Retaining live order fixed that recreation test contract;
+it did not establish the native persistence contract. Validation still rejects
+a duplicated alias in any position, and previously written sorted payloads decode.
 
-Follow-on: stored cooldowns are projected into the same live ability order at
-capture (`unit_cache_host.rs`), and `CachedUnit::validate` rejects duplicated
-`(alias, rank)` pairs instead of requiring sorted cooldown order. Duration
-overrides remain sorted in `ability_cooldown.rs`; only the cached projection
-follows live order. Native cooldown restore order remains unqualified.
+The 2026-11-13 native writer/restore trace instead establishes fresh source unit
+creation followed by fixed hero learn-slot restoration. Capture now reconstructs
+ordinary creation order and then qualified ranks in source hero-slot order.
+Removing and re-adding an ordinary alias must not persist its transient new
+position. This is observable in the recreation: `learned_ability_buttons` feeds
+the command card's `display_only` consumer, which takes the first button at each
+authored slot. The regression compares that ordered presentation input with fresh
+construction. Absolute native card ordering and pixel parity remain unmeasured;
+the qualified relation is fresh construction versus cache reconstruction, not
+an assertion that an internal vector is the original native data structure.
+See [the source trace and regression](script-saved-games.md#campaign-unit-ability-projection-2026-11-13).
+
+Stored cooldowns follow the reconstructed ability sequence. `CachedUnit::validate`
+rejects duplicated `(alias, rank)` pairs; duration overrides remain sorted in
+`ability_cooldown.rs`. Native cooldown-override persistence remains unqualified.
 
 This note records the contract only; the isolated transition fixture and its
 `.scratch` receipts remain with the originating checkout and were not re-run

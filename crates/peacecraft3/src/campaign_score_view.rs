@@ -755,7 +755,7 @@ mod selected_tests {
     struct Carryover {
         rawcode: [u8; 4],
         hero: Option<pcx_play::playercolor_host::HeroProgress>,
-        levels: Vec<([u8; 4], i32)>,
+        levels: std::collections::BTreeMap<[u8; 4], i32>,
         permanent_strength: i32,
         items: Vec<(usize, [u8; 4], i32)>,
     }
