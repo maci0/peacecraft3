@@ -7,6 +7,9 @@ use crate::script_random::{profile::arithmetic_shapes, real};
 use crate::scripts::AssetIdentity;
 use pcx_script::{RealOps, Value, ast::BinOp};
 
+#[path = "timer_query_rules.rs"]
+pub mod timer_query;
+
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub origin: AssetIdentity,
@@ -52,6 +55,7 @@ pub struct NumericPolicy {
     equality_threshold: f32,
     literal_bytes: usize,
     math: Option<crate::script_math::ScriptMath>,
+    timer_queries: Option<timer_query::Rules>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -199,6 +203,7 @@ impl NumericPolicy {
             equality_threshold,
             literal_bytes,
             math: None,
+            timer_queries: None,
         })
     }
 
@@ -239,6 +244,19 @@ impl NumericPolicy {
     }
     pub fn math(&self) -> Option<&crate::script_math::ScriptMath> {
         self.math.as_ref()
+    }
+    /// Attach query arithmetic without changing the caller's delivery clock.
+    pub fn with_timer_queries(
+        mut self,
+        image: &[u8],
+        binding: &timer_query::Binding,
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        self.timer_queries = Some(timer_query::Rules::read(image, binding, &self, budget)?);
+        Ok(self)
+    }
+    pub(crate) fn timer_queries(&self) -> Option<&timer_query::Rules> {
+        self.timer_queries.as_ref()
     }
     pub(crate) fn equality_threshold(&self) -> f32 {
         self.equality_threshold

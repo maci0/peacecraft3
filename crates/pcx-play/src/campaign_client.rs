@@ -233,6 +233,19 @@ pub fn read(
             cosine: window(0x9a0fe0, 289, true)?,
         }),
     };
+    let timer_queries = script_numeric::timer_query::Binding {
+        image_sha256,
+        segment_initializer: window(0x40d210, 16, true)?,
+        zero_initializer: window(0x401300, 16, true)?,
+        constructor: window(0x4fe380, 0xd1, true)?,
+        start: window(0x7fb820, 0x118, true)?,
+        schedule: window(0x7fb940, 0x5c, true)?,
+        remainder: window(0x9a1a90, 0x142, true)?,
+        remaining: window(0x7fc0b0, 0x104, true)?,
+        full_timeout: window(0x7fbad0, 0xbe, true)?,
+        active_elapsed: window(0x7fbb90, 0x34, true)?,
+        inactive_elapsed: window(0x4fe470, 0x6f, true)?,
+    };
     let numeric = script_numeric::NumericPolicy::read(
         image,
         script_numeric::Binding {
@@ -255,6 +268,7 @@ pub fn read(
         4096,
     )
     .and_then(|numeric| numeric.with_math(image, &math, BUDGET))
+    .and_then(|numeric| numeric.with_timer_queries(image, &timer_queries, BUDGET))
     .map_err(|e| e.to_string())?;
     let destructable_restore = crate::playercolor_host::RestoreLifePolicy::read(
         image,

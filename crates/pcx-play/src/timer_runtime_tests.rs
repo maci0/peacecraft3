@@ -29,7 +29,7 @@ fn checked(common: &str, map: &str) -> ObjectHost {
             "synthetic:timer-map",
             &["ConvertPlayerColor"],
             Limits {
-                max_handles: 16,
+                max_handles: 32,
                 admission_steps: 100,
                 expression_depth: 16,
                 expression_work: 100,
@@ -445,4 +445,309 @@ fn real_bits(value: &Value) -> u32 {
         Value::Real(real) => real.to_bits(),
         other => panic!("timer query returned {other}"),
     }
+}
+
+#[test]
+fn native_query_policy_preserves_pause_cache_restart_and_refusal_atomicity() {
+    let common = format!(
+        "{COMMON}native PauseTimer takes timer t returns nothing\nnative ResumeTimer takes timer t returns nothing\n"
+    );
+    let mut h = checked(&common, "")
+        .with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125))
+        .with_timer_runtime(1.0)
+        .unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    start(&mut h, &timer, 16.0, false);
+    assert!(h.next_timer_expiry(1.5, &mut 0).unwrap().is_none());
+    h.native("PauseTimer", std::slice::from_ref(&timer))
+        .unwrap();
+    assert_eq!(
+        query(&mut h, "TimerGetRemaining", &timer),
+        Value::Real(15.5)
+    );
+    assert!(h.next_timer_expiry(2.0, &mut 0).unwrap().is_none());
+    h.native("ResumeTimer", std::slice::from_ref(&timer))
+        .unwrap();
+    assert_eq!(query(&mut h, "TimerGetElapsed", &timer), Value::Real(0.0));
+    assert_eq!(query(&mut h, "TimerGetTimeout", &timer), Value::Real(16.0));
+    start(&mut h, &timer, 0.25, false);
+    let before = ["TimerGetElapsed", "TimerGetRemaining", "TimerGetTimeout"]
+        .map(|name| query(&mut h, name, &timer));
+    let handles = h.inner().handles();
+    assert!(
+        h.native(
+            "TimerStart",
+            &[
+                timer.clone(),
+                Value::Real(8.0 * 65536.0),
+                Value::Bool(false),
+                Value::Null
+            ]
+        )
+        .is_err()
+    );
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.timer_game_time(), Some(2.0));
+    assert_eq!(
+        ["TimerGetElapsed", "TimerGetRemaining", "TimerGetTimeout"]
+            .map(|name| query(&mut h, name, &timer)),
+        before
+    );
+    let expiry = h.next_timer_expiry(3.0, &mut 1).unwrap().unwrap();
+    assert_eq!(
+        query(&mut h, "TimerGetElapsed", &timer),
+        Value::Real(-15.25)
+    );
+    assert_eq!(
+        query(&mut h, "TimerGetRemaining", &timer),
+        Value::Real(15.5)
+    );
+    h.finish_timer_expiry(expiry).unwrap();
+    assert_eq!(
+        query(&mut h, "TimerGetElapsed", &timer),
+        Value::Real(-15.25)
+    );
+}
+
+#[test]
+#[ignore = "requires explicit local selected image and replicated native query witness"]
+fn selected_native_timer_query_bits_match_public_lifecycle() {
+    use crate::{
+        camera_margins::SourceWindow,
+        neutral_player::{RuleInputBudget, sha256},
+        neutral_rule_input::Pe,
+        script_numeric::{Binding, NumericPolicy, timer_query},
+        scripts::AssetIdentity,
+    };
+    use pcx_script::RealOps;
+    let image =
+        std::fs::read(std::env::var("PEACECRAFT3_QUERY_IMAGE").expect("explicit local image"))
+            .unwrap();
+    let witness: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let image_sha256 = sha256(&image);
+    assert_eq!(image_sha256, crate::menu_lighting::REVIEWED_IMAGE);
+    assert_eq!(
+        witness["source_sha256"],
+        image_sha256
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(witness["identical_replicates"], true);
+    let budget = RuleInputBudget {
+        image_bytes: 32 << 20,
+        profile_bytes: 64 << 10,
+        sections: 96,
+    };
+    let pe = Pe::parse(&image, budget).unwrap();
+    let window = |va, len, code| {
+        let bytes = pe.read_from(va, code).unwrap().get(..len as usize).unwrap();
+        SourceWindow {
+            va,
+            len,
+            digest: sha256(bytes),
+        }
+    };
+    let numeric = NumericPolicy::read(
+        &image,
+        Binding {
+            origin: AssetIdentity {
+                edition: "Legacy".into(),
+                version: "1.29.2.9231".into(),
+                source: "explicit selected timer query witness".into(),
+            },
+            image_sha256,
+            literal: window(0x8df660, 238, true),
+            division: window(0x9a02d0, 57, true),
+            reciprocal: window(0x9a1d00, 103, true),
+            reciprocal_table: window(0xed6cf0, 4100, false),
+            equality: window(0x8d8d10, 53, true),
+            equality_constant: window(0x10db054, 4, false),
+            inequality: window(0x8d7e32, 162, true),
+            math_sub: window(0x9a00b0, 264, true),
+            math_add: window(0x9a01c0, 262, true),
+            math_mul: crate::campaign_client::numeric_multiplication(&image).unwrap(),
+            math_lzcnt: window(0x9a0330, 29, true),
+            math_i32_to_real: window(0x9a1620, 92, true),
+        },
+        budget,
+        4096,
+    )
+    .unwrap()
+    .with_timer_queries(
+        &image,
+        &timer_query::Binding {
+            image_sha256,
+            segment_initializer: window(0x40d210, 16, true),
+            zero_initializer: window(0x401300, 16, true),
+            constructor: window(0x4fe380, 0xd1, true),
+            start: window(0x7fb820, 0x118, true),
+            schedule: window(0x7fb940, 0x5c, true),
+            remainder: window(0x9a1a90, 0x142, true),
+            remaining: window(0x7fc0b0, 0x104, true),
+            full_timeout: window(0x7fbad0, 0xbe, true),
+            active_elapsed: window(0x7fbb90, 0x34, true),
+            inactive_elapsed: window(0x4fe470, 0x6f, true),
+        },
+        budget,
+    )
+    .unwrap();
+    let durations = ["2000.0", "240.47", "121.03", "0.47"].map(|s| numeric.literal(s).unwrap());
+    let observations = [
+        "0.02", "0.47", "1.03", "1.25", "2.0317", "119.97", "120.0", "120.02", "120.0317",
+        "121.03", "121.05", "122.06", "122.1",
+    ]
+    .map(|s| numeric.literal(s).unwrap());
+    let short = numeric.literal("0.0317").unwrap();
+    let common = format!(
+        "{COMMON}native PauseTimer takes timer t returns nothing\nnative ResumeTimer takes timer t returns nothing\n"
+    );
+    let mut h = checked(&common, "")
+        .with_script_numeric(numeric)
+        .with_timer_runtime(0.0)
+        .unwrap();
+    let kickoff = h.native("CreateTimer", &[]).unwrap();
+    start(&mut h, &kickoff, 1.0, false);
+    let kickoff_expiry = h.next_timer_expiry(1.0, &mut 1).unwrap().unwrap();
+    let timers = durations.map(|duration| {
+        let t = h.native("CreateTimer", &[]).unwrap();
+        start(&mut h, &t, duration, false);
+        t
+    });
+    let observers = observations.map(|duration| {
+        let t = h.native("CreateTimer", &[]).unwrap();
+        start(&mut h, &t, duration, false);
+        t
+    });
+    let mut checked_values = 0;
+    let mut snapshot = |h: &mut ObjectHost, point: &str| {
+        for (i, timer) in timers.iter().enumerate() {
+            let row = witness["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["point"] == point && r["timer"] == i)
+                .expect("complete witnessed snapshot");
+            for (name, key) in [
+                ("TimerGetElapsed", "elapsed_bits"),
+                ("TimerGetRemaining", "remaining_bits"),
+                ("TimerGetTimeout", "timeout_bits"),
+            ] {
+                let value = real_bits(&query(h, name, timer));
+                assert_eq!(
+                    u64::from(value),
+                    row[key].as_u64().unwrap(),
+                    "{point} timer{i} {name}"
+                );
+                checked_values += 1;
+            }
+        }
+    };
+    snapshot(&mut h, "arm");
+    h.finish_timer_expiry(kickoff_expiry).unwrap();
+    let mut observed = 0;
+    while let Some(expiry) = h.next_timer_expiry(124.0, &mut 100).unwrap() {
+        let expired = h.native("GetExpiredTimer", &[]).unwrap();
+        if let Some(i) = observers.iter().position(|timer| *timer == expired) {
+            assert_eq!(i, observed);
+            snapshot(&mut h, &format!("before_{i}"));
+            match i {
+                0 => {
+                    for j in [0, 1, 3] {
+                        h.native("PauseTimer", std::slice::from_ref(&timers[j]))
+                            .unwrap();
+                    }
+                    snapshot(&mut h, "after_pause");
+                }
+                1 => {
+                    for j in [0, 1, 3] {
+                        h.native("ResumeTimer", std::slice::from_ref(&timers[j]))
+                            .unwrap();
+                    }
+                    snapshot(&mut h, "after_resume");
+                }
+                2 => {
+                    start(&mut h, &timers[0], durations[0], false);
+                    start(&mut h, &timers[1], durations[2], false);
+                    snapshot(&mut h, "after_restart");
+                }
+                3 => {
+                    start(&mut h, &timers[3], short, false);
+                    snapshot(&mut h, "after_short_restart");
+                }
+                _ => {}
+            }
+            observed += 1;
+        }
+        h.finish_timer_expiry(expiry).unwrap();
+    }
+    assert_eq!(observed, 13);
+    assert_eq!(checked_values, 216);
+    assert_eq!(
+        witness["rows"].as_array().unwrap().len() * 3,
+        checked_values
+    );
+    assert_eq!(h.timer_game_time(), Some(124.0));
+}
+
+#[test]
+fn timer_query_policy_changes_refuse_without_rearming_existing_runs() {
+    let common = format!(
+        "{COMMON}native PauseTimer takes timer t returns nothing\nnative ResumeTimer takes timer t returns nothing\n"
+    );
+    let mut h = checked(&common, "")
+        .with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125))
+        .with_timer_runtime(1.0)
+        .unwrap();
+    let t = h.native("CreateTimer", &[]).unwrap();
+    start(&mut h, &t, 1.0, false);
+    let deadline = h.next_timer_deadline();
+    h = h.with_script_numeric(crate::script_numeric::timer_query::tests::policy(16, 0.125));
+    for name in [
+        "TimerGetElapsed",
+        "TimerGetRemaining",
+        "TimerGetTimeout",
+        "PauseTimer",
+    ] {
+        assert!(h.native(name, std::slice::from_ref(&t)).is_err());
+    }
+    assert!(
+        h.native(
+            "TimerStart",
+            &[t.clone(), Value::Real(2.0), Value::Bool(false), Value::Null]
+        )
+        .is_err()
+    );
+    assert_eq!(h.next_timer_deadline(), deadline);
+    assert_eq!(h.timer_game_time(), Some(1.0));
+    assert!(h.next_timer_expiry(2.0, &mut 1).is_err());
+    assert_eq!(h.timer_game_time(), Some(1.0));
+    h = h.with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125));
+    assert_eq!(query(&mut h, "TimerGetRemaining", &t), Value::Real(1.0));
+    assert_eq!(h.next_timer_deadline(), Some(2.0));
+    let mut legacy = host();
+    let t = legacy.native("CreateTimer", &[]).unwrap();
+    start(&mut legacy, &t, 1.0, false);
+    legacy =
+        legacy.with_script_numeric(crate::script_numeric::timer_query::tests::policy(8, 0.125));
+    assert!(
+        legacy
+            .native("TimerGetElapsed", std::slice::from_ref(&t))
+            .is_err()
+    );
+    assert!(
+        legacy
+            .native(
+                "TimerStart",
+                &[t, Value::Real(2.0), Value::Bool(false), Value::Null]
+            )
+            .is_err()
+    );
+    assert_eq!(legacy.next_timer_deadline(), Some(21.0));
 }
