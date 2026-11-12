@@ -283,6 +283,7 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         self.leaderboards.as_ref()?;
         let (_, parameters, result) = NATIVES.iter().find(|(n, ..)| *n == name)?;
@@ -329,12 +330,17 @@ impl ObjectHost {
                     self.inner
                         .error(name, Failure::Budget("leaderboard revision"))
                 })?;
-            let value = self.execute_leaderboard(name, args)?;
+            let value = self.execute_leaderboard(name, args, strings)?;
             self.leaderboards.as_mut().expect("admitted").revision = revision;
             Ok(value)
         })())
     }
-    fn execute_leaderboard(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn execute_leaderboard(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(name, reason);
         if name == CREATE {
             let state = self.leaderboards.as_mut().expect("admitted");
@@ -468,6 +474,8 @@ impl ObjectHost {
                 ],
             ) => {
                 self.player_settings(*player).map_err(|e| fail(e.failure))?;
+                let label = pcx_script::text::native_map_string(label, strings)
+                    .map_err(|why| fail(Failure::ScriptString(why)))?;
                 if board.items.iter().any(|item| item.player == *player) {
                     return Err(fail(Failure::LeaderboardState(
                         "duplicate player row requires removal",
@@ -476,7 +484,7 @@ impl ObjectHost {
                 if state.items >= state.budget.max_items {
                     return Err(fail(Failure::Budget("leaderboard items")));
                 }
-                let (label, total) = self.leaderboard_text(name, label, 0)?;
+                let (label, total) = self.leaderboard_text(name, &label, 0)?;
                 let state = self.leaderboards.as_mut().expect("admitted");
                 state.boards[index]
                     .items
@@ -496,7 +504,9 @@ impl ObjectHost {
             }
             ("LeaderboardSetLabel", [_, Value::Str(label)]) => {
                 let old = board.label.as_ref().map_or(0, String::len);
-                let (label, total) = self.leaderboard_text(name, label, old)?;
+                let label = pcx_script::text::native_map_string(label, strings)
+                    .map_err(|why| fail(Failure::ScriptString(why)))?;
+                let (label, total) = self.leaderboard_text(name, &label, old)?;
                 let state = self.leaderboards.as_mut().expect("admitted");
                 state.boards[index].label = Some(label);
                 state.text_bytes = total;
@@ -510,12 +520,14 @@ impl ObjectHost {
                     *value;
             }
             ("LeaderboardSetItemLabel", [_, Value::Int(row), Value::Str(label)]) => {
+                let label = pcx_script::text::native_map_string(label, strings)
+                    .map_err(|why| fail(Failure::ScriptString(why)))?;
                 let row = usize::try_from(*row)
                     .ok()
                     .filter(|&r| r < board.items.len())
                     .ok_or_else(|| fail(Failure::LeaderboardState("row index out of range")))?;
                 let (label, total) =
-                    self.leaderboard_text(name, label, board.items[row].label.len())?;
+                    self.leaderboard_text(name, &label, board.items[row].label.len())?;
                 let state = self.leaderboards.as_mut().expect("admitted");
                 state.boards[index].items[row].label = label;
                 state.text_bytes = total;

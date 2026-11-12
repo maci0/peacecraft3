@@ -1263,3 +1263,55 @@ fn discovery_refuses_missing_ambiguous_changed_and_over_budget_inputs() {
         .is_err()
     );
 }
+
+pub(crate) fn native_string_world_fixture(
+    wts: Option<&[u8]>,
+) -> crate::map_startup_host::NeutralStack {
+    use crate::playercolor_host::{EnumHost, Limits, MapConfigBudget, ObjectHost};
+    let common = "type agent extends handle
+type timer extends agent
+type placement extends handle
+native CreateTimer takes nothing returns timer
+native DestroyTimer takes timer t returns nothing
+native GetPlayerNeutralPassive takes nothing returns integer
+native StringLength takes string s returns integer
+native SetMapName takes string s returns nothing
+native SetMapDescription takes string s returns nothing
+native SetPlayers takes integer n returns nothing
+native SetTeams takes integer n returns nothing
+native GetPlayers takes nothing returns integer
+native GetTeams takes nothing returns integer
+native SetGamePlacement takes placement p returns nothing
+constant native GetGamePlacement takes nothing returns placement
+native DefineStartLocation takes integer n, real x, real y returns nothing
+constant native GetStartLocationX takes integer n returns real
+constant native GetStartLocationY takes integer n returns real
+";
+    let map = "function length takes nothing returns integer\nreturn StringLength(\"TRIGSTR_7\")\nendfunction\n";
+    let context = context_with_wts(257, common, map, "native-string-context", wts);
+    let enums = EnumHost::checked_selected(
+        context.scripts.shared_program(),
+        "native-string-context",
+        &[],
+        Limits {
+            max_handles: 8,
+            admission_steps: 100,
+            expression_depth: 16,
+            expression_work: 100,
+        },
+    )
+    .unwrap();
+    let object = ObjectHost::checked(enums)
+        .unwrap()
+        .with_map_config(MapConfigBudget {
+            text_bytes: 64,
+            start_locations: 0,
+        })
+        .unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), object).unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();
+    SelectedMapNeutralHost::try_new(context, rules(), world).unwrap()
+}

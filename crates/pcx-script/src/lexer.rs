@@ -275,6 +275,25 @@ impl Esc {
     }
 }
 
+fn decode_literal_escapes(source: &str) -> Result<String, String> {
+    let mut out = String::new();
+    let mut chars = source.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\0' {
+            return Err("NUL not allowed in string literal".into());
+        }
+        if ch == '\\' {
+            let next = chars.next().ok_or("unterminated string escape")?;
+            let escaped = Esc::from_char(next)
+                .ok_or_else(|| format!("invalid escape character sequence `\\{next}`"))?;
+            out.push(escaped.decoded());
+        } else {
+            out.push(ch);
+        }
+    }
+    Ok(out)
+}
+
 /// One piece of a string literal, kept structurally so nothing is lost.
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub enum StrPart {
@@ -289,9 +308,8 @@ pub enum StrPart {
     /// the printer. An unpaired `^^` is ordinary text and lands in
     /// [`StrPart::Text`] instead.
     ///
-    /// What the engine substitutes for a code tag is deliberately **not**
-    /// decided here; that is a VM-stage question and guessing would be
-    /// exactly the "plausible but wrong" failure this crate exists to avoid.
+    /// Markers and payload remain authored data during evaluation. Formatting
+    /// belongs to a separately qualified UI consumer, not the lexer or VM.
     CodeTag { text: String },
 }
 
@@ -314,6 +332,22 @@ pub struct StrLit {
 }
 
 impl StrLit {
+    /// Decode escapes while retaining every authored tag marker and payload.
+    pub fn literal_text(&self) -> Result<String, String> {
+        let mut text = String::new();
+        for part in &self.parts {
+            match part {
+                StrPart::CodeTag { text: payload } => {
+                    text.push_str("^^");
+                    text.push_str(&decode_literal_escapes(payload)?);
+                    text.push_str("^^");
+                }
+                other => other.decoded(&mut text),
+            }
+        }
+        Ok(text)
+    }
+
     /// The decoded characters, with escapes resolved and code tags dropped.
     /// Control codes inside `StrPart::Text` are left alone: they are
     /// characters the engine interprets, not text we should normalize.
@@ -1032,6 +1066,8 @@ impl<'a> Lexer<'a> {
                         self.push_text(&mut parts, run_start, self.i);
                         self.i += 2;
                         let payload = self.src[self.i..close].to_string();
+                        decode_literal_escapes(&payload)
+                            .map_err(|why| self.err(Span::new(start, close), why))?;
                         self.i = close + 2;
                         parts.push(StrPart::CodeTag { text: payload });
                         run_start = self.i;

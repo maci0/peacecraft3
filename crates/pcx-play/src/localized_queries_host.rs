@@ -43,6 +43,7 @@ impl ObjectHost {
         &self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, String>> {
         if !matches!(name, STRING | HOTKEY) {
             return None;
@@ -51,8 +52,16 @@ impl ObjectHost {
         self.inner.program.natives().get(name)?;
         Some(match args {
             [Value::Str(key)] => {
+                let key = key
+                    .split('\0')
+                    .next()
+                    .expect("C string has an initial segment");
                 if name == STRING {
-                    bank.localized_string(key)
+                    if key.is_empty() {
+                        return Some(Ok(Value::Null));
+                    }
+                    pcx_script::text::native_map_string(key, strings)
+                        .and_then(|key| bank.localized_string_after_map_lookup(&key))
                         .map(|v| v.map_or(Value::Null, Value::Str))
                 } else {
                     bank.localized_hotkey(key).map(Value::Int)
@@ -97,7 +106,7 @@ mod tests {
                 },
                 Some(ScriptAsset {
                     label: "fixture:WTS",
-                    bytes: b"STRING 4\r\n{\r\nMap authored |cffffff00text|r\r\n}\r\n",
+                    bytes: b"STRING 4\r\n{\r\nMap authored |cffffff00text|r\r\n}\r\nSTRING 5\r\n{\r\ngameover_restart\r\n}\r\nSTRING 6\r\n{\r\nTRIGSTR_4\r\n}\r\n",
                 }),
             )
             .unwrap(),
@@ -140,13 +149,10 @@ mod tests {
             vm.call("dynamic", &[Value::Str("MISSING".into())]).unwrap(),
             Value::Str("MISSING".into())
         );
-        let error = vm
-            .call("dynamic", &[Value::Str("TRIGSTR_4".into())])
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("native dynamic TRIGSTR") && error.contains("fixture:StringList"),
-            "{error}"
+        assert_eq!(
+            vm.call("dynamic", &[Value::Str("TRIGSTR_4".into())])
+                .unwrap(),
+            Value::Str("Map authored |cffffff00text|r".into())
         );
     }
     #[test]
@@ -246,5 +252,25 @@ mod tests {
         let s = scripts("", "// fixture");
         let mut h = host(&s).with_localized_queries(bank()).unwrap();
         assert!(h.native(STRING, &[Value::Str("x".into())]).is_err());
+    }
+    #[test]
+    fn native_string_localization_keeps_hotkey_raw_and_dictionary_lookup_separate() {
+        let scripts = scripts(
+            QUERIES,
+            "function raw takes nothing returns integer\nreturn GetLocalizedHotkey(\"TRIGSTR_5\")\nendfunction\nfunction nested takes nothing returns string\nreturn GetLocalizedString(\"TRIGSTR_6\")\nendfunction\n",
+        );
+        let mut owned = std::sync::Arc::clone(&scripts)
+            .owned_vm(host(&scripts).with_localized_queries(bank()).unwrap());
+        let mut borrowed = scripts.vm(host(&scripts).with_localized_queries(bank()).unwrap());
+        assert_eq!(owned.call("raw", &[]).unwrap(), Value::Int(17));
+        assert_eq!(borrowed.call("raw", &[]).unwrap(), Value::Int(17));
+        assert_eq!(
+            owned.call("nested", &[]).unwrap(),
+            Value::Str("TRIGSTR_4".into())
+        );
+        assert_eq!(
+            borrowed.call("nested", &[]).unwrap(),
+            Value::Str("TRIGSTR_4".into())
+        );
     }
 }

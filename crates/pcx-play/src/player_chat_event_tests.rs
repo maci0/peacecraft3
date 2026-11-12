@@ -205,3 +205,48 @@ fn chat_admission_requires_the_declaration_and_admits_once() {
     let h = h.with_player_chat_events(1).unwrap();
     assert!(h.with_player_chat_events(1).is_err());
 }
+
+#[test]
+fn native_string_chat_filter_reads_wts_after_identity_and_retains_once() {
+    use std::cell::Cell;
+    let (_, h) = host(&common(), EMPTY_MAP);
+    let mut h = h.with_player_chat_events(2).unwrap();
+    let trigger = h.native("CreateTrigger", &[]).unwrap();
+    let player = h.native("Player", &[Value::Int(0)]).unwrap();
+    let calls = Cell::new(0);
+    let source = |_| {
+        calls.set(calls.get() + 1);
+        Ok(Some("TRIGSTR_23 ^^x^^".into()))
+    };
+    assert!(
+        h.native_with_strings(
+            "TriggerRegisterPlayerChatEvent",
+            &[
+                Value::Null,
+                player.clone(),
+                Value::Str("TRIGSTR_7".into()),
+                Value::Bool(true)
+            ],
+            &source
+        )
+        .is_err()
+    );
+    assert_eq!(calls.get(), 0);
+    let event = h
+        .native_with_strings(
+            "TriggerRegisterPlayerChatEvent",
+            &[
+                trigger,
+                player,
+                Value::Str("TRIGSTR_7".into()),
+                Value::Bool(true),
+            ],
+            &source,
+        )
+        .unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        h.player_chat_registration(id(&event)).unwrap().message,
+        "TRIGSTR_23 ^^x^^"
+    );
+}

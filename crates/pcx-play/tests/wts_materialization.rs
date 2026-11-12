@@ -31,11 +31,11 @@ fn asset<'a>(label: &'a str, bytes: &'a [u8]) -> ScriptAsset<'a> {
 fn map(wts: Option<&[u8]>) -> Result<MapScripts, String> {
     MapScripts::compile(
         identity(),
-        asset("common.fixture", b"// supplied prelude\n"),
+        asset("common.fixture", b"native StringLength takes string text returns integer\n"),
         asset("bj.fixture", b"// supplied prelude\n"),
         asset(
             "map.fixture",
-            b"function Fetch takes nothing returns string\nreturn \"TRIGSTR_7\"\nendfunction\n",
+            b"function Fetch takes nothing returns string\nreturn \"TRIGSTR_7\"\nendfunction\nfunction Length takes nothing returns integer\nreturn StringLength(Fetch())\nendfunction\n",
         ),
         wts.map(|b| asset("authored.wts", b)),
     )
@@ -124,10 +124,10 @@ fn present_malformed_missing_and_used_invalid_text_remain_distinct() {
     assert!(
         absent
             .vm(NullHost)
-            .call("Fetch", &[])
+            .call("Length", &[])
             .unwrap_err()
             .message
-            .contains("TRIGSTR_7 is not in this map's war3map.wts")
+            .contains("war3map.wts source was not supplied")
     );
     assert!(
         map(Some(b""))
@@ -136,30 +136,32 @@ fn present_malformed_missing_and_used_invalid_text_remain_distinct() {
             .contains("authored.wts: wts truncated")
     );
     let missing = map(Some(&record("8", b"else", None, false))).unwrap();
-    assert!(
-        missing
-            .vm(NullHost)
-            .call("Fetch", &[])
-            .unwrap_err()
-            .message
-            .contains("TRIGSTR_7 is not in this map's war3map.wts")
+    assert_eq!(
+        missing.vm(NullHost).call("Length", &[]).unwrap(),
+        Value::Int(0)
     );
     let mut bytes = record("7", b"|nAuthored|c12345678|r", None, false);
     bytes.extend(record("8", b"\xff", None, false));
     let valid = map(Some(&bytes)).unwrap();
     assert_eq!(
-        valid.vm(NullHost).call("Fetch", &[]).unwrap(),
-        Value::Str("|nAuthored|c12345678|r".into())
+        valid.vm(NullHost).call("Length", &[]).unwrap(),
+        Value::Int("|nAuthored|c12345678|r".len() as i32)
     );
     let invalid = map(Some(&record("7", b"\xff", None, false))).unwrap();
     let mut vm = invalid.vm(NullHost);
-    let error = vm.call("Fetch", &[]).unwrap_err();
+    let error = vm.call("Length", &[]).unwrap_err();
     let context = invalid.diagnostic(&vm, &error);
     assert!(
         context.contains("authored.wts: WTS entry 7 is not UTF-8 at body byte 0"),
         "{context}"
     );
-    assert!(context.contains("map.fixture:2:"), "{context}");
+    assert!(context.contains("map.fixture:5:"), "{context}");
+    for scripts in [&absent, &missing, &valid, &invalid] {
+        assert_eq!(
+            scripts.vm(NullHost).call("Fetch", &[]).unwrap(),
+            Value::Str("TRIGSTR_7".into())
+        );
+    }
 }
 fn custom(wts: &[u8], max_wts_bytes: usize) -> Result<CustomScripts, CustomScriptError> {
     let mut wct_bytes = 0u32.to_le_bytes().to_vec();

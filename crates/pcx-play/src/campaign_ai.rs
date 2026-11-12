@@ -1211,6 +1211,9 @@ impl<W: AiWorld> AiHost<W> {
 }
 
 impl<W: AiWorld> Host for AiHost<W> {
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.world()?.native_table_string(id)
+    }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.world.as_ref().and_then(Host::real_ops)
     }
@@ -4457,5 +4460,28 @@ mod tests {
             assert!(error.contains(frontier), "{name}: {error}");
             eprintln!("{name}: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod native_string_forwarding_tests {
+    use super::*;
+    #[test]
+    fn native_string_ai_world_is_selected_and_unlent_world_has_no_fallback() {
+        let world = crate::neutral_player::native_string_world_fixture(Some(
+            b"STRING 7\r\n{\r\nTRIGSTR_23\r\n}\r\n",
+        ));
+        let program = world.context().scripts.shared_program();
+        let mut ai = AiHost::new(1, world);
+        assert_eq!(ai.native_table_string(91).unwrap(), None);
+        let world = ai.world.take().unwrap();
+        assert!(
+            ai.native_table_string(7)
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        ai.world = Some(world);
+        let mut vm = pcx_script::Vm::new(&program, ai);
+        assert_eq!(vm.call("length", &[]).unwrap(), Value::Int(10));
     }
 }

@@ -108,6 +108,7 @@ pub enum QuestFlag {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum QuestFailure {
+    TextSource(String),
     Arguments,
     Identity,
     WrongFamily,
@@ -121,6 +122,7 @@ pub enum QuestFailure {
 impl std::fmt::Display for QuestFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::TextSource(why) => write!(f, "quest string source: {why}"),
             Self::Arguments => write!(f, "arguments do not match the quest native declaration"),
             Self::Identity => write!(f, "unknown handle identity"),
             Self::WrongFamily => write!(f, "handle identifies another family"),
@@ -311,12 +313,23 @@ impl QuestSession {
         name: &str,
         args: &[Value],
     ) -> Result<Value, QuestFailure> {
+        self.call_with_strings(arena, name, args, None)
+    }
+    pub fn call_with_strings<A: QuestArena>(
+        &mut self,
+        arena: &mut A,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, QuestFailure> {
         match name {
             "CreateQuest" => self.create_quest(arena, args),
             "DestroyQuest" => self.destroy_quest(arena, args),
-            "QuestSetTitle" => self.set_quest_text(arena, args, TextField::Title),
-            "QuestSetDescription" => self.set_quest_text(arena, args, TextField::Description),
-            "QuestSetIconPath" => self.set_quest_text(arena, args, TextField::Icon),
+            "QuestSetTitle" => self.set_quest_text(arena, args, TextField::Title, strings),
+            "QuestSetDescription" => {
+                self.set_quest_text(arena, args, TextField::Description, strings)
+            }
+            "QuestSetIconPath" => self.set_quest_text(arena, args, TextField::Icon, strings),
             "QuestSetRequired" => self.set_flag(arena, args, QuestFlag::Required),
             "QuestSetCompleted" => self.set_flag(arena, args, QuestFlag::Completed),
             "QuestSetDiscovered" => self.set_flag(arena, args, QuestFlag::Discovered),
@@ -328,7 +341,7 @@ impl QuestSession {
             "IsQuestFailed" => self.query_flag(arena, args, QuestFlag::Failed),
             "IsQuestEnabled" => self.query_flag(arena, args, QuestFlag::Enabled),
             "QuestCreateItem" => self.create_item(arena, args),
-            "QuestItemSetDescription" => self.set_item_text(arena, args),
+            "QuestItemSetDescription" => self.set_item_text(arena, args, strings),
             "QuestItemSetCompleted" => self.set_item_completed(arena, args),
             "IsQuestItemCompleted" => self.query_item_completed(arena, args),
             "FlashQuestDialogButton" => self.dialog(args, QuestEvent::DialogButtonFlash),
@@ -397,9 +410,15 @@ impl QuestSession {
         arena: &mut A,
         args: &[Value],
         field: TextField,
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Result<Value, QuestFailure> {
         let (id, text) = handle_and_string(args)?;
         self.require_live_quest(arena, id)?;
+        let text = match field {
+            TextField::Icon => std::borrow::Cow::Borrowed(text),
+            _ => pcx_script::text::native_map_string(text, strings)
+                .map_err(QuestFailure::TextSource)?,
+        };
         self.reserve_event()?;
         let budget = self.budget.text_bytes;
         let mut used = self.text_used;
@@ -410,7 +429,7 @@ impl QuestSession {
                 TextField::Description => &mut quest.description,
                 TextField::Icon => &mut quest.icon_path,
             };
-            store_text(&mut used, budget, slot, text)?;
+            store_text(&mut used, budget, slot, &text)?;
         }
         self.text_used = used;
         self.events.push(match field {
@@ -492,15 +511,18 @@ impl QuestSession {
         &mut self,
         arena: &mut A,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Result<Value, QuestFailure> {
         let (id, text) = handle_and_string(args)?;
         self.require_live_item(arena, id)?;
+        let text =
+            pcx_script::text::native_map_string(text, strings).map_err(QuestFailure::TextSource)?;
         self.reserve_event()?;
         let budget = self.budget.text_bytes;
         let mut used = self.text_used;
         {
             let item = self.item_mut(id)?;
-            store_text(&mut used, budget, &mut item.description, text)?;
+            store_text(&mut used, budget, &mut item.description, &text)?;
         }
         self.text_used = used;
         self.events.push(QuestEvent::ItemDescription(id));

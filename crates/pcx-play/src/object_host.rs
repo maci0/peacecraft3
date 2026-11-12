@@ -964,9 +964,31 @@ impl Host for ObjectHost {
         self.numeric.as_ref().map(|p| p as &dyn pcx_script::RealOps)
     }
 
-    #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.object_native_with_strings(name, args, None)
+    }
+    fn native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: &pcx_script::text::NativeStringLookup<'_>,
+    ) -> Result<Value, String> {
+        self.object_native_with_strings(name, args, Some(strings))
+    }
+}
+
+impl ObjectHost {
+    #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
+    fn object_native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, String> {
         self.order_queue_observe(name, args);
+        if let Some(result) = self.alt_minimap_icon_native_with_strings(name, args, strings) {
+            return result.map_err(|e| e.to_string());
+        }
         if let Some(result) = self.doodad_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
@@ -1008,7 +1030,7 @@ impl Host for ObjectHost {
                 .create_unit_at_location(args)
                 .map_err(|e| e.to_string());
         }
-        if let Some(result) = self.message_native(name, args) {
+        if let Some(result) = self.message_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.presentation_native(name, args) {
@@ -1088,16 +1110,16 @@ impl Host for ObjectHost {
         if let Some(result) = self.camera_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.player_native(name, args) {
+        if let Some(result) = self.player_native_with_strings(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.player_ability_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.config_native(name, args) {
+        if let Some(result) = self.config_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.quest_native(name, args) {
+        if let Some(result) = self.quest_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.camera_setup_native(name, args) {
@@ -1145,7 +1167,7 @@ impl Host for ObjectHost {
         if let Some(result) = self.thread_sleep_native(name) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.timer_dialog_native(name, args) {
+        if let Some(result) = self.timer_dialog_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.effect_native(name, args) {
@@ -1166,13 +1188,13 @@ impl Host for ObjectHost {
         if let Some(result) = self.selection_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.leaderboard_native(name, args) {
+        if let Some(result) = self.leaderboard_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.dialog_native(name, args) {
+        if let Some(result) = self.dialog_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.cinematic_scene_native(name, args) {
+        if let Some(result) = self.cinematic_scene_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.indicator_native(name, args) {
@@ -1181,7 +1203,7 @@ impl Host for ObjectHost {
         if let Some(result) = self.inventory_native(name, args) {
             return result.map_err(|e| e.to_string());
         }
-        if let Some(result) = self.localized_query_native(name, args) {
+        if let Some(result) = self.localized_query_native(name, args, strings) {
             return result.map_err(|e| e.to_string());
         }
         if let Some(result) = self.game_pause_native(name, args) {
@@ -1270,6 +1292,14 @@ impl Host for ObjectHost {
         }
         if let Some(result) = self.filter_native(name, args) {
             return result.map_err(|e| e.to_string());
+        }
+        if name == "TriggerRegisterPlayerChatEvent"
+            && self.retained_player_chat_events().is_ok()
+            && self.inner.program.natives().get(name).is_some()
+        {
+            return self
+                .register_player_chat_event_with_strings(args, strings)
+                .map_err(|e| e.to_string());
         }
         if let Some(result) = self.trigger_native(name, args) {
             return result.map_err(|e| e.to_string());

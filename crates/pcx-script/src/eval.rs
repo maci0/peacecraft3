@@ -30,22 +30,23 @@
 //! [`Vm::init_globals`] does not park. A suspend while initialising globals is
 //! an error, and that error is reused on the next attempt.
 //!
-//! [`Host::table_string`] is the `war3map.wts` seam. `pcx-trig` decodes that
+//! [`Host::native_table_string`] is the native `war3map.wts` seam. `pcx-trig` decodes that
 //! file; this crate does not depend on it, so wiring it is one method:
 //!
 //! ```ignore
 //! impl Host for MyMap {
-//!     fn table_string(&self, id: u32) -> Option<String> {
-//!         self.wts.body(id).map(|b| b.to_string())
+//!     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+//!         self.wts.body(id).map(|body| {
+//!             std::str::from_utf8(body).map(str::to_owned).map_err(|e| e.to_string())
+//!         }).transpose()
 //!     }
 //! }
 //! ```
 //!
-//! [`Host::code_tag`] is the `^^…^^` seam. A code tag the host cannot resolve
-//! is an error naming the tag, not a dropped tag.
+//! Literal evaluation retains `TRIGSTR_` text and `^^…^^` markers. Native
+//! consumers localize at their own boundary; evaluation never formats UI text.
 
 use crate::ast::{BinOp, Expr, IfBranch, Literal, Param, Stmt, StrLit, TypeKind, TypeRef, UnOp};
-use crate::lexer::StrPart;
 use crate::natives::{NativeCall, NativeImpl};
 use crate::resolve::Program;
 use crate::span::Span;
@@ -104,6 +105,24 @@ pub trait Host {
     ///
     /// This is not called for an invocation that [`Host::suspend`] parks.
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String>;
+
+    /// Forward a native with the map's read-only string source. Consumers choose
+    /// the native lookup point; this method does not convert arbitrary arguments.
+    fn native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        _strings: &crate::text::NativeStringLookup<'_>,
+    ) -> Result<Value, String> {
+        self.native(name, args)
+    }
+
+    /// `None` is a missing entry in a known table, never an unavailable source.
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.resolve_table_string(id)?
+            .map(Some)
+            .ok_or_else(|| "war3map.wts source or missing-entry semantics unavailable".into())
+    }
 
     /// Optional callback dispatch. `None` uses ordinary native dispatch.
     /// A callback takes no arguments; its return reaches `continue_script_call`.
@@ -166,7 +185,7 @@ pub trait Host {
         Ok(self.table_string(id))
     }
 
-    /// What a paired `^^tag^^` in a string substitutes to.
+    /// Optional UI formatting service. Raw literal evaluation never calls it.
     fn code_tag(&self, tag: &str) -> Option<String> {
         let _ = tag;
         None
@@ -2270,8 +2289,8 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             };
         }
         // A trigger string spelled as an identifier.
-        if let Some(id) = trigstr_id(name.as_str()) {
-            return self.table_string(id, span);
+        if trigstr_id(name.as_str()).is_some() {
+            return Ok(Value::Str(name.as_str().to_string()));
         }
         if self.program.function(name.as_str()).is_some()
             || self.program.natives().get(name.as_str()).is_some()
@@ -2376,7 +2395,6 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 )),
             },
             NativeImpl::StringLength => {
-                // shortcut: literals are expanded earlier, move expansion to consumers for nested-WTS parity.
                 let text = match &args[0] {
                     Value::Null => return Ok(Value::Int(0)),
                     Value::Str(text) => text,
@@ -2387,22 +2405,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                         ));
                     }
                 };
-                let resolved;
-                let text = if let Some(id) = crate::text::native_trigstr_id(text) {
-                    resolved = self
-                        .host
-                        .resolve_table_string(id)
-                        .map_err(|why| crate::Error::run(span, format!("TRIGSTR_{id}: {why}")))?
-                        .ok_or_else(|| {
-                            crate::Error::run(
-                                span,
-                                format!("TRIGSTR_{id} is not in this map's war3map.wts"),
-                            )
-                        })?;
-                    &resolved
-                } else {
-                    text
-                };
+                let source = |id| self.host.native_table_string(id);
+                let text = crate::text::native_map_string(text, Some(&source))
+                    .map_err(|why| crate::Error::run(span, why))?;
                 let length = text
                     .bytes()
                     .position(|byte| byte == 0)
@@ -2410,56 +2415,6 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 Ok(Value::Int(length as i32))
             }
         }
-    }
-
-    fn table_string(&mut self, id: u32, span: Span) -> Result<Value, crate::Error> {
-        let body = self
-            .host
-            .resolve_table_string(id)
-            .map_err(|why| crate::Error::run(span, format!("TRIGSTR_{id}: {why}")))?
-            .ok_or_else(|| {
-                crate::Error::run(
-                    span,
-                    format!("TRIGSTR_{id} is not in this map's war3map.wts"),
-                )
-            })?;
-        Ok(Value::Str(self.expand_tags(body, span)?))
-    }
-
-    /// Expand every paired `^^tag^^` in a string, through the host. A tag with
-    /// no substitution is left as written, so nothing silently disappears from
-    /// a tooltip.
-    fn expand_tags(&self, body: String, span: Span) -> Result<String, crate::Error> {
-        if !body.contains("^^") {
-            return Ok(body);
-        }
-        let mut out = String::with_capacity(body.len());
-        let mut rest = body.as_str();
-        while let Some(open) = rest.find("^^") {
-            out.push_str(&rest[..open]);
-            let after = &rest[open + 2..];
-            match after.find("^^") {
-                Some(close) => {
-                    let tag = &after[..close];
-                    match self.host.code_tag(tag) {
-                        Some(sub) => out.push_str(&sub),
-                        None => {
-                            return Err(crate::Error::run(
-                                span,
-                                format!("no substitution for the `^{tag}^` code tag"),
-                            ));
-                        }
-                    }
-                    rest = &after[close + 2..];
-                }
-                None => {
-                    out.push_str(&rest[open..]);
-                    return Ok(out);
-                }
-            }
-        }
-        out.push_str(rest);
-        Ok(out)
     }
 
     fn literal(&mut self, l: &Literal, span: Span) -> Result<Value, crate::Error> {
@@ -2479,44 +2434,11 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
     }
 
-    /// A string literal: a `TRIGSTR_<n>` spelling resolves through the map's
-    /// own table, and a paired `^^…^^` expands through the host.
+    /// Evaluation preserves text; only the consuming native may localize it.
     fn string(&mut self, s: &StrLit, span: Span) -> Result<Value, crate::Error> {
-        let has_tag = s.parts.iter().any(|p| matches!(p, StrPart::CodeTag { .. }));
-        let decoded = s.decoded();
-        if !has_tag && let Some(id) = trigstr_id(&decoded) {
-            let body = self
-                .host
-                .resolve_table_string(id)
-                .map_err(|why| crate::Error::run(span, format!("TRIGSTR_{id}: {why}")))?
-                .ok_or_else(|| {
-                    crate::Error::run(
-                        span,
-                        format!("TRIGSTR_{id} is not in this map's war3map.wts"),
-                    )
-                })?;
-            return Ok(Value::Str(self.expand_tags(body, span)?));
-        }
-        if has_tag {
-            let mut out = String::new();
-            for p in &s.parts {
-                match p {
-                    StrPart::Text(t) => out.push_str(t),
-                    StrPart::Escape(e) => out.push(e.decoded()),
-                    StrPart::CodeTag { text } => match self.host.code_tag(text) {
-                        Some(sub) => out.push_str(&sub),
-                        None => {
-                            return Err(crate::Error::run(
-                                span,
-                                format!("no substitution for the `^{text}^` code tag"),
-                            ));
-                        }
-                    },
-                }
-            }
-            return Ok(Value::Str(out));
-        }
-        Ok(Value::Str(decoded))
+        s.literal_text()
+            .map(Value::Str)
+            .map_err(|why| crate::Error::run(span, why))
     }
 
     fn op_error(&self, e: &OpError, span: Span) -> crate::Error {

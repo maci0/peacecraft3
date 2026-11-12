@@ -237,7 +237,7 @@ fn compile_and_runtime_errors_name_the_actual_later_block() {
 }
 
 #[test]
-fn actual_wts_text_is_resolved_through_the_existing_host() {
+fn custom_native_receives_raw_text_and_retains_selected_wts() {
     #[derive(Default)]
     struct Capture(Vec<String>);
     impl Host for Capture {
@@ -262,7 +262,12 @@ fn actual_wts_text_is_resolved_through_the_existing_host() {
     .unwrap();
     let mut vm = scripts.vm(Capture::default());
     vm.call("Run", &[]).unwrap();
-    assert_eq!(vm.host().inner.0, ["|nAuthored|cffff0000"]);
+    assert_eq!(vm.host().inner.0, ["TRIGSTR_8"]);
+    assert_eq!(
+        vm.host().native_table_string(8).unwrap(),
+        Some("|nAuthored|cffff0000".into())
+    );
+    assert_eq!(vm.host().native_table_string(9).unwrap(), None);
     assert_eq!(scripts.digests.len(), 5);
     assert!(
         matches!(compile(&[body], None, Some(b"STRING bad"), CustomScriptBudget::default()), Err(CustomScriptError::Wts { label, .. }) if label == "fixture.wts")

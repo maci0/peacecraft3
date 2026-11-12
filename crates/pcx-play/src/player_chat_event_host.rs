@@ -97,6 +97,13 @@ impl ObjectHost {
     }
 
     pub(super) fn register_player_chat_event(&mut self, args: &[Value]) -> Result<Value, Error> {
+        self.register_player_chat_event_with_strings(args, None)
+    }
+    pub(in crate::playercolor_host) fn register_player_chat_event_with_strings(
+        &mut self,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         let fail = |failure| self.inner.error(REGISTER, failure);
         let [
             Value::Handle(trigger),
@@ -122,6 +129,8 @@ impl ObjectHost {
         let limit = admitted
             .player_chat_event_limit
             .ok_or_else(|| fail(Failure::TriggerState("player chat events not admitted")))?;
+        let message = pcx_script::text::native_map_string(message, strings)
+            .map_err(|why| fail(Failure::ScriptString(why)))?;
         if admitted.retained_player_chat_events >= limit {
             return Err(fail(Failure::Budget("player chat event registration")));
         }
@@ -129,7 +138,7 @@ impl ObjectHost {
         owned
             .try_reserve_exact(message.len())
             .map_err(|_| fail(Failure::Capacity))?;
-        owned.push_str(message);
+        owned.push_str(&message);
         let record = PlayerChatRegistration {
             trigger: *trigger,
             player: *player,
