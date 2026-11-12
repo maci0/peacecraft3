@@ -7082,3 +7082,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   This corrects an existing canonical consumer; no matched original-client duel,
   native damage-event nesting or tick/RNG parity is claimed. See
   [weapon damage](docs/re-notes/weapon-invulnerability.md#illusion-weapon-damage-at-melee-release).
+
+- 2026-11-13: The VM now implements `StringLength` with declared-signature
+  checks, null/empty zero, byte counting to NUL and native trigger-reference
+  prefix parsing (wrapping integer suffix, minus sign, trailing nondigits and
+  the no-lookup sentinel). Computed/direct references perform one WTS lookup;
+  host errors retain source context. Independent main integration runs all
+  affected script/gameplay package suites: 3,293 passed, zero failed, 148
+  explicit ignores, including all four named new string/prefix regressions.
+  Strict native/WASM all-target Clippy, both library builds and the rebuilt
+  native campaign probe pass with source hashes unchanged throughout. Existing
+  eager literal/tag expansion can still resolve WTS an extra time, and missing
+  WTS entries remain strict errors because table availability is not yet
+  distinguished. Other string natives, runtime/campaign comparisons and full
+  native tick parity remain open. See
+  [string native evidence](docs/re-notes/script-string-natives.md).

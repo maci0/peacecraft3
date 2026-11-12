@@ -638,7 +638,7 @@ fn an_unimplemented_native_carries_its_name_the_declaration_and_the_call_span() 
 }
 
 #[test]
-fn i2r_r2i_and_i2s_are_the_only_natives_the_table_runs() {
+fn numeric_conversions_and_string_length_are_the_natives_the_table_runs() {
     assert_eq!(
         crate::natives::implemented("I2S"),
         Some(crate::natives::NativeImpl::IntToString)
@@ -650,6 +650,10 @@ fn i2r_r2i_and_i2s_are_the_only_natives_the_table_runs() {
     assert_eq!(
         crate::natives::implemented("R2I"),
         Some(crate::natives::NativeImpl::RealToInt)
+    );
+    assert_eq!(
+        crate::natives::implemented("StringLength"),
+        Some(crate::natives::NativeImpl::StringLength)
     );
     assert_eq!(crate::natives::implemented("i2r"), None);
     assert_eq!(crate::natives::implemented("R2S"), None);
@@ -1973,4 +1977,108 @@ fn spawned_threads_park_alone_and_resume_with_their_remaining_callbacks() {
     let mut plain = Vm::new(&program, Probe::default());
     plain.init_globals().unwrap();
     assert!(plain.run_thread(&[id("b")]).is_ok());
+}
+
+#[test]
+fn string_length_counts_bytes_and_stops_at_nul_through_vm_calls() {
+    let src = "native StringLength takes string s returns integer\nfunction f takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
+    for (input, expected) in [
+        (Value::Null, 0),
+        (Value::Str(String::new()), 0),
+        (Value::Str("é界".into()), 5),
+        (Value::Str("é\0ignored".into()), 2),
+        (Value::Str("\0TRIGSTR_12".into()), 0),
+        (Value::Str("trigstr_12".into()), 10),
+        (Value::Str("TRIGSTR_-1".into()), 10),
+        (Value::Str("TRIGSTR_4294967295".into()), 18),
+    ] {
+        assert_eq!(call(src, "f", &[input]).unwrap(), Value::Int(expected));
+    }
+}
+
+#[test]
+fn string_length_resolves_computed_trigger_references_once_without_expanding_tags() {
+    struct Table;
+    impl crate::Host for Table {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("implemented native reached host: {name}");
+        }
+        fn table_string(&self, id: u32) -> Option<String> {
+            match id {
+                0 => Some("zero".into()),
+                12 => Some("é^^unknown^^\0tail".into()),
+                23 => Some("TRIGSTR_12".into()),
+                41 => Some(String::new()),
+                _ => None,
+            }
+        }
+    }
+    let src = "native StringLength takes string s returns integer\nfunction f takes string suffix returns integer\nreturn StringLength(\"TRIGSTR_\" + suffix)\nendfunction\n";
+    let program = program_of(src);
+    let mut vm = Vm::new(&program, Table);
+    for (suffix, expected) in [
+        ("12", 13),
+        ("12suffix", 13),
+        ("00012", 13),
+        ("4294967308", 13),
+        ("", 4),
+        ("nondigit", 4),
+        ("+12", 4),
+        (" 12", 4),
+        ("23", 10),
+        ("41", 0),
+    ] {
+        assert_eq!(
+            vm.call("f", &[Value::Str(suffix.into())]).unwrap(),
+            Value::Int(expected)
+        );
+    }
+    let error = vm.call("f", &[Value::Str("91".into())]).unwrap_err();
+    assert!(error.message.contains("TRIGSTR_91"));
+    assert!(error.message.contains("war3map.wts"));
+    assert_eq!(
+        vm.call("f", &[Value::Str("12".into())]).unwrap(),
+        Value::Int(13)
+    );
+}
+
+#[test]
+fn string_length_preserves_table_source_errors_and_rejects_wrong_declarations() {
+    struct FailedTable;
+    impl crate::Host for FailedTable {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("implemented native reached host: {name}");
+        }
+        fn resolve_table_string(&self, _: u32) -> Result<Option<String>, String> {
+            Err("synthetic map.wts: invalid record".into())
+        }
+    }
+    let src = "native StringLength takes string s returns integer\nfunction f takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
+    let program = program_of(src);
+    let mut vm = Vm::new(&program, FailedTable);
+    let error = vm
+        .call("f", &[Value::Str("TRIGSTR_77".into())])
+        .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("TRIGSTR_77: synthetic map.wts: invalid record")
+    );
+    for declaration in [
+        "native StringLength takes integer s returns integer\n",
+        "native StringLength takes string s returns string\n",
+        "native StringLength takes string s, integer extra returns integer\n",
+    ] {
+        let script = parse(declaration).unwrap();
+        let mut table = NativeTable::new();
+        for item in &script.items {
+            if let crate::Item::Native(native) = item {
+                table.insert(native, "synthetic.j");
+            }
+        }
+        assert!(matches!(
+            table.call("StringLength"),
+            Some(crate::natives::NativeCall::SignatureMismatch(..))
+        ));
+    }
 }
