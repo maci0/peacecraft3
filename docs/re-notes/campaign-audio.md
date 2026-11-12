@@ -65,6 +65,12 @@ animation-driven have no consumer, so a map that starts no dialogue is silent.
 
 ## Music (`campaign_audio.rs`)
 
+The source-qualified thematic start/seek follow-up is documented in
+[script-thematic-music.md](script-thematic-music.md). It supersedes the older
+plain/extended thematic limitations below: shared request revisions now carry
+plain play, extended offsets, seeks and end through the application consumer.
+The ordinary music, fade and playlist fidelity gaps described here remain open.
+
 `drive_music` reads the Host's `thematic_music()` and `map_music_selection()` each
 frame and keeps at most one `CampaignMusic` track entity.
 

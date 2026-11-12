@@ -35,6 +35,57 @@ fn set(h: &mut ObjectHost, name: &str, random: bool, index: i32) -> Result<Value
         ],
     )
 }
+
+fn thematic_host() -> ObjectHost {
+    let common = COMMON.replacen("globals", "native PlayThematicMusic takes string path returns nothing\nnative EndThematicMusic takes nothing returns nothing\nglobals", 1);
+    host(&common, "")
+        .with_map_music_selection(64)
+        .unwrap()
+        .with_thematic_music_rules(thematic_rules::tests::rules())
+        .unwrap()
+}
+
+#[test]
+fn thematic_plain_ex_seek_end_share_ordered_state_and_same_path_restarts() {
+    let mut h = thematic_host();
+    h.native("PlayThematicMusic", &[Value::Str("theme.mp3".into())])
+        .unwrap();
+    let first = h.thematic_music_request().unwrap().clone();
+    assert_eq!(first.position, Some(Duration::from_millis(37)));
+    h.start_thematic("theme.mp3", Some(9580)).unwrap();
+    let second = h.thematic_music_request().unwrap().clone();
+    assert!(second.revision > first.revision);
+    h.seek_thematic(2401).unwrap();
+    let seek = h.thematic_music_request().unwrap().clone();
+    assert_eq!(seek.revision, second.revision);
+    assert!(seek.position_revision > second.position_revision);
+    assert_eq!(seek.position, Some(Duration::from_millis(2401)));
+    h.seek_thematic(-7).unwrap();
+    assert_eq!(h.thematic_music_request(), Some(&seek));
+    h.native("EndThematicMusic", &[]).unwrap();
+    assert!(h.thematic_music_request().is_none());
+    h.seek_thematic(i32::MIN).unwrap();
+    h.native("PlayThematicMusic", &[Value::Str("theme.mp3".into())])
+        .unwrap();
+    assert!(h.thematic_music_request().unwrap().revision > seek.position_revision);
+}
+
+#[test]
+fn thematic_invalid_path_offset_and_policy_replacement_leave_state_intact() {
+    let mut h = thematic_host();
+    h.start_thematic("theme.mp3", Some(12)).unwrap();
+    let original = h.thematic_music_request().unwrap().clone();
+    for (path, offset) in [("theme.mp3", -1), ("a\0b", 12), (&"x".repeat(65), 12)] {
+        assert!(h.start_thematic(path, Some(offset)).is_err());
+        assert_eq!(h.thematic_music_request(), Some(&original));
+    }
+    assert!(h.seek_thematic(-1).is_err());
+    assert_eq!(h.thematic_music_request(), Some(&original));
+    assert!(
+        h.with_thematic_music_rules(thematic_rules::tests::rules())
+            .is_err()
+    );
+}
 #[test]
 fn exact_selection_replaces_only_after_executed_calls_without_defaults_or_track_expansion() {
     let mut h = host(COMMON, "");

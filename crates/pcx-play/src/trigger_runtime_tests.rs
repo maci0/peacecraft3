@@ -318,6 +318,182 @@ fn sleeping_actions_park_their_own_thread_and_resume_with_their_trigger() {
 }
 
 #[test]
+fn sleeping_actions_retain_expired_timer_through_nested_calls_and_repark() {
+    let common = format!("{COMMON}type triggeraction extends handle\n{SLEEP_COMMON}");
+    let source = "\
+globals
+timer clock = CreateTimer()
+trigger sleeper = CreateTrigger()
+trigger nested = CreateTrigger()
+boolean before = false
+boolean after = false
+boolean inner = false
+boolean again = false
+integer starts = 0
+integer tails = 0
+real elapsed = 0.0
+endglobals
+function nested_action takes nothing returns nothing
+set inner = GetExpiredTimer() == clock
+endfunction
+function act takes nothing returns nothing
+local timer retained = GetExpiredTimer()
+set starts = starts + 1
+set before = retained == clock
+call TriggerSleepAction(2.5)
+set after = GetExpiredTimer() == retained
+set elapsed = TimerGetElapsed(retained)
+call TriggerExecute(nested)
+call TriggerSleepAction(1.0)
+set again = GetExpiredTimer() == retained
+endfunction
+function tail takes nothing returns nothing
+set tails = tails + 1
+endfunction
+function begin takes nothing returns nothing
+call TriggerExecute(sleeper)
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(sleeper,function act)
+call TriggerAddAction(sleeper,function tail)
+call TriggerAddAction(nested,function nested_action)
+call TimerStart(clock,1.0,false,function begin)
+endfunction
+";
+    let mut host = host_map(&common, source, 64, 4)
+        .with_trigger_runtime(input(4))
+        .unwrap();
+    host.admit_thread_sleep(4).unwrap();
+    let program = Arc::clone(&host.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(Arc::clone(&program), host);
+    vm.call("main", &[]).unwrap();
+    let expiry = vm.host().next_timer_expiry(21.0, &mut 1).unwrap().unwrap();
+    let callback = &program.functions()[expiry.callback.unwrap().index()].name;
+    vm.call(callback, &[]).unwrap();
+    vm.host().finish_timer_expiry(expiry).unwrap();
+    assert_eq!(vm.global("before"), Value::Bool(true));
+    assert!(vm.host().native("GetExpiredTimer", &[]).is_err());
+
+    let ticket = vm.host().next_thread_wake(30.0).unwrap().unwrap();
+    vm.resume_thread(ticket).unwrap();
+    assert_eq!(vm.global("after"), Value::Bool(true));
+    assert_eq!(vm.global("inner"), Value::Bool(true));
+    assert_eq!(vm.global("elapsed"), Value::Real(1.0));
+    assert_eq!(vm.global("tails"), Value::Int(0));
+    assert_eq!(vm.host().timer_game_time(), Some(23.5));
+    assert!(vm.host().native("GetExpiredTimer", &[]).is_err());
+
+    let ticket = vm.host().next_thread_wake(30.0).unwrap().unwrap();
+    vm.resume_thread(ticket).unwrap();
+    assert_eq!(vm.global("again"), Value::Bool(true));
+    assert_eq!(vm.global("starts"), Value::Int(1));
+    assert_eq!(vm.global("tails"), Value::Int(1));
+    assert_eq!(vm.host().timer_game_time(), Some(24.5));
+    assert_eq!(vm.host().parked_thread_count(), 0);
+    assert!(vm.host().native("GetExpiredTimer", &[]).is_err());
+}
+
+#[test]
+fn sleeping_timed_event_keeps_null_expiry_without_masking_its_caller() {
+    let common = format!("{COMMON}type triggeraction extends handle\n{SLEEP_COMMON}");
+    let source = "\
+globals
+trigger sleeper = CreateTrigger()
+timer outer = CreateTimer()
+boolean before = false
+boolean after = false
+endglobals
+function act takes nothing returns nothing
+set before = GetExpiredTimer() == null
+call TriggerSleepAction(2.5)
+set after = GetExpiredTimer() == null
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(sleeper,function act)
+call TriggerRegisterTimerEvent(sleeper,1.0,false)
+endfunction
+";
+    let mut host = host_map(&common, source, 64, 2)
+        .with_trigger_runtime(input(4))
+        .unwrap();
+    host.admit_thread_sleep(4).unwrap();
+    let program = Arc::clone(&host.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(program, host);
+    vm.call("main", &[]).unwrap();
+    let expiry = vm.host().next_timer_expiry(21.0, &mut 1).unwrap().unwrap();
+    assert!(vm.host().begin_timer_trigger(&expiry, 0).unwrap());
+    vm.run_thread(&expiry.triggers()[0].actions).unwrap();
+    vm.host().finish_timer_expiry(expiry).unwrap();
+    assert_eq!(vm.global("before"), Value::Bool(true));
+    let ticket = vm.host().next_thread_wake(30.0).unwrap().unwrap();
+
+    let outer = vm.global("outer");
+    vm.host()
+        .native(
+            "TimerStart",
+            &[
+                outer.clone(),
+                Value::Real(0.5),
+                Value::Bool(false),
+                Value::Null,
+            ],
+        )
+        .unwrap();
+    let expiry = vm.host().next_timer_expiry(24.0, &mut 1).unwrap().unwrap();
+    assert_eq!(vm.host().native("GetExpiredTimer", &[]).unwrap(), outer);
+    vm.resume_thread(ticket).unwrap();
+    assert_eq!(vm.global("after"), Value::Bool(true));
+    assert_eq!(vm.host().timer_game_time(), Some(24.0));
+    assert_eq!(vm.host().native("GetExpiredTimer", &[]).unwrap(), outer);
+    vm.host().finish_timer_expiry(expiry).unwrap();
+    assert!(vm.host().native("GetExpiredTimer", &[]).is_err());
+}
+
+#[test]
+fn resumed_expired_timer_context_unwinds_on_script_failure() {
+    let common = format!("{COMMON}type triggeraction extends handle\n{SLEEP_COMMON}");
+    let source = "\
+globals
+timer clock = CreateTimer()
+trigger sleeper = CreateTrigger()
+boolean retained = false
+endglobals
+function act takes nothing returns nothing
+call TriggerSleepAction(2.5)
+set retained = GetExpiredTimer() == clock
+call TimerStart(null,1.0,false,null)
+endfunction
+function begin takes nothing returns nothing
+call TriggerExecute(sleeper)
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(sleeper,function act)
+call TimerStart(clock,1.0,false,function begin)
+endfunction
+";
+    let mut host = host_map(&common, source, 64, 2)
+        .with_trigger_runtime(input(4))
+        .unwrap();
+    host.admit_thread_sleep(4).unwrap();
+    let program = Arc::clone(&host.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(Arc::clone(&program), host);
+    vm.call("main", &[]).unwrap();
+    let expiry = vm.host().next_timer_expiry(21.0, &mut 1).unwrap().unwrap();
+    let callback = &program.functions()[expiry.callback.unwrap().index()].name;
+    vm.call(callback, &[]).unwrap();
+    vm.host().finish_timer_expiry(expiry).unwrap();
+    let ticket = vm.host().next_thread_wake(30.0).unwrap().unwrap();
+    assert!(vm.resume_thread(ticket).is_err());
+    assert_eq!(vm.global("retained"), Value::Bool(true));
+    assert_eq!(vm.host().parked_thread_count(), 0);
+    assert!(vm.host().native("GetExpiredTimer", &[]).is_err());
+    assert_eq!(
+        vm.host().native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
 fn variable_event_queues_when_the_real_changes_across_the_limit() {
     let common = format!(
         "{COMMON}\ntype limitop extends handle\nconstant native ConvertLimitOp takes integer i returns limitop\nglobals\nconstant limitop LESS_THAN=ConvertLimitOp(0)\nconstant limitop LESS_THAN_OR_EQUAL=ConvertLimitOp(1)\nconstant limitop EQUAL=ConvertLimitOp(2)\nconstant limitop GREATER_THAN_OR_EQUAL=ConvertLimitOp(3)\nconstant limitop GREATER_THAN=ConvertLimitOp(4)\nconstant limitop NOT_EQUAL=ConvertLimitOp(5)\nendglobals\n"

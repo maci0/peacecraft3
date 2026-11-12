@@ -297,6 +297,16 @@ fn assert_null_audio_environment() {
 #[test]
 #[ignore = "requires unchanged Human01 via PCX_NATIVE_CHAPTER_*, a private XDG_DATA_HOME and the null-audio environment of .scratch/runtest.sh"]
 fn human01_music_reaches_a_null_audio_sink() {
+    check_human01_music_sink(false);
+}
+
+#[test]
+#[ignore = "requires unchanged Human01 via PCX_NATIVE_CHAPTER_* and verified private null audio"]
+fn human01_thematic_seek_reaches_a_null_audio_sink() {
+    check_human01_music_sink(true);
+}
+
+fn check_human01_music_sink(check_seek: bool) {
     assert_null_audio_environment();
     let mut app = crate::native_campaign::tests::started_app();
     app.add_plugins((
@@ -333,5 +343,120 @@ fn human01_music_reaches_a_null_audio_sink() {
     assert!(
         checked,
         "no music track began within {SINK_BATCHES} batches"
+    );
+    if check_seek {
+        use pcx_script::Host;
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("SetThematicMusicPlayPosition", &[Value::Int(37)])
+            .unwrap();
+        app.update();
+        let world = app.world_mut();
+        let mut sinks = world.query_filtered::<&AudioSink, With<CampaignMusic>>();
+        assert!(sinks.single(world).unwrap().position() >= Duration::from_millis(37));
+        assert!(
+            world
+                .resource::<crate::campaign_audio::CampaignAudio>()
+                .last_error
+                .is_none()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires unchanged Human01 via PCX_NATIVE_CHAPTER_* and isolated display/null audio"]
+fn human01_thematic_ex_seek_restart_and_retirement_reach_audio_entities() {
+    use pcx_script::Host;
+    let mut app = crate::native_campaign::tests::started_app();
+    crate::campaign_audio::install(&mut app);
+    app.init_resource::<crate::menu_settings::Backend>();
+    let mut runtime = begin(&mut app);
+    for _ in 0..SINK_BATCHES {
+        advance(&mut app, &mut runtime);
+        let world = app.world_mut();
+        if world.query::<&CampaignMusic>().iter(world).next().is_some() {
+            break;
+        }
+    }
+    let (original, path) = {
+        let world = app.world_mut();
+        let mut tracks = world.query::<(Entity, &CampaignMusic)>();
+        let (entity, track) = tracks.single(world).unwrap();
+        (entity, track.member.clone())
+    };
+    let call = |app: &mut App, name, args: &[Value]| {
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(name, args)
+            .unwrap();
+    };
+    call(
+        &mut app,
+        "PlayThematicMusicEx",
+        &[Value::Str(path.clone()), Value::Int(9580)],
+    );
+    app.update();
+    app.update();
+    let restarted = {
+        let world = app.world_mut();
+        let mut tracks = world.query::<(Entity, &CampaignMusic, &PlaybackSettings)>();
+        let (entity, track, settings) = tracks.single(world).unwrap();
+        assert_eq!(track.member, path);
+        assert_ne!(entity, original);
+        assert_eq!(settings.start_position, Some(Duration::from_millis(9580)));
+        entity
+    };
+    call(
+        &mut app,
+        "SetThematicMusicPlayPosition",
+        &[Value::Int(2401)],
+    );
+    app.update();
+    assert_eq!(
+        app.world()
+            .get::<PlaybackSettings>(restarted)
+            .unwrap()
+            .start_position,
+        Some(Duration::from_millis(2401))
+    );
+    call(&mut app, "PlayThematicMusic", &[Value::Str(path)]);
+    let initial = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>()
+        .host()
+        .unwrap()
+        .objects()
+        .thematic_music_request()
+        .unwrap()
+        .position;
+    app.update();
+    app.update();
+    assert!(app.world().get_entity(restarted).is_err());
+    let world = app.world_mut();
+    assert_eq!(
+        world
+            .query_filtered::<&PlaybackSettings, With<CampaignMusic>>()
+            .single(world)
+            .unwrap()
+            .start_position,
+        initial
+    );
+    call(&mut app, "EndThematicMusic", &[]);
+    app.update();
+    app.insert_resource(MapScriptSession::<MapStartupHost>::default());
+    app.update();
+    let world = app.world_mut();
+    assert_eq!(world.query::<&CampaignMusic>().iter(world).count(), 0);
+    assert!(
+        world
+            .resource::<crate::campaign_audio::CampaignAudio>()
+            .last_error
+            .is_none()
     );
 }

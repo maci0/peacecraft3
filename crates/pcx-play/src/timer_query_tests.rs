@@ -133,6 +133,44 @@ pub(crate) fn fixture(
         &[(0x43, &[0x8b, 0x46, 0x50]), (0x4c, &[0x8b, 0x46, 0x48])],
         &[(0x5e, numeric.math_sub.va)],
     );
+    let pause = put(0xf00, 0x46, &[], &[(0x3b, 0x302010)]);
+    let resume = put(
+        0xf50,
+        0x38,
+        &[
+            (0x11, &[0x8b, 0x41, 0x50]),
+            (0x17, &[0x8b, 0x41, 0x34]),
+            (0x1c, &[0xd1, 0xe8, 0x83, 0xe0, 1]),
+        ],
+        &[(0x2f, 0x303100)],
+    );
+    let rearm = put(
+        0xfa0,
+        0x6a,
+        &[
+            (0xd, &[0x8b, 0x41, 0x24]),
+            (0x13, &[0x85, 0xc0, 0x74]),
+            (0x17, &[0x8b, 0x46, 0x48]),
+            (0x1b, &[0x8b, 0x7e, 0x34]),
+        ],
+        &[(0x5e, 0x303100)],
+    );
+    let stop = put(0x1010, 0x3c, &[(0x36, &[0x83, 0x66, 0x10, 0xf9])], &[]);
+    let dispatch = put(
+        0x1050,
+        0x4a,
+        &[],
+        &[(0x22, 0x303200), (0x29, rearm.va), (0x3b, 0x303200)],
+    );
+    let expiry_dispatch = put(
+        0x10a0,
+        0x16b,
+        &[
+            (0x8c, &zero_va.to_le_bytes()),
+            (0x10e, &segment_va.to_le_bytes()),
+        ],
+        &[(0xaa, schedule.va), (0xee, stop.va), (0x11e, schedule.va)],
+    );
     put(0x1d08, 4, &[(0, &minimum.to_le_bytes())], &[]);
     numeric.image_sha256 = sha256(&image);
     let binding = Binding {
@@ -147,6 +185,12 @@ pub(crate) fn fixture(
         full_timeout,
         active_elapsed,
         inactive_elapsed,
+        pause,
+        resume,
+        rearm,
+        stop,
+        dispatch,
+        expiry_dispatch,
     };
     (image, numeric, binding, budget)
 }
