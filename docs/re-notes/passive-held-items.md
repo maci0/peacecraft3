@@ -1726,3 +1726,32 @@ Decoded from the reviewed image (SHA-256 `3f2ed012…`); no runtime capture.
   `inventory_spell_shield_tests.rs` (rows, cooldown column, refusals, registration),
   `inventory_spell_shield_host_tests.rs` (the consult refusal, allies, two shields, two abilities)
   and the ignored real-image test in the first file (`PEACECRAFT3_INSTALL`).
+
+## Purge follow-up: Frost and Corruption magic predicates
+
+Native-code observation in the reviewed 1.29.2.9231 image (SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`),
+read with objdump; no original-client runtime observation:
+
+- `Bfro` vtable `0xf9f71c`, virtual `+0x1d8` at `0xf9f8f4`, points to
+  `0xc5b720`, which returns zero.
+- `BIcb` vtable `0xfbf33c`, virtual `+0x1d8` at `0xfbf514`, points to
+  `0xc9de60`, which returns zero.
+
+Thus neither buff passes Purge's magic filter. This is a decode-only follow-up:
+the host still refuses these buffs. An experimental implementation passed the
+pcx-play suite (3,141 passed, zero failed, 144 ignored), including two synthetic
+combat-entry regressions, but was removed at the release cutoff because the
+downstream app and strict Clippy gates had not completed. No code or tests from
+that experiment are included here; no rendered parity is claimed.
+
+The remaining refusals are unchanged: curse-buff magic predicates, summoned-enemy
+magic damage (`0x6677c0`), movement pause/order behavior, and Spell Shield blocking.
+Additional observed dependencies: `0xb666b0` increments movement `+0x80`; on its
+zero-to-one transition it calls `0x7fcd60` on unit `+0x26c` then `0xb6ab70`.
+Shield use `0xb49ce0` checks virtuals `+0x354`, `+0x378`, `+0x3e4`, `+0x388`
+and calls `0xba9d40`; its event path includes `0xd0148`, `0xd014a`, `0xd0160`,
+`0xd015f`, `0xd014c`, `0xd014e`, `0xd0144`. The alternate path sets ability flag
+`0x100` and calls `0x46d6c0` and `0xb4ac60`. Their complete semantics remain
+unverified; this is not evidence that shield use merely starts a cooldown.
+Whether Purge and spell orbs consult the shield remains open.
