@@ -761,6 +761,7 @@ impl ObjectHost {
             Some(Entry::Timer { live, run }) => {
                 *run = None;
                 *live = false;
+                self.retire_timer_delivery_identity(*id);
                 return Ok(Value::Null);
             }
             None => Failure::Identity,
@@ -1414,7 +1415,8 @@ mod terrain_pathing;
 
 #[path = "map_music_host.rs"]
 mod music;
-pub use music::MapMusicSelection;
+pub use music::thematic_rules::Rules as ThematicMusicRules;
+pub use music::{MapMusicSelection, ThematicMusicRequest};
 
 #[path = "play_music_host.rs"]
 mod play_music;

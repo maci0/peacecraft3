@@ -134,7 +134,7 @@ fn periodic_callback_queries_and_restart_destroy_use_the_same_timer_entry() {
         .unwrap();
     h.native("DestroyTimer", std::slice::from_ref(&timer))
         .unwrap();
-    assert!(h.native("GetExpiredTimer", &[]).is_err());
+    assert_eq!(h.native("GetExpiredTimer", &[]).unwrap(), Value::Null);
     h.finish_timer_expiry(expiry).unwrap();
     assert!(h.next_timer_expiry(30.0, &mut 0).unwrap().is_none());
     assert_eq!(h.inner().handles(), 1);
@@ -509,16 +509,16 @@ fn native_query_policy_preserves_pause_cache_restart_and_refusal_atomicity() {
     );
 }
 
-fn bounded_query_input(path: impl AsRef<std::path::Path>, limit: u64) -> Vec<u8> {
+fn bounded_query_input(path: impl AsRef<std::path::Path>, limit: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .unwrap()
+    std::fs::File::open(path)?
         .take(limit + 1)
-        .read_to_end(&mut bytes)
-        .unwrap();
-    assert!(bytes.len() as u64 <= limit, "local input exceeds budget");
-    bytes
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(std::io::Error::other("local query input exceeds budget"));
+    }
+    Ok(bytes)
 }
 
 fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
@@ -532,7 +532,8 @@ fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
     let image = bounded_query_input(
         std::env::var("PEACECRAFT3_QUERY_IMAGE").expect("explicit local image"),
         32 << 20,
-    );
+    )
+    .unwrap();
     let image_sha256 = sha256(&image);
     assert_eq!(image_sha256, crate::menu_lighting::REVIEWED_IMAGE);
     let budget = RuleInputBudget {
@@ -606,10 +607,13 @@ fn selected_query_policy() -> crate::script_numeric::NumericPolicy {
 fn selected_native_timer_query_bits_match_public_lifecycle() {
     use pcx_script::RealOps;
     let numeric = selected_query_policy();
-    let witness: serde_json::Value = serde_json::from_slice(&bounded_query_input(
-        std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
-        2 << 20,
-    ))
+    let witness: serde_json::Value = serde_json::from_slice(
+        &bounded_query_input(
+            std::env::var("PEACECRAFT3_QUERY_WITNESS").expect("explicit replicated witness"),
+            2 << 20,
+        )
+        .unwrap(),
+    )
     .unwrap();
     assert_eq!(
         witness["source_sha256"],
@@ -779,11 +783,14 @@ fn timer_query_policy_changes_refuse_without_rearming_existing_runs() {
 fn selected_native_timer_callback_matrix_matches_public_lifecycle() {
     use pcx_script::RealOps;
     let numeric = selected_query_policy();
-    let witness: serde_json::Value = serde_json::from_slice(&bounded_query_input(
-        std::env::var("PEACECRAFT3_CALLBACK_WITNESS")
-            .expect("explicit replicated callback witness"),
-        2 << 20,
-    ))
+    let witness: serde_json::Value = serde_json::from_slice(
+        &bounded_query_input(
+            std::env::var("PEACECRAFT3_CALLBACK_WITNESS")
+                .expect("explicit replicated callback witness"),
+            2 << 20,
+        )
+        .unwrap(),
+    )
     .unwrap();
     assert_eq!(
         witness["source_sha256"],
@@ -1061,4 +1068,114 @@ fn source_minimum_residual_delays_exact_segment_expiry_without_early_delivery() 
     let expiry = h.next_timer_expiry(9.125, &mut 1).unwrap().unwrap();
     assert_eq!(h.timer_game_time(), Some(9.125));
     h.finish_timer_expiry(expiry).unwrap();
+}
+
+#[test]
+fn current_timer_handler_tracks_subscription_replacements_and_survives_destroy() {
+    for (replacement, destroy) in [
+        (Some("b"), false),
+        (None, false),
+        (Some("b"), true),
+        (None, true),
+    ] {
+        let mut h=checked(COMMON,"function a takes nothing returns nothing\nendfunction\nfunction b takes nothing returns nothing\nendfunction\nfunction other takes nothing returns nothing\nendfunction\n").with_timer_runtime(0.0).unwrap();
+        let a = h.inner().program.function_id("a").unwrap();
+        let b = h.inner().program.function_id("b").unwrap();
+        let other = h.inner().program.function_id("other").unwrap();
+        let timer = h.native("CreateTimer", &[]).unwrap();
+        h.native(
+            "TimerStart",
+            &[
+                timer.clone(),
+                Value::Real(1.0),
+                Value::Bool(false),
+                Value::Code(a),
+            ],
+        )
+        .unwrap();
+        let expiry = h.next_timer_expiry(1.0, &mut 1).unwrap().unwrap();
+        assert_eq!(expiry.callback, Some(a));
+        assert_eq!(h.current_timer_callback(&expiry).unwrap(), Some(a));
+        let another = h.native("CreateTimer", &[]).unwrap();
+        h.native(
+            "TimerStart",
+            &[
+                another,
+                Value::Real(4.0),
+                Value::Bool(false),
+                Value::Code(other),
+            ],
+        )
+        .unwrap();
+        assert_eq!(h.current_timer_callback(&expiry).unwrap(), Some(a));
+        h.native(
+            "TimerStart",
+            &[
+                timer.clone(),
+                Value::Real(0.25),
+                Value::Bool(false),
+                replacement.map(|_| Value::Code(b)).unwrap_or(Value::Null),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            h.current_timer_callback(&expiry).unwrap(),
+            replacement.map(|_| b)
+        );
+        if destroy {
+            h.native("DestroyTimer", std::slice::from_ref(&timer))
+                .unwrap();
+            assert_eq!(h.native("GetExpiredTimer", &[]).unwrap(), Value::Null);
+            assert!(
+                h.native("TimerGetTimeout", std::slice::from_ref(&timer))
+                    .is_err()
+            );
+        } else {
+            assert_eq!(h.native("GetExpiredTimer", &[]).unwrap(), timer);
+        }
+        assert_eq!(
+            h.current_timer_callback(&expiry).unwrap(),
+            replacement.map(|_| b)
+        );
+        assert_eq!(expiry.callback, Some(a)); // Historical preparation data remains stable.
+        h.finish_timer_expiry(expiry).unwrap();
+    }
+}
+
+#[test]
+fn rejected_timer_restart_preserves_current_handler_and_pending_context() {
+    let mut h=checked(COMMON,"function a takes nothing returns nothing\nendfunction\nfunction b takes nothing returns nothing\nendfunction\n").with_timer_runtime(0.0).unwrap();
+    let a = h.inner().program.function_id("a").unwrap();
+    let b = h.inner().program.function_id("b").unwrap();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    h.native(
+        "TimerStart",
+        &[
+            timer.clone(),
+            Value::Real(1.0),
+            Value::Bool(false),
+            Value::Code(a),
+        ],
+    )
+    .unwrap();
+    let expiry = h.next_timer_expiry(1.0, &mut 1).unwrap().unwrap();
+    let handles = h.inner().handles();
+    assert!(
+        h.native(
+            "TimerStart",
+            &[
+                timer.clone(),
+                Value::Real(-1.0),
+                Value::Bool(false),
+                Value::Code(b)
+            ]
+        )
+        .is_err()
+    );
+    assert_eq!(h.current_timer_callback(&expiry).unwrap(), Some(a));
+    assert_eq!(h.inner().handles(), handles);
+    assert_eq!(h.native("GetExpiredTimer", &[]).unwrap(), timer);
+    assert_eq!(h.timer_game_time(), Some(1.0));
+    h.finish_timer_expiry(expiry).unwrap();
+    assert!(h.native("GetExpiredTimer", &[]).is_err());
 }

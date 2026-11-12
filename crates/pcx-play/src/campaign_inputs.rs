@@ -562,6 +562,7 @@ pub fn prepare(
     let item_sales = crate::item_sales::derive(&tables, &item_classes, client.clone())
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
+        thematic_music_rules: Some(crate::playercolor_host::ThematicMusicRules::read(image)?),
         cached_unit_source_maps: cached_unit_source_maps(
             reader,
             &map_sources.map_label,

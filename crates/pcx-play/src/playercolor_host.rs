@@ -984,11 +984,12 @@ pub use objects::{
     RestoreLifeBinding, RestoreLifePolicy, ShopCapacity, SoundProperties, SoundState,
     StackedSoundAction, StackedSoundRequest, StartLocation, StartPriorities, StartPriority,
     StartupClockState, StartupSettings, StockBudget, TechLimitBudget, TerrainFog,
-    ThematicMusicExRequest, TimedMessage, TimerEventRegistration, TimerExpiry, TimerHost,
-    TriggerActionRecord, TriggerBudget, TriggerConditionRegistration, TriggerDelivery,
-    TriggerRuntimeInput, UnitAbilities, UnitActivity, UnitBudget, UnitEffect,
-    UnitEventRegistration, UnitGuard, UnitInRangeRegistration, UnitLookAt, UnitMorph,
-    UnitRangeEntry, UnitSleep, UnitStateBudget, WeatherEffect,
+    ThematicMusicExRequest, ThematicMusicRequest, ThematicMusicRules, TimedMessage,
+    TimerEventRegistration, TimerExpiry, TimerHost, TriggerActionRecord, TriggerBudget,
+    TriggerConditionRegistration, TriggerDelivery, TriggerRuntimeInput, UnitAbilities,
+    UnitActivity, UnitBudget, UnitEffect, UnitEventRegistration, UnitGuard,
+    UnitInRangeRegistration, UnitLookAt, UnitMorph, UnitRangeEntry, UnitSleep, UnitStateBudget,
+    WeatherEffect,
 };
 pub use objects::{
     AnimationCursor, CaptainObservation, CinematicScene, Combat, CombatActor, CombatTraceEvent,

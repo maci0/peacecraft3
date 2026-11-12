@@ -257,7 +257,7 @@ refusals preserve prior runs and identities. Disabled periodic events consume
 their scheduled deadlines without callbacks, retaining their phase. Destroying a
 trigger prevents future delivery without recycling its token.
 
-The scheduler prepares bounded callback snapshots before consuming a deadline.
+The scheduler prepares bounded trigger-delivery snapshots before consuming a deadline.
 `MapScriptSession::advance_timers` enters every registered condition in order
 through the current session's callback tickets and VM. It combines their results
 after evaluating them all, then executes the ordered action list when accepted.
@@ -269,10 +269,11 @@ replacement retains the previous published VM, arena and clock.
 
 The caller bounds expiries; snapshot preparation is bounded by arena size and
 retained subscriptions, and execution retains the VM's cumulative step limit.
-Callback-list edits take effect on the next firing under the current snapshot
-policy. Mid-firing edits, yielding/nested delivery, native precision/long-timeout
-segmentation, equal-deadline fidelity and an automatic application clock remain
-unqualified. Other event families remain registrations without world delivery.
+Edits to retained subscription, condition and action lists follow the snapshot
+policy. This does not apply to the direct timer handler: the qualified follow-up
+below resolves its current record after all subscription actions. Other
+mid-firing edits, arbitrary yielding/nested delivery, complete native timing,
+equal-deadline fidelity and an automatic application clock remain unqualified. Other event families remain registrations without world delivery.
 
 Validation passes 446 Host tests on native and actual WASI, with six explicit
 local-input gates ignored; 19 application-library and 107 map-loading tests,
@@ -534,3 +535,77 @@ callback cases, not the full timer feature or tick-parity goal. The separate
 canonical queue bridge must preserve current extended-segment entries and
 counts across rebasing instead of treating a projected unwrapped final expiry
 as a native queue entry.
+
+
+## Direct handler after expiry-subscription mutation (2026-11-13)
+
+The blanket next-firing callback claim above is superseded for the direct timer
+handler. Static source `0x4fe540` invokes the object's expiry-subscription virtual
+slot first, then reads the callback record at object `+0x40` and invokes
+`0x4e4720`, which reads the record's current function. Retained REA evidence
+`ev_79d949712349b524138f071d935c93d159ab5a35b12049db7f03b8687d281298`
+records that ordering. The local 22-record bundle is
+`/tmp/pc3-sol02-subscription-rea-evidence.json`; the analysis session was closed.
+This is a static source join, independently corroborated by the runtime cases.
+
+Four fresh private, muted, networkless Wine runs use the same selected executable
+and controlled-map recipe identified above. The primary pair has 103 records per
+capture; a second pair has 101. Each pair agrees after removing its nonce/prefix.
+All four containers were independently verified exited with PID 0, and their raw
+hashes rechecked. The local witnesses and cleanup receipt are
+`/tmp/pc3-sol02-subscription-witness.json`,
+`/tmp/pc3-sol02-subscription-destroy-witness.json` and
+`/tmp/pc3-sol02-subscription-cleanup.json`. The primary raw digests are
+`dac2036fa62ca7dbfdc074a2a0e40ba8210d47e9838ee0b2f5e16c7afd051253` and
+`8f670023c50d7617350e8112346670dd7d387f76b643dadd0fdb97d3662c9674`;
+the destruction-variant digests are
+`7859825e5a7d8a4d1b056c42269cf85cf96c18336fe60d899ae418fd8a6a1d48` and
+`aebf5100c7d5ccb3670c6e5a1cc49c37a39cf1c447302c95ed37615e38ae46d7`.
+No original map bytes or captured contents are committed.
+
+The first collector expected the earlier experiment's END-with-suffix form,
+while this shorter experiment emitted an exact END marker. Its admission timed
+out after the complete capture existed. The corrected strict collector validated
+that retained capture offline, including identity, bit controls, record counters
+and END; the independently launched replica then passed normal admission. The
+original diagnostic remains explicit in
+`/tmp/pc3-sol02-subscription-a-corrected-admission.json`. No timeout was counted
+as a native pass.
+
+The observed cases distinguish subscription snapshots from the retained direct
+handler record:
+
+- Replacing A with B using `TimerStart` in an expiry subscription invokes B in
+  that same firing, with the new timer run already visible. Replacing A with a
+  null handler suppresses A in that firing.
+- Two subscriptions that replace A with B, then B with C, invoke C after both
+  subscriptions. The later scheduled firing also invokes C.
+- Destroying the timer in its subscription still invokes the retained direct
+  handler, while `GetExpiredTimer()` returns null. Installing B before destruction
+  invokes B with that null identity. Installing null before destruction invokes
+  no direct handler. The original preparation-time handler is therefore not a
+  sufficient fallback, and skipping every retired timer is also incorrect.
+- Periodic restart, pause, and pause/resume from subscriptions retain the
+  separately qualified timer lifecycle and query readpoints. The captures include
+  both short and long clock channels and bounded integer bit encodings; they do
+  not infer an application clock from formatted time strings.
+
+The joint called fix retains the latest handler in active expiry metadata and
+updates it only after successful `TimerStart` preparation, arena replacement and
+sequence commit. Destruction clears the active timer identity while preserving
+that retained handler, source and delivery sequence. The session resolves
+`current_timer_callback` after all subscription actions and invokes it once.
+`TimerExpiry.callback` remains historical preparation data for compatibility.
+Raw queries on retired timer aliases still refuse; previously parked thread
+identity rules are not broadly relaxed by this active-delivery correction.
+
+The runtime components have 17 passing cases, including handler/null replacement,
+replacement followed by destruction, unrelated timer isolation and rejected-start
+atomicity. The joint session change has 14 passing published-VM cases, including
+six new native-backed mutation variants, plus strict native/WASM checks and the
+WASM library/application checks recorded in
+`/tmp/pc3-sol10-current-handler-validation/`. This validates the called recreation
+path; the instrumented Wine observations remain bounded evidence rather than
+native Windows or complete tick parity. Yielding subscription mutation, arbitrary
+subscription-list edits, save-point projection and destroyed identities retained
+by earlier parked threads remain separate qualification work.

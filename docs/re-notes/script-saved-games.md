@@ -326,3 +326,79 @@ source hashes. Browser execution remains unchecked.
 
 Full SaveGame/LoadGame remains unsupported in the recreation. No save codec,
 VM checkpoint barrier or production save/menu route accompanies this foundation.
+
+### Retained expired-timer response
+
+Parked script-thread contexts now retain the expired-timer identity observed at
+their sleep. Resuming installs that response; returning or failing restores the
+caller's response. An explicitly retained null differs from having no override,
+so it cannot fall through to an unrelated current expiry. The getter retains its
+existing handle-family/lifetime validation. No timer query epoch or old clock
+point is installed by this context change.
+
+The three new regressions exercise nested trigger calls, a second sleep, the
+remaining action tail, explicit null under another prepared expiry, and failure
+unwinding through the real owned VM and host. They and all 13 filtered trigger/
+runtime tests pass. All eight affected published-session trigger tests also pass
+after merging the released baseline. Strict native/WebAssembly pcx-play
+all-target Clippy and the WebAssembly library build pass with unchanged source
+hashes. This fixes a script-visible continuation field; it does not implement
+durable world saves or establish every expired-timer lifetime behavior.
+
+### Handler selection after expiry subscriptions
+
+Replicated isolated original-client probes on the selected 1.29.2.9231 image
+show that a subscription's TimerStart replacement affects the direct handler of
+that same firing. A null replacement omits it, and the final replacement across
+multiple subscriptions wins. DestroyTimer instead retains the latest handler
+record while GetExpiredTimer becomes null. Replacing with a handler and then
+destroying still calls that handler; replacing with null and then destroying
+calls none. Local witnesses are `/tmp/pc3-sol02-subscription-witness.json` and
+`/tmp/pc3-sol02-subscription-destroy-witness.json`; both have identical replicated
+records and the cleanup receipt confirms all four private clients stopped.
+
+The production session now resolves that retained record after its subscription
+cursor finishes. A successful TimerStart updates the record after fallible
+preparation and commit; destruction clears only the active expired identity.
+Subscription snapshots and expiry source/sequence validation remain in place.
+Six published-session regressions exercise replacement, null, final replacement,
+destruction and both replacement/destruction combinations, including trigger
+context cleanup and a following independent expiry. Component regressions also
+check unrelated timer edits and failed-restart atomicity. The original prepared
+callback field remains historical diagnostic data, not the delivery read point.
+
+This adds another active-delivery field to the full-save inventory. Its saved
+projection and the pending Resume dispatch still need their own save/load
+qualification; the ordinary pending-expiry replay witness does not settle them.
+
+### Parked campaign AI and pending spell settlement
+
+A synthetic imported campaign AI stores a local computed from its player's gold,
+sleeps, writes that local plus one, sleeps again, and writes it plus two. Saving
+while the AI is parked preserves the initial value, then both uninterrupted and
+loaded runs produce those two later values. Restarting the AI entry function
+would produce a different value. A fresh original process loads the same save
+through the same map's bootstrap, with prior trace files excluded from its private
+profile. Its newly written final trace matches all 118 records from the
+same-process load. The verifier also checks map hashes, complete short records,
+the selected executable identity, private display and single null audio sink.
+Local evidence is
+`/tmp/pc3-sol10-save-probes-1794522021268861851/ai-witness-verification.json`.
+The fresh client was independently inspected stopped with process ID zero.
+This qualifies the parked AI program counter and retained local in this probe;
+it does not qualify every AI/native callback or original save-file interoperation.
+
+A separate same-process probe saves inside Slow's EFFECT callback before the
+native mana payment, buff, cooldown and backswing settlement. GAME_LOADED restores
+the prepayment mana, absent buff/cooldown and accepted cast order. All 128 loaded
+observations through two seconds after the saved callback retain that state,
+without another EFFECT, FINISH or ENDCAST. Its checked local receipt is
+`/tmp/pc3-sol04-slow-effect-save-receipt.json`. The active script's after-save tail
+also does not resume. This bounded result prevents assuming the pending-expiry
+timer replay policy applies to retained spell payments. Cold loading that spell
+state, later manual interruption and other ability families remain unqualified.
+
+The full-save root therefore needs family-specific native-job projections as
+well as parked map/AI continuations. Keeping a live retained payment for ordinary
+callback completion and deciding its saved projection are separate operations.
+No recreation SaveGame/LoadGame or menu route is enabled by these observations.

@@ -7304,3 +7304,32 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   `/tmp/pc3-next-integration-validation/`. Focused review closes the Slow
   failure-path findings. These checks do not establish complete missions,
   rendered/audio parity, full save/load or tick-identical execution.
+
+- 2026-11-13: Selected timer queries now cover resumed callback rearming,
+  periodic-bit clearing and source minimum/residual boundaries. Expiry
+  subscriptions choose the current direct handler after their actions; null
+  replacements suppress it, and destruction retains the latest handler while
+  exposing a null expired-timer identity. Four controlled original-client
+  captures support this readpoint. Published sessions retain delivery progress,
+  and parked script threads retain expired-timer identity independently of query
+  epochs. Full-save projection/storage and general yielding/tick parity remain
+  open. See [timer lifecycle](docs/re-notes/legacy-timer-start.md) and
+  [continuation evidence](docs/re-notes/script-saved-games.md).
+
+- 2026-11-13: Thematic plain/Ex starts, seeks and end share ordered state through
+  the application consumer, including repeated-path restart and session
+  retirement. Source operands determine default/sentinel offsets. The end-state
+  decision now stops an audible track when no track is wanted. Real Human01
+  entity tests and a verified private null-audio sink exercise restart/seek;
+  original-client audible/sample parity is not claimed. Regular music
+  play/volume/fades remain unsupported. See
+  [thematic music](docs/re-notes/script-thematic-music.md).
+
+  Independent combined checks pass 3,508 package tests, zero failed, 166 explicit
+  ignores; ten explicit source/native-witness gates, strict native/WASM core
+  Clippy and libraries, native application Clippy and WASM application all-target
+  compile checks pass. Application checks pass 26 session/callback cases,
+  28 timer-delivery cases, 22 audio unit cases and both entity/null-sink probes.
+  Every new current-handler case executes in both application targets. Final
+  source hashes are unchanged and focused review finds no remaining actionable
+  defect in this scope. Receipts: `/tmp/pc3-callback-music-final-validation/`.

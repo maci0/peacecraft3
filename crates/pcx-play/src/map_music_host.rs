@@ -1,5 +1,18 @@
 use super::{Error, Failure, ObjectHost};
 use pcx_script::Value;
+use std::time::Duration;
+
+#[path = "thematic_music_rules.rs"]
+pub(super) mod thematic_rules;
+
+/// One executed thematic start, with an independently ordered seek position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThematicMusicRequest {
+    pub path: String,
+    pub revision: u64,
+    pub position: Option<Duration>,
+    pub position_revision: u64,
+}
 
 /// Exact executed selection arguments, not an expanded playlist or playback state.
 #[derive(Debug, PartialEq, Eq)]
@@ -11,7 +24,9 @@ pub struct MapMusicSelection {
 pub(super) struct State {
     max_name_bytes: usize,
     selection: Option<MapMusicSelection>,
-    thematic: Option<String>,
+    thematic: Option<ThematicMusicRequest>,
+    thematic_rules: Option<thematic_rules::Rules>,
+    revision: u64,
 }
 
 const OPTIONAL: [(&str, &[&str]); 3] = [
@@ -19,6 +34,11 @@ const OPTIONAL: [(&str, &[&str]); 3] = [
     ("PlayThematicMusic", &["string"]),
     ("EndThematicMusic", &[]),
 ];
+impl State {
+    pub(super) fn has_thematic_rules(&self) -> bool {
+        self.thematic_rules.is_some()
+    }
+}
 impl ObjectHost {
     /// Admits selection storage only. Track resolution and music playback are
     /// separate consumers; the native's name/index conventions are not invented.
@@ -59,6 +79,8 @@ impl ObjectHost {
             max_name_bytes,
             selection: None,
             thematic: None,
+            thematic_rules: None,
+            revision: 0,
         });
         Ok(self)
     }
@@ -67,22 +89,132 @@ impl ObjectHost {
     }
     /// Executed `PlayThematicMusic` path until `EndThematicMusic`.
     pub fn thematic_music(&self) -> Option<&str> {
-        self.map_music.as_ref()?.thematic.as_deref()
+        Some(&self.thematic_music_request()?.path)
+    }
+    pub fn thematic_music_request(&self) -> Option<&ThematicMusicRequest> {
+        self.map_music.as_ref()?.thematic.as_ref()
+    }
+    pub fn with_thematic_music_rules(
+        mut self,
+        rules: thematic_rules::Rules,
+    ) -> Result<Self, Error> {
+        let fail = |reason| self.inner.error("PlayThematicMusicEx", reason);
+        if let Some(source) = self
+            .inner
+            .program
+            .natives()
+            .get("SetMapMusic")
+            .map(|native| &native.source)
+        {
+            for name in ["PlayThematicMusicEx", "SetThematicMusicPlayPosition"] {
+                if self
+                    .inner
+                    .program
+                    .natives()
+                    .get(name)
+                    .is_some_and(|native| &native.source != source)
+                {
+                    return Err(fail(Failure::Source));
+                }
+            }
+        }
+        let state = self
+            .map_music
+            .as_mut()
+            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?;
+        if state.thematic_rules.is_some() || state.revision != 0 {
+            return Err(fail(Failure::MusicState(
+                "thematic rules must precede playback",
+            )));
+        }
+        state.thematic_rules = Some(rules);
+        Ok(self)
+    }
+    pub(super) fn start_thematic(&mut self, path: &str, from: Option<i32>) -> Result<(), Error> {
+        let name = if from.is_some() {
+            "PlayThematicMusicEx"
+        } else {
+            "PlayThematicMusic"
+        };
+        let fail = |reason| self.inner.error(name, reason);
+        let state = self
+            .map_music
+            .as_mut()
+            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?;
+        if path.len() > state.max_name_bytes || path.contains('\0') {
+            return Err(fail(Failure::MusicState("invalid thematic music path")));
+        }
+        let position = match (&state.thematic_rules, from) {
+            (Some(rules), Some(from)) => rules.position(from),
+            (Some(rules), None) => rules.initial_position(),
+            (None, Some(_)) => {
+                return Err(fail(Failure::MusicState(
+                    "thematic music rules are missing",
+                )));
+            }
+            (None, None) => Ok(None),
+        }
+        .map_err(|_| fail(Failure::MusicState("thematic music offset is unsupported")))?;
+        let revision = state
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| fail(Failure::Budget("thematic music revisions")))?;
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(path.len())
+            .map_err(|_| fail(Failure::Capacity))?;
+        owned.push_str(path);
+        state.thematic = Some(ThematicMusicRequest {
+            path: owned,
+            revision,
+            position,
+            position_revision: revision,
+        });
+        state.revision = revision;
+        Ok(())
+    }
+    pub(super) fn seek_thematic(&mut self, millis: i32) -> Result<(), Error> {
+        let fail = |reason| self.inner.error("SetThematicMusicPlayPosition", reason);
+        let state = self
+            .map_music
+            .as_mut()
+            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?;
+        let rules = state
+            .thematic_rules
+            .as_ref()
+            .ok_or_else(|| fail(Failure::MusicState("thematic music rules are missing")))?;
+        let Some(request) = state.thematic.as_mut() else {
+            return Ok(());
+        };
+        let Some(position) = rules
+            .position(millis)
+            .map_err(|_| fail(Failure::MusicState("thematic music offset is unsupported")))?
+        else {
+            return Ok(());
+        };
+        let revision = state
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| fail(Failure::Budget("thematic music revisions")))?;
+        request.position = Some(position);
+        request.position_revision = revision;
+        state.revision = revision;
+        Ok(())
     }
     pub(super) fn map_music_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        let state = self.map_music.as_mut()?;
+        self.map_music.as_ref()?;
+        if let ("PlayThematicMusic", [Value::Str(path)]) = (name, args) {
+            return Some(self.start_thematic(path, None).map(|()| Value::Null));
+        }
+        let state = self.map_music.as_mut().expect("checked music admission");
         if OPTIONAL.iter().any(|&(n, _)| n == name) {
             return Some(match (name, args) {
                 ("ClearMapMusic", []) => {
                     state.selection = None;
-                    Ok(Value::Null)
-                }
-                ("PlayThematicMusic", [Value::Str(path)]) if path.len() <= state.max_name_bytes => {
-                    state.thematic = Some(path.clone());
                     Ok(Value::Null)
                 }
                 ("EndThematicMusic", []) => {
