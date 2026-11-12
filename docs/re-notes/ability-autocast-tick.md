@@ -64,10 +64,16 @@ comparator `0xb9cb20`, self fallback `0xbf7c10`, ranking switch `0xb811c0`.
 `0xbf7c20` first requires the common filter `0xb9ca70`. Unless ability flag 2
 is set, it requires `0x67eca0(target, 0, 0)`. It rejects an existing `Bslo`
 ability through `0x6d6570`. Owner flag 4 adds a target player-index comparison
-with `0x18`. Nonzero ranked DataC (`0x46eed0`) additionally requires
+with `0x18`. Ranked DataC equal to the selected zero (`0x46eed0`) additionally requires
 `0x67ea50`, resolves the target attack component's `+0x70` object, and requires
 its owner relation test `0x69bd70` against the caster. These extra conditions
 are separate from the ordinary spell's authored `targs`.
+
+The former nonzero-DataC description was reversed. The selected instruction
+branch and decompilation (`ev_e9dcd1079529fac94010a7c184f236580704a43cbe956974964894b80055ca9b`)
+accept a nonzero DataC after the preceding gates. The relation test's meaning
+must be established independently; it is not identified here as hostility.
+See [the bounded Slow observations](slow-autocast-qualification.md).
 
 `0x67eca0` delegates unit `+0x3f8` to `0xb66f10`. That function checks an
 ability counter at `+0x80`, optional flag `0x200`, disabled counts at `+0x3c`,

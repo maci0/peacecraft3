@@ -38,24 +38,39 @@ pub(super) struct UnitIds {
 }
 
 impl ObjectHost {
-    /// Admit `UnitId` when the program declares it as `constant native UnitId takes string
-    /// returns integer` on the source `CreateUnit` and the order lookups share. A program that
-    /// does not declare it keeps the native unsupported.
+    /// Admit the shared raw unit-name table for declared UnitId and type enumerators.
     pub fn with_unit_id_lookup(mut self, tables: Arc<DefaultTables>) -> Result<Self, Error> {
-        if self.inner.program.natives().get(NATIVE).is_none() {
-            return Ok(self);
+        let mut admitted = false;
+        for (name, parameters, result, constant) in [
+            (NATIVE, &["string"][..], "integer", true),
+            (
+                "GroupEnumUnitsOfType",
+                &["group", "string", "boolexpr"][..],
+                "nothing",
+                false,
+            ),
+            (
+                "GroupEnumUnitsOfTypeCounted",
+                &["group", "string", "boolexpr", "integer"][..],
+                "nothing",
+                false,
+            ),
+        ] {
+            let natives = self.inner.program.natives();
+            let Some(declaration) = natives.get(name) else {
+                continue;
+            };
+            Self::contract(&self.inner, name, parameters, result, constant, None)?;
+            if natives
+                .get("CreateUnit")
+                .is_some_and(|create| create.source != declaration.source)
+            {
+                return Err(self.inner.error(name, Failure::Source));
+            }
+            admitted = true;
         }
-        Self::contract(&self.inner, NATIVE, &["string"], "integer", true, None)?;
-        let natives = self.inner.program.natives();
-        let source = &natives
-            .get(NATIVE)
-            .ok_or_else(|| self.inner.error(NATIVE, Failure::Signature))?
-            .source;
-        if natives
-            .get("CreateUnit")
-            .is_some_and(|create| &create.source != source)
-        {
-            return Err(self.inner.error(NATIVE, Failure::Source));
+        if !admitted {
+            return Ok(self);
         }
         self.unit_ids = Some(UnitIds {
             tables,
@@ -106,12 +121,36 @@ impl ObjectHost {
         Ok(names)
     }
 
+    pub(super) fn unit_name_id(&mut self, text: &str) -> Result<Option<[u8; 4]>, Error> {
+        if self.unit_ids.as_ref().is_some_and(|s| s.names.is_none()) {
+            let table = self.unit_name_table()?;
+            if let Some(state) = self.unit_ids.as_mut() {
+                state.names = Some(table);
+            }
+        }
+        let names = self
+            .unit_ids
+            .as_ref()
+            .and_then(|state| state.names.as_ref())
+            .ok_or_else(|| self.unit_id_error("name table is not built"))?;
+        match names.get(&text.to_ascii_lowercase()) {
+                None => Ok(None),
+                Some(Owner::Unit(rawcode)) => Ok(Some(*rawcode)),
+                Some(Owner::Shared) => Err(self.unit_id_error(format!(
+                    "unit name {text:?} is shared by several unit rows; the registration order that picks the owner is not decoded"
+                ))),
+            }
+    }
+
     pub(super) fn unit_id_native(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
-        if name != NATIVE || self.unit_ids.is_none() {
+        if name != NATIVE
+            || self.unit_ids.is_none()
+            || self.inner.program.natives().get(NATIVE).is_none()
+        {
             return None;
         }
         Some((|| {
@@ -120,24 +159,8 @@ impl ObjectHost {
                 [Value::Null] => return Ok(Value::Int(0)),
                 _ => return Err(self.inner.error(NATIVE, Failure::Signature)),
             };
-            if self.unit_ids.as_ref().is_some_and(|s| s.names.is_none()) {
-                let table = self.unit_name_table()?;
-                if let Some(state) = self.unit_ids.as_mut() {
-                    state.names = Some(table);
-                }
-            }
-            let names = self
-                .unit_ids
-                .as_ref()
-                .and_then(|state| state.names.as_ref())
-                .ok_or_else(|| self.unit_id_error("name table is not built"))?;
-            match names.get(&text.to_ascii_lowercase()) {
-                None => Ok(Value::Int(0)),
-                Some(Owner::Unit(rawcode)) => Ok(Value::Int(i32::from_be_bytes(*rawcode))),
-                Some(Owner::Shared) => Err(self.unit_id_error(format!(
-                    "unit name {text:?} is shared by several unit rows; the registration order that picks the owner is not decoded"
-                ))),
-            }
+            self.unit_name_id(text)
+                .map(|id| Value::Int(id.map(i32::from_be_bytes).unwrap_or(0)))
         })())
     }
 }

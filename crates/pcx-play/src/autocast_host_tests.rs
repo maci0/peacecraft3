@@ -141,6 +141,7 @@ fn open_setup_vm_with_code(
         on: registry.id(on).unwrap(),
         off: registry.id(off).unwrap(),
         enable,
+        tick: None,
     };
     let autocast = crate::autocast_rules::Rules {
         origin: registry.binding().origin.clone(),
@@ -158,6 +159,9 @@ fn open_setup_vm_with_code(
         .collect(),
         groups: vec![(code, GROUP), (*b"X003", GROUP)],
         alarm_code: Some(*b"X005"),
+        mana_minimum: None,
+        clock: None,
+        slow: None,
     };
     let mut rules = hero_rules().0;
     rules.binding.image_sha256 = autocast.image_sha256;
@@ -813,4 +817,54 @@ fn ignore_alarm_on_a_unit_without_the_alarm_ability_returns_false_and_changes_no
 fn modified_alarm(vm: &mut Vm, u: HandleId) -> bool {
     let record = vm.host().inner.executed_unit(u).unwrap();
     record.abilities.as_ref().unwrap().alarm_modified()
+}
+
+#[test]
+fn default_autocast_deadline_bounds_large_clock_advances_and_survives_refusal() {
+    let (mut vm, unit) = open("X001", true);
+    let now = vm.host().inner.timer_game_time().unwrap();
+    let due = now + f64::from(FIRST_TICK);
+    let horizon = due + 20.;
+    assert_eq!(
+        vm.host()
+            .inner
+            .next_timer_activity_boundary(due.next_down()),
+        None
+    );
+    assert_eq!(
+        vm.host().inner.next_timer_activity_boundary(horizon),
+        Some(due)
+    );
+    let before = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert!(
+        advance(&mut vm, due)
+            .unwrap_err()
+            .contains("automatic cast of X002")
+    );
+    assert_eq!(vm.host().inner.timer_game_time(), Some(due));
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap(), &before);
+    assert_eq!(
+        vm.host().inner.next_timer_activity_boundary(horizon),
+        Some(due)
+    );
+    assert_eq!(vm.call("off", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.host().inner.next_timer_activity_boundary(horizon), None);
+}
+
+#[test]
+fn removed_autocast_unit_does_not_force_a_clock_boundary() {
+    let (mut vm, unit) = open("X001", true);
+    let now = vm.host().inner.timer_game_time().unwrap();
+    assert_eq!(
+        vm.host().inner.next_timer_activity_boundary(now + 20.),
+        Some(now + f64::from(FIRST_TICK))
+    );
+    vm.host()
+        .inner
+        .native("RemoveUnit", &[Value::Handle(unit)])
+        .unwrap();
+    assert_eq!(
+        vm.host().inner.next_timer_activity_boundary(now + 20.),
+        None
+    );
 }

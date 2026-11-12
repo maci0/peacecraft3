@@ -10,6 +10,7 @@ pub(super) struct Enumeration {
     candidates: Vec<HandleId>,
     next: usize,
     predicate: FunctionId,
+    count: Option<crate::unit_placement::group_count::Cursor>,
 }
 
 impl ExecutedUnit {
@@ -77,6 +78,31 @@ impl ObjectHost {
                 "nothing",
             ),
             (
+                "GroupEnumUnitsOfType",
+                &["group", "string", "boolexpr"][..],
+                "nothing",
+            ),
+            (
+                "GroupEnumUnitsOfTypeCounted",
+                &["group", "string", "boolexpr", "integer"][..],
+                "nothing",
+            ),
+            (
+                "GroupEnumUnitsInRectCounted",
+                &["group", "rect", "boolexpr", "integer"][..],
+                "nothing",
+            ),
+            (
+                "GroupEnumUnitsInRangeCounted",
+                &["group", "real", "real", "real", "boolexpr", "integer"][..],
+                "nothing",
+            ),
+            (
+                "GroupEnumUnitsInRangeOfLocCounted",
+                &["group", "location", "real", "boolexpr", "integer"][..],
+                "nothing",
+            ),
+            (
                 "GroupEnumUnitsInRange",
                 &["group", "real", "real", "real", "boolexpr"][..],
                 "nothing",
@@ -87,10 +113,8 @@ impl ObjectHost {
                 "nothing",
             ),
         ] {
-            if matches!(
-                name,
-                "GroupEnumUnitsOfPlayer" | "GroupEnumUnitsInRange" | "GroupEnumUnitsInRangeOfLoc"
-            ) && self.inner.program.natives().get(name).is_none()
+            if !matches!(name, "GetUnitX" | "GetUnitY" | "GroupEnumUnitsInRect")
+                && self.inner.program.natives().get(name).is_none()
             {
                 continue;
             }
@@ -215,11 +239,138 @@ impl ObjectHost {
         Ok((group, found))
     }
 
+    fn begin_type_count_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        callbacks: bool,
+    ) -> Result<Option<ScriptCall>, Error> {
+        let (name, base, counted, arity) = match name {
+            "GroupEnumUnitsOfType" => ("GroupEnumUnitsOfType", "GroupEnumUnitsOfType", false, 3),
+            "GroupEnumUnitsOfTypeCounted" => (
+                "GroupEnumUnitsOfTypeCounted",
+                "GroupEnumUnitsOfType",
+                true,
+                4,
+            ),
+            "GroupEnumUnitsInRectCounted" => (
+                "GroupEnumUnitsInRectCounted",
+                "GroupEnumUnitsInRect",
+                true,
+                4,
+            ),
+            "GroupEnumUnitsInRangeCounted" => (
+                "GroupEnumUnitsInRangeCounted",
+                "GroupEnumUnitsInRange",
+                true,
+                6,
+            ),
+            "GroupEnumUnitsInRangeOfLocCounted" => (
+                "GroupEnumUnitsInRangeOfLocCounted",
+                "GroupEnumUnitsInRangeOfLoc",
+                true,
+                5,
+            ),
+            _ => return Ok(None),
+        };
+        if self.unit_placement.is_none() || self.inner.program.natives().get(name).is_none() {
+            return Ok(None);
+        }
+        let result = (|| {
+            if args.len() != arity {
+                return Err(self.inner.error(name, Failure::Signature));
+            }
+            let query_args = if counted {
+                &args[..args.len() - 1]
+            } else {
+                args
+            };
+            let (group, candidates) = match base {
+                "GroupEnumUnitsOfType" => {
+                    let rawcode = match &args[1] {
+                        Value::Null => return Ok(Some(ScriptCall::Return(Value::Null))),
+                        Value::Str(text) => self.unit_name_id(text)?,
+                        _ => return Err(self.inner.error(name, Failure::Signature)),
+                    };
+                    let Some(rawcode) = rawcode else {
+                        return Ok(Some(ScriptCall::Return(Value::Null)));
+                    };
+                    if matches!(args[0], Value::Null) {
+                        return Ok(Some(ScriptCall::Return(Value::Null)));
+                    }
+                    let group = self.inner.id(self.group_index(&args[0], name)?, name)?;
+                    let mut candidates = Vec::new();
+                    for (index, entry) in self.inner.arena.iter().enumerate() {
+                        // shortcut: creation-order snapshot; native all-unit traversal/mutation order remains unqualified.
+                        if matches!(entry, Entry::Unit { record } if record.definition.rawcode == rawcode)
+                        {
+                            candidates
+                                .try_reserve(1)
+                                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                            candidates.push(self.inner.id(index, name)?);
+                        }
+                    }
+                    (group, candidates)
+                }
+                "GroupEnumUnitsInRect" => {
+                    if matches!(args[0], Value::Null) {
+                        return Ok(Some(ScriptCall::Return(Value::Null)));
+                    }
+                    self.group_index(&args[0], name)?;
+                    let rect = match &args[1] {
+                        Value::Null => return Ok(Some(ScriptCall::Return(Value::Null))),
+                        Value::Handle(rect) => *rect,
+                        _ => return Err(self.inner.error(name, Failure::Signature)),
+                    };
+                    self.rectangle_candidates(&args[0], rect)?
+                }
+                _ => {
+                    let Some(query) = self.range_candidates(base, query_args)? else {
+                        return Ok(Some(ScriptCall::Return(Value::Null)));
+                    };
+                    query
+                }
+            };
+            let predicate = match query_args.last() {
+                Some(Value::Null) => None,
+                Some(Value::Handle(filter)) if callbacks => {
+                    Some(match self.inner.entry(*filter)? {
+                        Entry::Filter { .. } => self.filter_callback(*filter)?.function,
+                        Entry::Condition { .. } => self.condition_callback(*filter)?.function,
+                        _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                    })
+                }
+                _ => return Err(self.inner.error(name, Failure::Signature)),
+            };
+            let limit = if counted {
+                let Some(Value::Int(count)) = args.last() else {
+                    return Err(self.inner.error(name, Failure::Signature));
+                };
+                Some(*count)
+            } else {
+                None
+            };
+            let cursor = self
+                .unit_placement
+                .as_ref()
+                .expect("checked placement")
+                .rules()
+                .group_count()
+                .map_err(|e| self.inner.error(name, Failure::UnitActivity(e.to_string())))?
+                .cursor(limit);
+            self.begin_unit_enumeration_counted(name, group, candidates, predicate, Some(cursor))
+        })();
+        result.map_err(|e: Error| self.inner.error(name, e.failure))
+    }
+
     pub(super) fn begin_rectangle_call(
         &mut self,
         name: &str,
         args: &[Value],
     ) -> Result<Option<ScriptCall>, Error> {
+        if let Some(call) = self.begin_type_count_call(name, args, true)? {
+            return Ok(Some(call));
+        }
         let name = match name {
             "GroupEnumUnitsInRect" => "GroupEnumUnitsInRect",
             "GroupEnumUnitsOfPlayer" => "GroupEnumUnitsOfPlayer",
@@ -370,6 +521,34 @@ impl ObjectHost {
         candidates: Vec<HandleId>,
         predicate: Option<FunctionId>,
     ) -> Result<Option<ScriptCall>, Error> {
+        self.begin_unit_enumeration_counted(name, group, candidates, predicate, None)
+    }
+
+    fn begin_unit_enumeration_counted(
+        &mut self,
+        name: &'static str,
+        group: HandleId,
+        mut candidates: Vec<HandleId>,
+        predicate: Option<FunctionId>,
+        count: Option<crate::unit_placement::group_count::Cursor>,
+    ) -> Result<Option<ScriptCall>, Error> {
+        if count.is_some_and(|c| c.full()) {
+            candidates.clear();
+        } else if predicate.is_none()
+            && let Some(mut cursor) = count
+        {
+            let length = candidates
+                .iter()
+                .take_while(|_| {
+                    if cursor.full() {
+                        return false;
+                    }
+                    cursor.insert();
+                    true
+                })
+                .count();
+            candidates.truncate(length);
+        }
         let Some(predicate) = predicate.filter(|_| !candidates.is_empty()) else {
             let retained = self.members.iter().filter(|(g, _)| *g != group).count();
             if candidates.len() > self.group_limit.unwrap_or(0).saturating_sub(retained) {
@@ -399,6 +578,7 @@ impl ObjectHost {
             candidates,
             next: 1,
             predicate,
+            count,
         }));
         Ok(Some(ScriptCall::Call(predicate)))
     }
@@ -424,7 +604,8 @@ impl ObjectHost {
             Entry::Group { live: true } => {}
             _ => return Err(self.inner.error(name, Failure::Identity)),
         }
-        if accepted && !self.members.contains(&(group, candidate)) {
+        let inserted = accepted && !self.members.contains(&(group, candidate));
+        if inserted {
             if self.members.len() >= self.group_limit.unwrap_or(0) {
                 return Err(self.inner.error(name, Failure::Budget("group membership")));
             }
@@ -436,7 +617,10 @@ impl ObjectHost {
         let Some(NativeCallback::Rectangle(frame)) = self.callbacks.last_mut() else {
             unreachable!("active rectangle predicate");
         };
-        if frame.next < frame.candidates.len() {
+        if inserted && let Some(count) = &mut frame.count {
+            count.insert();
+        }
+        if frame.next < frame.candidates.len() && !frame.count.is_some_and(|count| count.full()) {
             frame.next += 1;
             return Ok(ScriptCall::Call(frame.predicate));
         }
@@ -450,6 +634,14 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.unit_placement.as_ref()?;
+        match self.begin_type_count_call(name, args, false) {
+            Ok(Some(ScriptCall::Return(value))) => return Some(Ok(value)),
+            Err(error) => return Some(Err(error)),
+            Ok(Some(ScriptCall::Call(_) | ScriptCall::Spawn(_))) => {
+                unreachable!("direct enumeration has no predicate")
+            }
+            Ok(None) => {}
+        }
         if name == "GetFilterUnit" {
             self.inner.program.natives().get(name)?;
             return Some(if args.is_empty() {

@@ -7265,3 +7265,42 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   exact polling/ownership-event timing, automatic reacquisition and transfer
   cancellation remain open. See
   [construction matrix](docs/re-notes/unit-construction.md).
+
+- 2026-11-13: Type enumeration and four counted variants now share canonical
+  groups and VM predicates. Limits use the decoded unsigned insertion quota;
+  zero bypasses the limit. Literal/computed `TRIGSTR` type names stay raw on
+  the current VM, and type-only admission does not admit undeclared `UnitId`.
+  Native spatial order and mutation semantics remain unqualified. See
+  [group enumeration](docs/re-notes/slice-group-enum.md).
+
+- 2026-11-13: Slow now delivers CHANNEL/CAST synchronously, delivers EFFECT
+  before payment/buff commitment, and finishes after the source backswing.
+  Interruption and callback edits retain the qualified payment semantics.
+  Resource checks precede cast publication and art allocation; three public
+  failure regressions cover exhausted event, handle and buff capacities,
+  including unchanged permanent art identities/history and old Slow state.
+  Source-derived autocast tick, minimum-mana and simple-clock bindings plus
+  mandatory due boundaries are integrated; actual automatic acquisition and
+  canonical turning are still open. See
+  [Slow qualification](docs/re-notes/slow-autocast-qualification.md).
+
+- 2026-11-13: `MeleeDifficulty` captures source-qualified per-owner input at AI
+  creation, independently of script globals and later input refreshes. Actual
+  supplied `common.ai` build-helper calls pass. `R2S`/`R2SW` use source-derived
+  formatting through the VM and normal campaign reader: all 194 original-client
+  expressions match. Timer query epochs/cache reproduce all 216 native witness
+  bit fields across the qualified pause/resume/restart and segment cases;
+  delivery scheduling is unchanged. Source queue production/wrap and further
+  callback lifecycle work remain separate. See
+  [AI difficulty](docs/re-notes/campaign-ai-melee-difficulty.md),
+  [formatting](docs/re-notes/script-string-natives.md) and
+  [timer queries](docs/re-notes/legacy-timer-start.md).
+
+  Independent combined validation passes 3,494 package tests, zero failed,
+  163 explicit ignores; all seven explicit local-image/native-witness gates,
+  strict native/WASM all-target/all-feature Clippy, both libraries, all 26
+  application session/callback cases and the application rebuild pass. Rust
+  hashes remain unchanged through checks. Receipts:
+  `/tmp/pc3-next-integration-validation/`. Focused review closes the Slow
+  failure-path findings. These checks do not establish complete missions,
+  rendered/audio parity, full save/load or tick-identical execution.

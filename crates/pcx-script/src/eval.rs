@@ -75,6 +75,15 @@ pub trait RealOps {
     fn literal(&self, spelling: &str) -> Result<f32, String>;
     fn integer(&self, value: i32) -> Result<f32, String>;
     fn binary(&self, op: BinOp, left: f32, right: f32) -> Result<Value, String>;
+    /// Native real formatting. `None` selects the source's R2S defaults;
+    /// `Some((width, precision))` supplies R2SW arguments.
+    fn real_to_string(
+        &self,
+        _value: f32,
+        _width_precision: Option<(i32, i32)>,
+    ) -> Result<String, String> {
+        Err("selected runtime has no qualified real formatter".into())
+    }
 }
 
 /// A host native calling back into the same script thread and global state.
@@ -2394,6 +2403,25 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     format!("I2S takes an integer, got {}", v.type_name()),
                 )),
             },
+            NativeImpl::RealToString | NativeImpl::RealToStringWidth => {
+                let (value, width_precision) = match args {
+                    [Value::Real(value)] if which == NativeImpl::RealToString => (*value, None),
+                    [Value::Real(value), Value::Int(width), Value::Int(precision)]
+                        if which == NativeImpl::RealToStringWidth =>
+                    {
+                        (*value, Some((*width, *precision)))
+                    }
+                    _ => return Err(crate::Error::run(span, "invalid real formatter arguments")),
+                };
+                self.host
+                    .real_ops()
+                    .ok_or_else(|| {
+                        crate::Error::run(span, "real formatting requires a selected runtime")
+                    })?
+                    .real_to_string(value, width_precision)
+                    .map(Value::Str)
+                    .map_err(|why| crate::Error::run(span, why))
+            }
             NativeImpl::StringLength => {
                 let text = match &args[0] {
                     Value::Null => return Ok(Value::Int(0)),

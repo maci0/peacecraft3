@@ -14,6 +14,13 @@ pub(crate) struct Run {
     sequence: u64,
     /// Elapsed seconds held by `PauseTimer` until `ResumeTimer`.
     paused: Option<f64>,
+    query: Option<QueryRun>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct QueryRun {
+    epoch: crate::script_numeric::timer_query::Epoch,
+    cached_remaining: f32,
 }
 
 pub(super) struct State {
@@ -28,6 +35,8 @@ struct Expired {
     timer: Option<HandleId>,
     sequence: u64,
     timeout: f64,
+    query_now: Option<f32>,
+    query_epoch: Option<crate::script_numeric::timer_query::Epoch>,
 }
 
 /// One prepared expiry. Finish it even when its callback fails.
@@ -59,7 +68,9 @@ impl ObjectHost {
             .as_ref()
             .is_some_and(|state| state.active.is_some())
     }
-    /// Opt in before script initialization. No wall clock, speed or pause policy is inferred.
+    /// Opt in before script initialization. A numeric policy with timer-query
+    /// rules enables the reviewed readpoints; without them this is the explicit
+    /// partial reconstruction mode. No application clock or speed is inferred.
     pub fn with_timer_runtime(mut self, now: f64) -> Result<Self, Error> {
         let fail = |reason| self.inner.error("TimerStart", reason);
         if self.timers.is_some() || !now.is_finite() {
@@ -164,7 +175,9 @@ impl ObjectHost {
             self.next_training_completion(until),
             self.next_construction_completion(until),
             self.next_mirror_boundary(until),
+            self.next_slow_boundary(until),
             self.next_morph_boundary(until),
+            self.next_autocast_boundary(until),
         ]
         .into_iter()
         .flatten()
@@ -248,7 +261,7 @@ impl ObjectHost {
         else {
             return Err(fail(Failure::TimerArguments));
         };
-        self.timer_run(*timer, name)?;
+        let previous = self.timer_run(*timer, name)?;
         let timeout = match timeout {
             Value::Real(value) => f64::from(*value),
             Value::Int(value) => f64::from(*value as f32),
@@ -275,7 +288,48 @@ impl ObjectHost {
             }
             _ => return Err(fail(Failure::TimerArguments)),
         };
-        let run = self.new_timer_run(timeout, *periodic, handler, name)?;
+        let mut run = self.new_timer_run(timeout, *periodic, handler, name)?;
+        run.query = self
+            .numeric
+            .as_ref()
+            .and_then(|n| n.timer_queries().map(|rules| (n, rules)))
+            .map(|(numeric, rules)| {
+                rules
+                    .begin(
+                        numeric,
+                        self.timer_query_now(),
+                        timeout as f32,
+                        usize::from(u16::MAX),
+                    )
+                    .map(|epoch| QueryRun {
+                        epoch,
+                        cached_remaining: rules.zero(),
+                    })
+                    .map_err(|_| {
+                        fail(Failure::TimerState(
+                            "unsupported or over-budget native timer query",
+                        ))
+                    })
+            })
+            .transpose()?;
+        if let Some(query) = &mut run.query
+            && let Some(previous) = previous
+        {
+            let previous = previous.query.ok_or_else(|| {
+                fail(Failure::TimerState(
+                    "query policy attached after timer start",
+                ))
+            })?;
+            if !self
+                .numeric
+                .as_ref()
+                .and_then(|n| n.timer_queries())
+                .is_some_and(|rules| rules.check_epoch(previous.epoch))
+            {
+                return Err(fail(Failure::TimerState("timer query policy changed")));
+            }
+            query.cached_remaining = previous.cached_remaining;
+        }
         if let Entry::Timer { run: slot, .. } = self.inner.entry_mut(*timer)? {
             *slot = Some(run);
         }
@@ -300,6 +354,44 @@ impl ObjectHost {
             .as_ref()
             .ok_or_else(|| fail(Failure::TimerState("not admitted")))?
             .now;
+        if let (Some(numeric), Some(query)) = (self.numeric.as_ref(), run.query.as_mut()) {
+            let rules = numeric
+                .timer_queries()
+                .ok_or_else(|| fail(Failure::TimerState("timer query policy changed")))?;
+            if !rules.check_epoch(query.epoch) {
+                return Err(fail(Failure::TimerState("timer query policy changed")));
+            }
+            let native_now = self.timer_query_now();
+            match (name, run.paused, run.deadline) {
+                ("PauseTimer", None, Some(_)) => {
+                    let epoch = self
+                        .timers
+                        .as_ref()
+                        .and_then(|s| s.active)
+                        .filter(|a| a.timer == Some(timer) && a.sequence == run.sequence)
+                        .and_then(|a| a.query_epoch)
+                        .unwrap_or(query.epoch);
+                    query.cached_remaining = rules
+                        .remaining(numeric, epoch, native_now)
+                        .map_err(|_| fail(Failure::TimerState("unsupported native timer query")))?;
+                }
+                ("ResumeTimer", Some(_), _) => {
+                    query.epoch = rules
+                        .begin(
+                            numeric,
+                            native_now,
+                            query.cached_remaining,
+                            usize::from(u16::MAX),
+                        )
+                        .map_err(|_| {
+                            fail(Failure::TimerState(
+                                "unsupported or over-budget native timer query",
+                            ))
+                        })?;
+                }
+                _ => {}
+            }
+        }
         match (name, run.paused, run.deadline) {
             ("PauseTimer", None, Some(_)) => {
                 run.paused = Some((now - run.start).clamp(0.0, run.timeout));
@@ -355,11 +447,22 @@ impl ObjectHost {
             handler,
             sequence,
             paused: None,
+            query: None,
         })
     }
 
     pub(super) fn commit_timer_sequence(&mut self, run: &Run) {
         self.timers.as_mut().expect("admitted above").sequence = run.sequence;
+    }
+
+    fn timer_query_now(&self) -> f32 {
+        let state = self.timers.as_ref().expect("admitted timer runtime");
+        // shortcut: outside timer callbacks the caller supplies the clock; qualify
+        // the application clock producer before claiming frame-level parity.
+        state
+            .active
+            .and_then(|a| a.query_now)
+            .unwrap_or(state.now as f32)
     }
 
     fn timer_query(&self, name: &str, args: &[Value]) -> Result<Value, Error> {
@@ -387,6 +490,54 @@ impl ObjectHost {
         let Some(run) = self.timer_run(*timer, name)? else {
             return Ok(Value::Real(0.0));
         };
+        if let Some(query) = run.query {
+            let numeric = self
+                .numeric
+                .as_ref()
+                .ok_or_else(|| fail(Failure::TimerState("timer query policy changed")))?;
+            let rules = numeric
+                .timer_queries()
+                .ok_or_else(|| fail(Failure::TimerState("timer query policy changed")))?;
+            if !rules.check_epoch(query.epoch) {
+                return Err(fail(Failure::TimerState("timer query policy changed")));
+            }
+            let result = if name == "TimerGetTimeout" {
+                Ok(run.timeout as f32)
+            } else if run.deadline.is_none() {
+                if name == "TimerGetRemaining" {
+                    Ok(query.cached_remaining)
+                } else {
+                    rules.inactive_elapsed(numeric, run.timeout as f32, query.cached_remaining)
+                }
+            } else {
+                let epoch = state
+                    .active
+                    .filter(|a| a.timer == Some(*timer) && a.sequence == run.sequence)
+                    .and_then(|a| a.query_epoch)
+                    .unwrap_or(query.epoch);
+                rules
+                    .remaining(numeric, epoch, self.timer_query_now())
+                    .and_then(|remaining| {
+                        if name == "TimerGetRemaining" {
+                            Ok(remaining)
+                        } else {
+                            rules.elapsed(numeric, epoch, remaining)
+                        }
+                    })
+            };
+            return result
+                .map(Value::Real)
+                .map_err(|_| fail(Failure::TimerState("unsupported native timer query")));
+        }
+        if self
+            .numeric
+            .as_ref()
+            .is_some_and(|n| n.timer_queries().is_some())
+        {
+            return Err(fail(Failure::TimerState(
+                "query policy attached after timer start",
+            )));
+        }
         let elapsed = if let Some(held) = run.paused {
             held
         } else if run.deadline.is_none() {
@@ -464,6 +615,44 @@ impl ObjectHost {
         if *budget == 0 {
             return Err(fail(Failure::Budget("timer delivery")));
         }
+        if let Some(query) = run.query
+            && !self
+                .numeric
+                .as_ref()
+                .and_then(|n| n.timer_queries())
+                .is_some_and(|rules| rules.check_epoch(query.epoch))
+        {
+            return Err(fail(Failure::TimerState("timer query policy changed")));
+        }
+        let query_now = run.query.map(|q| q.epoch.expiry);
+        let mut query_epoch = run.query.map(|q| q.epoch);
+        if run.periodic
+            && let Some(query) = &mut run.query
+        {
+            let numeric = self
+                .numeric
+                .as_ref()
+                .ok_or_else(|| fail(Failure::TimerState("timer query policy changed")))?;
+            let rules = numeric
+                .timer_queries()
+                .ok_or_else(|| fail(Failure::TimerState("timer query policy changed")))?;
+            let next = rules
+                .begin(
+                    numeric,
+                    query.epoch.expiry,
+                    run.timeout as f32,
+                    usize::from(u16::MAX),
+                )
+                .map_err(|_| {
+                    fail(Failure::TimerState(
+                        "unsupported or over-budget native timer query",
+                    ))
+                })?;
+            if query.epoch.segmented() {
+                query_epoch = Some(next);
+            }
+            query.epoch = next;
+        }
         let triggers = self.prepare_timer_triggers(source, timed)?;
         let sequence = state
             .sequence
@@ -487,6 +676,8 @@ impl ObjectHost {
             timer: (!timed).then_some(source),
             sequence,
             timeout: run.timeout,
+            query_now,
+            query_epoch,
         });
         match &mut self.inner.arena[index] {
             Entry::Timer { run: slot, .. } => *slot = Some(run),

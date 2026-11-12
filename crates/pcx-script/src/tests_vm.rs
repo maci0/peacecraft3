@@ -655,7 +655,14 @@ fn numeric_conversions_and_string_length_are_the_natives_the_table_runs() {
         Some(crate::natives::NativeImpl::StringLength)
     );
     assert_eq!(crate::natives::implemented("i2r"), None);
-    assert_eq!(crate::natives::implemented("R2S"), None);
+    assert_eq!(
+        crate::natives::implemented("R2S"),
+        Some(crate::natives::NativeImpl::RealToString)
+    );
+    assert_eq!(
+        crate::natives::implemented("R2SW"),
+        Some(crate::natives::NativeImpl::RealToStringWidth)
+    );
     assert_eq!(crate::natives::implemented("SubString"), None);
 }
 
@@ -2107,4 +2114,104 @@ endfunction
             .message
             .contains("invalid escape")
     );
+}
+
+#[test]
+fn real_formatter_builtins_preserve_selected_conversion_and_argument_read_point() {
+    use std::cell::RefCell;
+    #[derive(Debug, PartialEq)]
+    struct Call {
+        bits: u32,
+        dimensions: Option<(i32, i32)>,
+    }
+    #[derive(Default)]
+    struct Runtime {
+        calls: RefCell<Vec<Call>>,
+    }
+    impl crate::RealOps for Runtime {
+        fn literal(&self, _: &str) -> Result<f32, String> {
+            Err("no fixture literals".into())
+        }
+        fn integer(&self, value: i32) -> Result<f32, String> {
+            assert_eq!(value, 7);
+            Ok(0.5)
+        }
+        fn binary(&self, _: crate::ast::BinOp, _: f32, _: f32) -> Result<Value, String> {
+            Err("no fixture operators".into())
+        }
+        fn real_to_string(&self, value: f32, args: Option<(i32, i32)>) -> Result<String, String> {
+            self.calls.borrow_mut().push(Call {
+                bits: value.to_bits(),
+                dimensions: args,
+            });
+            Ok("source result".into())
+        }
+    }
+    impl crate::Host for Runtime {
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("formatter is builtin")
+        }
+        fn real_ops(&self) -> Option<&dyn crate::RealOps> {
+            Some(self)
+        }
+    }
+    let source = "native R2S takes real value returns string\nnative R2SW takes real value, integer width, integer precision returns string\nfunction Default takes integer value returns string\nreturn R2S(value)\nendfunction\nfunction Width takes real value, integer width, integer precision returns string\nreturn R2SW(value,width,precision)\nendfunction\n";
+    let program = program_of(source);
+    let mut vm = Vm::new(&program, Runtime::default());
+    assert_eq!(
+        vm.call("Default", &[Value::Int(7)]).unwrap(),
+        Value::Str("source result".into())
+    );
+    assert_eq!(
+        vm.call(
+            "Width",
+            &[Value::Real(-0.0), Value::Int(-8), Value::Int(19)]
+        )
+        .unwrap(),
+        Value::Str("source result".into())
+    );
+    assert_eq!(
+        *vm.host().calls.borrow(),
+        [
+            Call {
+                bits: 0.5f32.to_bits(),
+                dimensions: None
+            },
+            Call {
+                bits: (-0.0f32).to_bits(),
+                dimensions: Some((-8, 19))
+            }
+        ]
+    );
+}
+
+#[test]
+fn real_formatter_refuses_unbound_runtime_and_mismatched_native_signatures() {
+    let program = program_of(
+        "native R2S takes real value returns string\nfunction f takes real value returns string\nreturn R2S(value)\nendfunction\n",
+    );
+    let mut vm = Vm::new(&program, crate::NullHost);
+    assert!(
+        vm.call("f", &[Value::Real(0.5)])
+            .unwrap_err()
+            .message
+            .contains("selected runtime")
+    );
+    for declaration in [
+        "native R2S takes integer value returns string\n",
+        "native R2S takes real value returns real\n",
+        "native R2SW takes real value, integer width returns string\n",
+        "native R2SW takes real value, integer width, real precision returns string\n",
+    ] {
+        let program = program_of(declaration);
+        let name = if declaration.contains("R2SW") {
+            "R2SW"
+        } else {
+            "R2S"
+        };
+        assert!(matches!(
+            program.natives().call(name),
+            Some(crate::natives::NativeCall::SignatureMismatch(..))
+        ));
+    }
 }
