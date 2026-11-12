@@ -1,5 +1,6 @@
 //! Shared producer queues and guard replacement through canonical unit creation.
 use super::{Entry, Error, EventSubject, ExecutedUnit, Failure, ObjectHost};
+use crate::training_rules::RefundKind;
 use pcx_objects::editor::{FieldKind, FieldSource, SlkId};
 use pcx_script::{HandleId, Value, value::FunctionId};
 use pcx_sim::world::{Definition, FieldProblem, FieldValue};
@@ -36,6 +37,18 @@ struct Training {
     finish: f64,
     through: f64,
     pause: Option<(f64, f64)>,
+}
+
+impl Training {
+    fn refund_kind(&self) -> RefundKind {
+        if self.structure_upgrade {
+            RefundKind::StructureUpgrade
+        } else if self.research.is_some() {
+            RefundKind::Research
+        } else {
+            RefundKind::Training
+        }
+    }
 }
 
 #[derive(Default)]
@@ -577,8 +590,8 @@ impl ObjectHost {
         }
         let paused = record.paused_since.is_some();
         let refund = [
-            self.training_refund(job.gold, job.research.is_some())?,
-            self.training_refund(job.lumber, job.research.is_some())?,
+            self.training_refund(job.gold, job.refund_kind())?,
+            self.training_refund(job.lumber, job.refund_kind())?,
         ];
         let cancel = self.prepare_job_events(&job, producer, "CANCEL")?;
         let mut next = None;
@@ -664,7 +677,7 @@ impl ObjectHost {
             owner = Some(job.owner);
             for (sum, cost) in refund.iter_mut().zip([job.gold, job.lumber]) {
                 *sum = sum
-                    .checked_add(self.training_refund(cost, job.research.is_some())?)
+                    .checked_add(self.training_refund(cost, job.refund_kind())?)
                     .ok_or_else(|| self.training_error("death refund overflow"))?;
             }
             if job.active {
@@ -830,8 +843,8 @@ impl ObjectHost {
                 lumber,
                 food,
                 duration,
-                refund_gold: self.training_refund(gold, false)?,
-                refund_lumber: self.training_refund(lumber, false)?,
+                refund_gold: self.training_refund(gold, RefundKind::Training)?,
+                refund_lumber: self.training_refund(lumber, RefundKind::Training)?,
                 unavailable,
             });
         }
@@ -871,8 +884,8 @@ impl ObjectHost {
                 active: job.active,
                 gold: job.gold,
                 lumber: job.lumber,
-                refund_gold: self.training_refund(job.gold, job.research.is_some())?,
-                refund_lumber: self.training_refund(job.lumber, job.research.is_some())?,
+                refund_gold: self.training_refund(job.gold, job.refund_kind())?,
+                refund_lumber: self.training_refund(job.lumber, job.refund_kind())?,
                 food: job.food,
                 duration: job.duration,
                 finish: job.active.then_some(job.finish),
@@ -1207,8 +1220,8 @@ impl ObjectHost {
             // `0xac3070` issues the upgrade when no builder was found and the
             // request is not `ugol`. Idle is an empty queue and no construction
             // site (the counters at `+0x3c` and `+0x40` are not decoded). The
-            // target's `Requires` stands in for check slot `0x328`. Cost and
-            // `bldtm` are the target unit's. Death refunds the training share.
+            // target's `Requires` stands in for check slot `0x328`. Source cost
+            // mode prices the job; its source upgrade rate controls refunds.
             // Completion sets the new type's base pools; researched bonuses are
             // not rebased onto that base.
             if requested == *b"ugol" || !self.training_prerequisites_met(&definition, owner)? {
@@ -1239,6 +1252,10 @@ impl ObjectHost {
                 let Some(producer) = chosen else {
                     return Ok(false);
                 };
+                let [gold, lumber] = self.structure_upgrade_costs(
+                    &self.executed_unit(producer)?.definition,
+                    [gold, lumber],
+                )?;
                 if self.training.jobs.len() >= self.inner.max_handles {
                     return Err(self.inner.error(
                         "SetProduce",
