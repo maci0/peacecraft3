@@ -370,3 +370,35 @@ callback field remains historical diagnostic data, not the delivery read point.
 This adds another active-delivery field to the full-save inventory. Its saved
 projection and the pending Resume dispatch still need their own save/load
 qualification; the ordinary pending-expiry replay witness does not settle them.
+
+### Parked campaign AI and pending spell settlement
+
+A synthetic imported campaign AI stores a local computed from its player's gold,
+sleeps, writes that local plus one, sleeps again, and writes it plus two. Saving
+while the AI is parked preserves the initial value, then both uninterrupted and
+loaded runs produce those two later values. Restarting the AI entry function
+would produce a different value. A fresh original process loads the same save
+through the same map's bootstrap, with prior trace files excluded from its private
+profile. Its newly written final trace matches all 118 records from the
+same-process load. The verifier also checks map hashes, complete short records,
+the selected executable identity, private display and single null audio sink.
+Local evidence is
+`/tmp/pc3-sol10-save-probes-1794522021268861851/ai-witness-verification.json`.
+The fresh client was independently inspected stopped with process ID zero.
+This qualifies the parked AI program counter and retained local in this probe;
+it does not qualify every AI/native callback or original save-file interoperation.
+
+A separate same-process probe saves inside Slow's EFFECT callback before the
+native mana payment, buff, cooldown and backswing settlement. GAME_LOADED restores
+the prepayment mana, absent buff/cooldown and accepted cast order. All 128 loaded
+observations through two seconds after the saved callback retain that state,
+without another EFFECT, FINISH or ENDCAST. Its checked local receipt is
+`/tmp/pc3-sol04-slow-effect-save-receipt.json`. The active script's after-save tail
+also does not resume. This bounded result prevents assuming the pending-expiry
+timer replay policy applies to retained spell payments. Cold loading that spell
+state, later manual interruption and other ability families remain unqualified.
+
+The full-save root therefore needs family-specific native-job projections as
+well as parked map/AI continuations. Keeping a live retained payment for ordinary
+callback completion and deciding its saved projection are separate operations.
+No recreation SaveGame/LoadGame or menu route is enabled by these observations.
