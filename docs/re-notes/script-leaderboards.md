@@ -1,5 +1,22 @@
 # Script leaderboards
 
+## Item label color handler (2026-11-12)
+
+Native-code observation on the SHA-256-pinned 1.29.2.9231 executable:
+registration at `49ffc3..49ffd2` binds `LeaderboardSetItemLabelColor` to
+`4a1fe0`. The handler resolves the board with `4822b0`, packs the low byte
+of each supplied channel, obtains its presentation with `511080`, and calls
+`64eea0` with the supplied row index. That routine resolves the indexed row
+through `52d670`, writes its label color at row offset `68`, and invalidates
+the list through virtual slot `134`. It leaves other rows and value colors
+alone. Missing native objects/rows return without mutation.
+
+`LeaderboardSetItemLabelColor` remains unsupported in the host. The attempted
+sibling implementation did not complete the required gates and was discarded.
+A future implementation must account for native channel truncation and
+absent-object/row no-op behavior, or explicitly retain those limits. No rendered
+fidelity or successful Human08 replay is established here.
+
 The opt-in `ObjectHost::with_leaderboards` implements the Human02 board path:
 `CreateLeaderboard`, `DestroyLeaderboard`, `LeaderboardDisplay`,
 `IsLeaderboardDisplayed`, `LeaderboardGetItemCount`,

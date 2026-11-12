@@ -1082,3 +1082,25 @@ the decoded numbers refuses.
 
 Probe: OrcX03b from OrcX03a runs the init triggers past `war3map.j:2015` and passes,
 `executed_units=261` (the parent's 246 first).
+
+## Horizon harness evidence and unresolved gaps (2026-11-12)
+
+Shipped-script inspection of all fourteen indexed interludes establishes an
+exit path through `SetNextLevelBJ` and `CustomVictoryBJ`. Examples: Human02Interlude
+skip action at script lines 635–639 executes its victory trigger (1689–1690);
+Human05Interlude SceneEscape at 406–410 executes victory (950–951);
+Human06Interlude skip directly selects the next level and victory at 498–501.
+HumanX03Interlude's skip at 996–1003 executes Run Next Level (1018–1019).
+These are shipped-script observations, not original-client runtime observations.
+Extracted scripts remain local in `.scratch/interludes/`.
+
+The attempted harness patches did not complete the required gates and were
+discarded for the release. The probe still requires restored player control,
+so interlude exit paths remain a harness gap. Locked campaigns still need the
+existing enqueue probe path instead of fresh-profile mission-button activation.
+Neither gap establishes a gameplay failure. Human08's item label color refusal
+remains unsupported; its native handler is recorded in `script-leaderboards.md`.
+The all-chapter sweep never completed its build, so no horizon result table or
+post-fix chapter pass is claimed. The first Clippy attempt found a missing
+test-helper type qualification; the corrected attempt and both suites were
+stopped before completion. No implementation or tests from that attempt ship.
