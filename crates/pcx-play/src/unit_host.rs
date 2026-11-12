@@ -1792,7 +1792,12 @@ impl ObjectHost {
         } else {
             None
         };
-        if self.executed_unit(*unit)?.construction.is_some() {
+        if self
+            .executed_unit(*unit)?
+            .construction
+            .as_ref()
+            .is_some_and(|site| !site.owner_transfer_supported())
+        {
             return Err(self.inner.error(
                 SET_OWNER,
                 Failure::UnitState("incomplete construction ownership transfer is not qualified"),
