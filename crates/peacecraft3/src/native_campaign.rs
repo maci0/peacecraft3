@@ -1887,6 +1887,35 @@ pub(crate) mod tests {
         opening_skip_replay(1200);
     }
 
+    /// Describes the first recorded `EndGame`/`ChangeLevel` request: the authored next map for a
+    /// level change, or the local player's recorded game result for `EndGame`.
+    fn requested_exit(session: &mut MapScriptSession<MapStartupHost>) -> Option<String> {
+        let victory = session.global("PLAYER_GAME_RESULT_VICTORY");
+        let defeat = session.global("PLAYER_GAME_RESULT_DEFEAT");
+        let objects = session.host().unwrap().objects();
+        let request = objects.game_exit_requests().first()?.clone();
+        if let Some(next) = request.next_level {
+            return Some(format!(
+                "ChangeLevel next_map={next:?} score_screen={}",
+                request.score_screen
+            ));
+        }
+        let local = objects.local_player_settings().map(|p| p.identity);
+        let result = local
+            .and_then(|id| objects.player_removal_state()?.get(id))
+            .map(|record| pcx_script::Value::Handle(record.game_result));
+        let kind = match result {
+            Some(r) if Some(&r) == victory.as_ref() => "victory",
+            Some(r) if Some(&r) == defeat.as_ref() => "defeat",
+            Some(_) => "other result",
+            None => "no recorded result",
+        };
+        Some(format!(
+            "EndGame ({kind}) score_screen={}",
+            request.score_screen
+        ))
+    }
+
     fn opening_skip_replay(gameplay_ticks: u32) {
         let mut app = started_app();
         let mut session = app
@@ -1895,6 +1924,7 @@ pub(crate) mod tests {
         let start = session.host().unwrap().objects().timer_game_time().unwrap();
         let mut cinematic = false;
         let mut controlled = false;
+        let mut exit = None;
         // Diagnostic input schedule and work bound, not an authored cinematic duration.
         for tick in 1..=120 {
             session
@@ -1906,7 +1936,8 @@ pub(crate) mod tests {
             controlled = cinematic
                 && state.control_enabled == Some(true)
                 && state.interface_visible == Some(true);
-            if controlled {
+            exit = requested_exit(&mut session);
+            if controlled || exit.is_some() {
                 break;
             }
             if cinematic {
@@ -1923,10 +1954,16 @@ pub(crate) mod tests {
             cinematic,
             "the unchanged mission must enter its opening cinematic"
         );
+        // An interlude's skip ends the map instead of returning control; a mission that
+        // neither returns control nor requests an exit still fails here.
         assert!(
-            controlled,
-            "ordinary Escape events must return the mission to player control"
+            controlled || exit.is_some(),
+            "ordinary Escape events must return the mission to player control or request the map's exit"
         );
+        if let Some(exit) = exit {
+            println!("campaign skip ended in a map exit: {exit}");
+            return;
+        }
         let objects = session.host().unwrap().objects();
         let control_time = objects.timer_game_time().unwrap();
         println!(
@@ -2324,6 +2361,13 @@ pub(crate) mod tests {
         let (install_dir, map, expansion) = selected_chapter_env();
         let mut app = chapter_app(install_dir, expansion);
         let (campaign, mission, indexed_recipe) = locate_chapter(&app, &map);
+        // A fresh profile opens only the default_open campaign, and launch_mission skips the
+        // buttons of the rest. Test-only: those chapters are enqueued as the locked startup
+        // probe does, so every chapter can be driven past its launch.
+        if !app.world().resource::<Chapters>().campaigns[campaign].default_open {
+            drop(app);
+            return enqueued_chapter_app(selected_chapter_env().0, &map, expansion).0;
+        }
         // Activate is the widget's keyboard/pointer boundary; physical picking is
         // a separate gate. The mission button is the only launch trigger; merely
         // selecting a campaign never launches.
