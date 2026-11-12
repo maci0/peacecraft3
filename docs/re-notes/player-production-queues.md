@@ -413,8 +413,11 @@ and `ev_1d940d7af3445d1869dcb0a4e2a1c796bd49d473be09674839ff7a7a708f3be4`.
 `UpgradeInProgressIdChange` also selects native pending-form/pool paths in
 `0xb63580`, `0xb638f0`, `0xb63ad0` and `0xb63d30`. The captured Melee_V0 control
 uses the old-form pending path; shipped Custom_V0 enables the sibling path.
-That sibling's public alias, mana, researched pool bonuses and interruptions
-remain to be qualified. The current recreation does not yet bind that selector;
-its existing old-form implementation must not be read as proof for every source
-profile. Upgrade start/cancel/finish event publication and public numeric cancel
+That sibling's public type query, mana, researched pool bonuses and interruptions
+remain to be qualified. The recreation now binds that selector from the selected image and ordered
+profiles. Its old-form implementation admits an explicitly disabled selector;
+enabled, missing and malformed values refuse before price, credit or queue
+mutation. This is an admission guard, not an implementation of the enabled
+pending-form path. Training and research refunds remain independent. Positive
+synthetic policies explicitly select the disabled mode. Upgrade start/cancel/finish event publication and public numeric cancel
 dispatch also remain open; the prior native capture records their contract.

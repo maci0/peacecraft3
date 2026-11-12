@@ -113,6 +113,7 @@ fn fixture_with_training_configured(
                 refund_rate,
                 relative_cost: true,
                 damage_penalty: false,
+                in_progress_id_change: false,
             }),
         ),
         admit_numeric,
@@ -1567,6 +1568,7 @@ fn ai_production_fixture_with_refund(
                 refund_rate: 0.37,
                 relative_cost: true,
                 damage_penalty: false,
+                in_progress_id_change: false,
             }),
         ),
         true,
@@ -2571,6 +2573,7 @@ fn structure_upgrade_source_cost_mode_and_rate_survive_pause_cancel_and_death_on
                 refund_rate: 0.23,
                 relative_cost,
                 damage_penalty: false,
+                in_progress_id_change: false,
             };
             let (mut vm, actor, producer) = upgrade_fixture(Some(policy));
             let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
@@ -2646,6 +2649,7 @@ fn structure_upgrade_missing_policy_and_unqualified_damage_refuse_before_debit()
             refund_rate: 0.23,
             relative_cost: false,
             damage_penalty: true,
+            in_progress_id_change: false,
         }),
     ] {
         let (mut vm, actor, producer) = upgrade_fixture(policy);
@@ -2673,6 +2677,7 @@ fn structure_upgrade_checks_the_derived_delta_for_funds_and_completes_after_sour
         refund_rate: 0.23,
         relative_cost: false,
         damage_penalty: false,
+        in_progress_id_change: false,
     };
     let (mut vm, actor, producer) = upgrade_fixture(Some(policy));
     let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
@@ -2752,6 +2757,7 @@ fn upgrade_pool_fixture_with_edits(
             refund_rate: 0.23,
             relative_cost: false,
             damage_penalty: false,
+            in_progress_id_change: false,
         }),
         |mut host| {
             // Synthetic source rounder; production reads this policy from the selected image.
@@ -3060,6 +3066,7 @@ fn structure_upgrade_changed_death_award_or_flight_class_refuses_before_queue_or
                 refund_rate: 0.23,
                 relative_cost: false,
                 damage_penalty: false,
+                in_progress_id_change: false,
             }),
             |mut host| {
                 let catalog = host.unit_catalog().unwrap();
@@ -3106,6 +3113,7 @@ fn upgrade_credit_fixture() -> (Vm, HandleId, HandleId) {
             refund_rate: 0.23,
             relative_cost: false,
             damage_penalty: false,
+            in_progress_id_change: false,
         }),
         |mut host| {
             let catalog = host.unit_catalog().unwrap();
@@ -3265,4 +3273,36 @@ fn structure_upgrade_signed_credit_missing_numeric_or_bounds_and_overflow_are_at
         assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), gold);
         assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), lumber);
     }
+}
+
+#[test]
+fn structure_upgrade_pending_form_mode_refuses_before_credit_or_queue_mutation() {
+    let (mut vm, actor, producer) = upgrade_fixture_configured(
+        Some(crate::training_rules::UpgradePolicy {
+            refund_rate: 0.23,
+            relative_cost: false,
+            damage_penalty: false,
+            in_progress_id_change: true,
+        }),
+        |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradeCreditCatalog(catalog)));
+            host
+        },
+    );
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 0, 16);
+    let h = &mut vm.host().inner;
+    let before = h.executed_unit(producer).unwrap().clone();
+    let error = h
+        .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("UpgradeInProgressIdChange"),
+        "{error}"
+    );
+    assert_eq!(h.executed_unit(producer).unwrap(), &before);
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 16);
 }
