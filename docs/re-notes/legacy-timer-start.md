@@ -609,3 +609,126 @@ path; the instrumented Wine observations remain bounded evidence rather than
 native Windows or complete tick parity. Yielding subscription mutation, arbitrary
 subscription-list edits, save-point projection and destroyed identities retained
 by earlier parked threads remain separate qualification work.
+
+## Script and AI sleep clock domains (2026-11-13)
+
+This qualification uses the selected 1.29.2.9231 executable, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+It does not replace a real-time deadline with a game-time point. The source
+joins below are distinct from the bounded Wine observations and from the
+pending recreation integration.
+
+### Native code
+
+`TriggerSleepAction` registration `0x49cb25` selects `0x4ae850`, which calls
+`0x8cd210` with the requested duration and zero userdata. That setter marks the
+current VM frame at `+0x34` and stores the raw duration at `+0x40`; it does not
+schedule a timer. The ordinary zero-userdata return path reaches
+`0x4fbdd0` through `0x4fb026`. It retrieves that duration with `0x8cc3d0` and
+calls `0x7fbf80` at `0x4fbe31`, selecting real time with the final argument one.
+The enclosing trigger-execution constructor `0x4f9610` installs the extended
+timer vtable `0xe7baf8` at object `+0x34`. This is an extended real-queue sleep,
+not a simple game timer or a measured minimum wait.
+
+AI `Sleep` registration `0xab60d7` selects `0xab7770`. Its `0xac3e20` helper
+marks a VM sleep with zero duration, then stores the actual requested duration
+in the active AI thread event's FloatMini at `+0x24`, whose value is at `+0x28`.
+After the VM returns status three, `0xab5640` schedules that value through
+`0xad3560`, event `0xd01bf`, final selector zero. Constructor `0xad33a0`
+installs the same extended timer vtable at event `+0x44`. AI Sleep therefore
+uses the extended game queue. Status two and AI-paused wake retries use the
+separate source retry period; they must preserve their retained VM ticket.
+
+The extended start routine `0x7fb820` selects `AGILE_DATA+0x44` for zero and
+`+0x48` otherwise. It decomposes long waits into its source-derived segments.
+`0x7fb940` clamps each current entry using its image operand and soft-adds it
+to the selected queue's current word. Its policy must not inherit the simple
+timer's whole-period cap. Each pending entry and remaining segment count belongs
+to its own queue; `0x7f9360` rebases that queue's retained requests on cycle wrap.
+
+The producer `0x5aefd0` dispatches game substeps (`0x40090092`) first, then the
+idle event (`0x40090093`), then the asynchronous event (`0x40090094`) when raw
+counter elapsed is nonzero. The latter converts the unsigned counter difference
+to nearest binary32 and multiplies it with the image operand referenced by
+`MULSS` at `0x5af4ff`. This is hardware arithmetic, separate from the queue's
+soft addition/subtraction. `0x5ea690` forwards that payload to `0x7f4820` when
+`CGameUI+0x298` is clear. That routine checks its independent real-queue pause
+counter, splits updates using the initializer at `0x40d060`, soft-subtracts
+consumed chunks, and advances the real queue. Neither its input nor its phase
+can be inferred from a nominal game Duration.
+
+Script `PauseGame` calls `0x5f1460` with argument three zero. The UI real-time
+pause field consequently remains clear. The network state changes through
+`0x5ac440` to pausing; the producer completes its current quantum before entering
+paused state. Subsequent game quanta stop while asynchronous real events can
+continue. The UI/menu pause branch uses different arguments and is not covered
+by the script-pause observation.
+
+The local REA bundle is `/tmp/pc3-sol02-sleep-source-evidence.json`. The raw
+initializer window is checked as a virtual-address byte range: a decompiler
+request for an unrecognized small initializer may fall back to a file offset
+and must not be treated as that initializer's source.
+
+### Bounded original-client observations
+
+Two fresh normal runs each passed 147 strict records: 24 map sleeps across two
+start phases, 12 sequential AI sleeps, and 36 timers started at the resulting
+wake readpoints. Requests include zero, a small negative, small positive values,
+non-dyadic periods and exact dyadic controls. Every query uses integer-encoded
+binary32 sign/exponent/mantissa with independently verified controls, alongside
+short and long elapsed clocks. AI reports through distinct player-state EQUAL
+events whose map actions read the clocks and start the diagnostic timers; these
+are event observations, not direct AI timer-query calls.
+
+The two normal raw trace hashes are
+`7a8866bd8a3f514f19e5a4b98d07935b0d72f6ffac42a40fba8f3d529d4a930b`
+and `10906d9dae4ad37b2dcddf8d77125c9cc8628e89a9b126614a2f100b84be1222`.
+Both map start phases can wake at the same game-queue readpoint: their different
+game-time starts occur while the real-queue origin remains unchanged. This does
+not establish a universal wait quantum, or a minimum from the displayed elapsed
+values. AI's small/zero/negative requests and non-dyadic requests independently
+exercise the game-queue minimum and addition readpoints.
+
+Two further runs each passed 150 records including script pause, real sleep and
+script unpause. Each also completed 2,048 read-only memory sampling attempts;
+all 6,146 JSON records per sampler passed ordinal/schema/bound checks. In one
+stable bracket sequence the game queue held `1.2249988317489624` for 595 host
+milliseconds while the real queue advanced from `1.2729973793029785` to
+`1.8639944791793823`. The sleeping map thread woke and unpaused the game; the AI
+signal stayed unchanged over that pause. The game queue's final in-flight
+quantum is observable, so pause must not retroactively erase that work.
+
+One supplemental run passed the same 150 script records and all 8,194 sampler
+records. All 2,048 counter observations read the QPC selection flag as zero;
+`0x796ca0` therefore used its GetTickCount fallback in this run. The alternative
+QPC scale initialization remains unqualified. Corrected passive physics-context
+reads are separate observations and establish no general callback cadence here.
+The earlier physics-context cohort failed its identity check and remains unknown.
+
+The local witness is `/tmp/pc3-sol02-sleep-witness.json`; independent container
+cleanup receipts are `/tmp/pc3-sol02-sleep-v2-cleanup.json`,
+`/tmp/pc3-sol02-sleep-v3-cleanup.json` and
+`/tmp/pc3-sol02-sleep-v4-cleanup.json`. All admitted runs used a private Docker
+Xvfb, a verified null sink, no host audio devices and no network, then exited
+with PID zero and no OOM. An earlier AI diagnostic using direct map timer/preload
+natives crashed before a trace and is explicitly excluded, with its failure
+retained at `/tmp/pc3-sol02-sleep-v1-failed-status.json`. Original assets, private
+maps, raw captures and generated copies remain local.
+
+### Required called integration
+
+A map sleep must retain a raw real-queue epoch, even when it is requested inside
+a selected game callback. At its real wake, the real callback selects its real
+entry; `TimerStart` and other game-clock consumers still see the current game
+queue, after the producer's game work for that iteration. An AI sleep retains a
+game-queue epoch and resumes at its selected game entry. Re-parking, errors,
+wraps and continuation capture must preserve and unwind those distinct scopes.
+
+The existing extended-entry arithmetic can be reused. A coherent producer must
+carry independently qualified raw real elapsed, game pacing/speed state and
+source event ordering. Treating two equal Durations as evidence for both clocks,
+casting a legacy deadline to a raw point, or introducing a fitted wait quantum
+would lose the observed behavior. This section qualifies the domains and bounded
+readpoints; it does not claim that the recreation's parked map/AI wake integration,
+UI pause, QPC path, large negative waits, arbitrary yielding or full tick parity
+is complete.
