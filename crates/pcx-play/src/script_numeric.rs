@@ -48,6 +48,8 @@ pub enum Problem {
     Image(#[source] NeutralError),
     #[error("unsupported selected numeric encoding or call relationship")]
     Shape,
+    #[error("native game clock: {0}")]
+    GameClock(String),
 }
 
 #[derive(Debug)]
@@ -60,6 +62,7 @@ pub struct NumericPolicy {
     math: Option<crate::script_math::ScriptMath>,
     formatting: Option<formatting::Formatter>,
     timer_queries: Option<timer_query::Rules>,
+    native_clock: Option<crate::native_game_clock::Rules>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -209,6 +212,7 @@ impl NumericPolicy {
             math: None,
             formatting: None,
             timer_queries: None,
+            native_clock: None,
         })
     }
 
@@ -276,6 +280,33 @@ impl NumericPolicy {
     }
     pub(crate) fn timer_queries(&self) -> Option<&timer_query::Rules> {
         self.timer_queries.as_ref()
+    }
+    /// Bind the general game-queue producer independently of ability admission.
+    pub fn with_native_game_clock(
+        mut self,
+        image: &[u8],
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        self.native_clock = Some(
+            crate::native_game_clock::Rules::read(image, &self, budget).map_err(|problem| {
+                Error {
+                    source_context: self.origin().source.clone(),
+                    problem: Problem::GameClock(problem),
+                }
+            })?,
+        );
+        Ok(self)
+    }
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_native_game_clock_fixture(
+        mut self,
+        rules: crate::native_game_clock::Rules,
+    ) -> Self {
+        self.native_clock = Some(rules);
+        self
+    }
+    pub(crate) fn native_game_clock(&self) -> Option<crate::native_game_clock::Rules> {
+        self.native_clock
     }
     pub(crate) fn equality_threshold(&self) -> f32 {
         self.equality_threshold

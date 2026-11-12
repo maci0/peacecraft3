@@ -907,3 +907,6 @@ mod game_pause;
 
 #[path = "script_game_exit_cases.rs"]
 pub(crate) mod game_exit;
+
+#[path = "native_clock_cases.rs"]
+mod native_clock_cases;

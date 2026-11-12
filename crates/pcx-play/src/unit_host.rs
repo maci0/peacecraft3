@@ -97,7 +97,7 @@ pub(super) enum FormChange {
 
 pub(super) struct PreparedUnit {
     pub(super) record: ExecutedUnit,
-    autocast: Vec<([u8; 4], f32)>,
+    autocast: Vec<super::PreparedDefaultAutocast>,
     placement: Option<crate::unit_placement::Prepared>,
     guard: Option<super::unit_guards::UnitGuard>,
     inventory: Option<super::item_creation::CachedInventory>,
@@ -2900,12 +2900,8 @@ impl ObjectHost {
             },
             NATIVE,
         )?;
-        for (alias, delay) in autocast {
-            self.autocast_ticks.push((
-                id,
-                alias,
-                birth.game_time.expect("autocast clock") + f64::from(delay),
-            ));
+        for (alias, at, native) in autocast {
+            self.autocast_ticks.push((id, alias, at, native));
         }
         self.publish_unit_guard(id, guard);
         if let Some(prepared) = placement {

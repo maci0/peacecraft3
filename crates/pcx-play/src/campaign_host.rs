@@ -370,6 +370,61 @@ pub fn apply_after_config(
     vm.host().inner.apply_post_config(context, &resolved)
 }
 
+/// Pace a fresh selected-source session by whole native sub-steps; retain fractional carry.
+/// Sessions without the general source policy keep the existing caller-time API.
+pub fn advance_paced_tick(
+    session: &mut crate::map_script_session::MapScriptSession<MapStartupHost>,
+    elapsed: std::time::Duration,
+    legacy_until: f64,
+    max_expiries: usize,
+) -> Result<usize, crate::map_script_session::TimerSessionError> {
+    use crate::map_script_session::ScriptSessionError;
+    let host = session.host().ok_or(ScriptSessionError::NoSession)?;
+    let paused = host.objects().game_paused() == Some(true);
+    let mut work = 65536;
+    let admitted = host.objects_mut().pace_native_game_clock(
+        if paused {
+            std::time::Duration::ZERO
+        } else {
+            elapsed
+        },
+        &mut work,
+    )?;
+    if !admitted {
+        return advance_tick(session, legacy_until, max_expiries);
+    }
+    let mut delivered = 0;
+    let mut budget = max_expiries;
+    if !paused {
+        while let Some((segment, until)) = session
+            .host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects_mut()
+            .next_native_game_segment(&mut work)?
+        {
+            delivered += session.advance_native_timers(until, &mut budget, &mut work)?;
+            if session
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .game_paused()
+                == Some(true)
+            {
+                session.sample_admitted_vision()?;
+                return Ok(delivered);
+            }
+            session
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects_mut()
+                .finish_native_game_segment(segment, &mut work)?;
+        }
+        session.advance_unit_ranges(65536)?;
+    }
+    session.sample_admitted_vision()?;
+    Ok(delivered)
+}
+
 /// Advances the admitted session's clock to `until`: timers and expiries first, then unit
 /// ranges unless the script paused the game. The application's frame loop and the headless
 /// startup both step through this function.
