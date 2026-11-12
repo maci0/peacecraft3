@@ -92,3 +92,86 @@ The later [grouped timed-life integration](campaign-ai-group-timed-life.md)
 enables these queries over canonical first-captain membership. It includes
 matched original-client count observations and a bounded lifecycle/movement
 consumer; general roster operations and exact native formation remain open.
+
+## Recruitment type-pass correction
+
+Both `AddDefenders` and `AddAssault` use the shared captain recruitment path.
+It now preserves separate requested-type and directed-alternate passes. The
+previous combined predicate could choose an earlier-created alternate ahead of
+an equally healthy exact candidate. It could also decrement a zero request for
+an alternate member when the native exact-type completion branch would already
+have returned true.
+
+Selected-code evidence is the same Legacy 1.29.2.9231 image identified above.
+A fresh bounded GNU objdump disassembly of `0xabb130..0xabb258` confirms these
+joins: exact existing-member count at `0xabb1aa`, completion at `0xabb1b4`,
+alternate count at `0xabb1c7`, then completion at `0xabb1d1`. Calls at
+`0xabb1de`, `0xabb1f9`, `0xabb212` and `0xabb22c` pass respectively healthy
+exact, healthy alternate, fallback exact and fallback alternate. Each intervening
+zero branch reaches the shared successful return. The bounded member counter
+`0xabc8c0..0xabca5d` still stops at zero after its decrement at `0xabca08`;
+there is no general nonpositive-request shortcut.
+
+The policy reader now checks those type, mode and completion-branch relationships
+in the selected instruction window. Alias rawcodes, threshold and decrement
+remain decoded operands. Synthetic malformed-pass mutations refuse admission.
+The REA Ghidra provider was unavailable because its configured local installation
+was incomplete; the direct disassembly used the supplied executable without
+executing it or acquiring assets.
+
+Canonical synthetic regressions use a nonstock directed alias, exact candidates
+created after alternates, all four health combinations, repeated requests,
+death/recruitment, attack count/readiness/fullness, and unsupported exact-candidate
+atomic refusal. They share the existing guard/combat fixture and production
+recruitment function; distinct synthetic types are created through the public
+`CreateUnit` path with that fixture's admitted movement/combat metadata. They do not establish native callback cadence
+or original-client runtime parity. The earlier original-client defender observations
+remain the runtime evidence for ordinary count/partial/negative behavior; no new
+original-client pass-order observation was run.
+
+
+## Retained inactive toggle admission
+
+The unchanged Undead04 five-minute continuation refused `ReturnGuardPosts` for
+AI player 9, canonical unit `HandleId(2731)` (`hhes`), at control time 1.5.
+The recorded current order was zero and the retained ability state was
+`Some((Adef, false))`; cached, summoned, paused and effect-history checks were
+negative. The local receipt is
+`/tmp/pc3-horizon-sweep/roc-Undead04.w3m/test.log`.
+
+`unit_host` initializes admitted toggle-capable definitions with an inactive
+state at creation. That field's presence therefore does not establish active
+ability behavior. Shared movement/speed and flee admission already test its
+active bit. Captain recruitment and explicit guard return now use that same
+distinction: inactive retained state permits the ordinary canonical path;
+active behavior remains an explicit unsupported state. This is a recreation
+admission correction supported by the source/default relationship and existing
+shared activity semantics, not a new native guard-controller parity claim.
+
+The regression admits a nonstock Defend alias and technology from synthetic
+tables, creates its unit through the normal catalog, switches it on/off through
+`IssueImmediateOrder`, and checks both guard return and recruitment. Active
+refusal preserves the record and membership; after switching off, routing and
+membership succeed with the retained inactive state intact. No ability state,
+unit, order ID or authored value is invented to advance the mission. The actual
+Undead04 continuation still needs rerunning after integration.
+
+
+## Correction validation
+
+The isolated worktree build passes all five named recruitment/toggle regressions
+and ten captain-policy tests; its explicitly selected original-image reader also
+passes. The existing guard suite passes 131 tests, including the new regressions,
+and the AI caller suite passes 52 tests with one unrelated asset-gated test
+ignored. Strict native and WASM Clippy with all targets and warnings denied pass,
+as do both `pcx-play` library builds. Tests ran with a verified private offscreen
+display and null audio sink. Formatting and diff checks pass.
+
+Receipts remain local under `/tmp/pc3-lane07-validation/5/`, with exact commands,
+worktree path and exit codes in `results.json`. This run uses an isolated target
+at `/tmp/pc3-fidelity-sol61-07-target`; the earlier shared-target result omitted
+new tests and is not accepted as branch validation. Test-only debug symbols were
+disabled for `pcx-play`; assertions remained enabled. Earlier fixture setup
+failures are retained in the preceding local runs. No new original-client or
+browser runtime observation was made, and no complete campaign or tick-parity
+claim follows from these checks.
