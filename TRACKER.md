@@ -7381,3 +7381,12 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   saves, complete missions, rendered/audio parity or tick-identical execution.
   Native queue pacing adoption is held until script and AI wake points are
   qualified and connected; timer-only callback qualification is insufficient.
+
+
+- 2026-11-13: Post-integration unchanged selected-install replays retain the
+  300-second idle passes for Human01 and Undead02. TFT HumanX01 and HumanX02 now
+  publish their worlds, then refuse at first-due ACbb and Anh2 acquisition.
+  HumanX03Interlude and UndeadX04 reach a new ANpa default-activation admission
+  frontier. These are recorded blockers, not passing mission horizons. Current
+  binary identity and six isolated replay receipts:
+  `/tmp/pc3-resident-lifecycle-horizons/`.
