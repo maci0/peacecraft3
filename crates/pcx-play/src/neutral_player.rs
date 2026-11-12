@@ -408,6 +408,9 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
             self.inner.native_with_strings(name, args, strings)
         }
     }
+    fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+        self.inner.string_hash(bytes)
+    }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.context.scripts.native_table_string(id)
     }
@@ -442,4 +445,4 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::native_string_world_fixture;
+pub(crate) use tests::{native_hash_world_fixture, native_string_world_fixture};

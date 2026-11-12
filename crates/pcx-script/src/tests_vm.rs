@@ -2215,3 +2215,83 @@ fn real_formatter_refuses_unbound_runtime_and_mismatched_native_signatures() {
         ));
     }
 }
+
+#[test]
+fn string_hash_vm_preserves_raw_bytes_and_never_demands_wts_or_tags() {
+    use crate::Host;
+    use std::cell::RefCell;
+    #[derive(Default)]
+    struct Raw(RefCell<Vec<Vec<u8>>>);
+    impl Host for Raw {
+        fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+            self.0.borrow_mut().push(bytes.to_vec());
+            Ok(-73)
+        }
+        fn native_table_string(&self, _: u32) -> Result<Option<String>, String> {
+            panic!("StringHash must not resolve WTS")
+        }
+        fn code_tag(&self, _: &str) -> Option<String> {
+            panic!("StringHash must not expand tags")
+        }
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("StringHash must dispatch the builtin")
+        }
+    }
+    let program = program_of(
+        "native StringHash takes string s returns integer\nfunction f takes string s returns integer\nreturn StringHash(s)\nendfunction\nfunction computed takes nothing returns integer\nreturn StringHash(\"TRIGSTR_\" + \"7\")\nendfunction\n",
+    );
+    let mut vm = Vm::new(&program, Raw::default());
+    for s in [
+        Value::Null,
+        Value::Str("".into()),
+        Value::Str("\0ignored".into()),
+    ] {
+        assert_eq!(vm.call("f", &[s]).unwrap(), Value::Int(0));
+    }
+    for text in ["TRIGSTR_7", "^^tag^^", "é\0tail"] {
+        assert_eq!(
+            vm.call("f", &[Value::Str(text.into())]).unwrap(),
+            Value::Int(-73)
+        );
+    }
+    assert_eq!(vm.call("computed", &[]).unwrap(), Value::Int(-73));
+    assert_eq!(
+        *vm.host().0.borrow(),
+        [
+            b"TRIGSTR_7".to_vec(),
+            b"^^tag^^".to_vec(),
+            "é".as_bytes().to_vec(),
+            b"TRIGSTR_7".to_vec()
+        ]
+    );
+    let mut plain = Vm::new(&program, NullHost);
+    assert_eq!(plain.call("f", &[Value::Null]).unwrap(), Value::Int(0));
+    assert!(
+        plain
+            .call("computed", &[])
+            .unwrap_err()
+            .message
+            .contains("StringHash source policy is not admitted")
+    );
+}
+
+#[test]
+fn string_hash_rejects_wrong_declared_signatures() {
+    for declaration in [
+        "native StringHash takes integer s returns integer\n",
+        "native StringHash takes string s returns string\n",
+        "native StringHash takes string s, integer extra returns integer\n",
+    ] {
+        let script = parse(declaration).unwrap();
+        let mut table = NativeTable::new();
+        for item in &script.items {
+            if let crate::Item::Native(native) = item {
+                table.insert(native, "synthetic.j");
+            }
+        }
+        assert!(matches!(
+            table.call("StringHash"),
+            Some(crate::natives::NativeCall::SignatureMismatch(..))
+        ));
+    }
+}

@@ -133,6 +133,11 @@ pub trait Host {
             .ok_or_else(|| "war3map.wts source or missing-entry semantics unavailable".into())
     }
 
+    /// Source-qualified StringHash on raw C-string bytes, without map lookup.
+    fn string_hash(&self, _bytes: &[u8]) -> Result<i32, String> {
+        Err("StringHash source policy is not admitted".into())
+    }
+
     /// Optional callback dispatch. `None` uses ordinary native dispatch.
     /// A callback takes no arguments; its return reaches `continue_script_call`.
     fn begin_script_call(
@@ -2420,6 +2425,25 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     })?
                     .real_to_string(value, width_precision)
                     .map(Value::Str)
+                    .map_err(|why| crate::Error::run(span, why))
+            }
+            NativeImpl::StringHash => {
+                let bytes = match &args[0] {
+                    Value::Null => return Ok(Value::Int(0)),
+                    Value::Str(text) => crate::text::native_c_bytes(text.as_bytes()),
+                    value => {
+                        return Err(crate::Error::run(
+                            span,
+                            format!("StringHash takes a string, got {}", value.type_name()),
+                        ));
+                    }
+                };
+                if bytes.is_empty() {
+                    return Ok(Value::Int(0));
+                }
+                self.host
+                    .string_hash(bytes)
+                    .map(Value::Int)
                     .map_err(|why| crate::Error::run(span, why))
             }
             NativeImpl::StringLength => {
