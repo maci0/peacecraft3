@@ -327,6 +327,14 @@ fn public_fixture_configured(
     overrides: &[([u8; 4], ObjectField)],
     configure: impl FnOnce(ObjectHost) -> ObjectHost,
 ) -> (Vm, HandleId, HandleId) {
+    public_fixture_admitted(overrides, true, configure)
+}
+
+fn public_fixture_admitted(
+    overrides: &[([u8; 4], ObjectField)],
+    heroes: bool,
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> (Vm, HandleId, HandleId) {
     let mut fields = vec![
         profile_field(b"C001", "Builds", "unitList", "b001"),
         column(
@@ -368,7 +376,7 @@ fn public_fixture_configured(
         0.37,
         true,
         super::super::super::super::activity::rules_with_repair(),
-        true,
+        heroes,
         (
             &format!(
                 "{EVENTS}\nnative SetUnitPosition takes unit u, real x, real y returns nothing\n"
@@ -2266,4 +2274,380 @@ fn competing_public_repair_arrivals_keep_the_first_participant_and_spend_once() 
     let host = &mut vm.host().inner;
     assert!(host.unit_construction(site).unwrap().is_none());
     assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
+}
+
+fn assistant_fixture(
+    ratio: &str,
+    rate: &str,
+    overlay: pcx_objects::editor::Overlay,
+) -> (Vm, HandleId, HandleId) {
+    fn table(headers: &[&str], rows: &[Vec<String>]) -> Vec<u8> {
+        let mut text = String::from("ID;PWXL;N;E\r\n");
+        for (y, row) in std::iter::once(headers.iter().map(|cell| (*cell).to_owned()).collect())
+            .chain(rows.iter().cloned())
+            .enumerate()
+        {
+            for (x, cell) in row.iter().enumerate() {
+                text.push_str(&format!("C;X{};Y{};K\"{}\"\r\n", x + 1, y + 1, cell));
+            }
+        }
+        text.push_str("E\r\n");
+        text.into_bytes()
+    }
+    let data = table(
+        &[
+            "alias", "code", "levels", "race", "DataA1", "DataB1", "DataC1", "DataD1",
+        ],
+        &[
+            ["ZYX9", "ZYX9", "1", "fixture", "0", "0", "0", "0"]
+                .map(str::to_owned)
+                .to_vec(),
+            ["ZYX8", "ZYX8", "1", "other-fixture", "0", "0", "0", "0"]
+                .map(str::to_owned)
+                .to_vec(),
+            ["R007", "ZYX7", "1", "fixture", ".11", "3.25", ratio, rate]
+                .map(str::to_owned)
+                .to_vec(),
+        ],
+    );
+    let metadata = table(
+        &["ID", "field", "slk", "index", "type", "data"],
+        &[
+            ["alev", "levels", "AbilityData", "-1", "int", "0"]
+                .map(str::to_owned)
+                .to_vec(),
+            ["Rep3", "Data", "AbilityData", "-1", "unreal", "3"]
+                .map(str::to_owned)
+                .to_vec(),
+            ["Rep4", "Data", "AbilityData", "-1", "unreal", "4"]
+                .map(str::to_owned)
+                .to_vec(),
+        ],
+    );
+    let mut abilities = empty_ability_list();
+    abilities.1.value = Ok(FieldValue::Cell("R007".into()));
+    public_fixture_admitted(
+        &[
+            abilities,
+            column(b"T005", SlkId::UnitBalance, "bldtm", FieldKind::Int, "37"),
+            column(b"REPT", SlkId::UnitBalance, "reptm", FieldKind::Int, "83"),
+        ],
+        false,
+        |host| {
+            let origin = crate::scripts::AssetIdentity {
+                source: super::super::super::super::source().install,
+                edition: "fixture".into(),
+                version: "assistant nonstock".into(),
+            };
+            let tables = pcx_objects::editor::defaults::DefaultTables::from_bytes(
+                pcx_objects::editor::defaults::Identity {
+                    install: origin.source.clone(),
+                    edition_version: origin.version.clone(),
+                },
+                &[
+                    (SlkId::AbilityData.path(), &data),
+                    (SlkId::AbilityMetaData.path(), &metadata),
+                ],
+                &[],
+                pcx_objects::editor::EditorReadLimits {
+                    max_listed_paths: 2,
+                    max_asset_bytes: 16384,
+                    max_aggregate_input_bytes: 32768,
+                },
+            )
+            .unwrap();
+            let (rules, _) = super::super::super::hero_rules();
+            host.with_hero_skills(
+                tables,
+                origin,
+                overlay,
+                rules,
+                crate::playercolor_host::HeroBudget {
+                    abilities_per_unit: 8,
+                    overlay_objects: 4,
+                    modifications_per_ability: 8,
+                },
+            )
+            .unwrap()
+        },
+    )
+}
+
+fn assistant_worker(host: &mut ObjectHost, owner: HandleId) -> HandleId {
+    let Value::Handle(worker) = host
+        .native(
+            "CreateUnit",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Real(16.),
+                Value::Real(80.),
+                Value::Real(0.),
+            ],
+        )
+        .unwrap()
+    else {
+        panic!("assistant")
+    };
+    host.native("RemoveGuardPosition", &[Value::Handle(worker)])
+        .unwrap();
+    worker
+}
+
+#[test]
+fn public_repair_enrolls_multiple_assistants_and_completion_clears_every_order() {
+    let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+    let owner = vm.host().inner.executed_unit(primary).unwrap().owner;
+    register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    let site = site(&mut vm, primary);
+    let host = &mut vm.host().inner;
+    let helpers = [assistant_worker(host, owner), assistant_worker(host, owner)];
+    let paid = bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    for helper in helpers {
+        assert_eq!(
+            host.native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(helper),
+                    Value::Str("repair".into()),
+                    Value::Handle(site)
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+    }
+    for tick in 1..=6400 {
+        step(&mut vm, f64::from(tick) / 64.);
+        let host = &vm.host().inner;
+        if helpers.iter().all(|helper| {
+            host.executed_unit(*helper)
+                .unwrap()
+                .construction_request
+                .is_none()
+        }) {
+            break;
+        }
+    }
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.unit_construction(site).unwrap().unwrap().worker,
+        Some(primary)
+    );
+    for helper in helpers {
+        assert_eq!(
+            host.unit_construction_order(helper).unwrap().unwrap().site,
+            Some(site)
+        );
+    }
+    let now = host.timer_game_time().unwrap();
+    let elapsed = host.unit_construction(site).unwrap().unwrap().elapsed;
+    step(&mut vm, now + 1.);
+    let host = &mut vm.host().inner;
+    assert!((host.unit_construction(site).unwrap().unwrap().elapsed - elapsed - 2.).abs() < 0.0001);
+    assert!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD") < paid);
+    step(&mut vm, now + 40.);
+    let host = &mut vm.host().inner;
+    assert!(host.unit_construction(site).unwrap().is_none());
+    for worker in [primary, helpers[0], helpers[1]] {
+        assert!(host.unit_construction_order(worker).unwrap().is_none());
+    }
+    observe(host, site, "GetConstructedStructure");
+    assert!(host.take_fired_event().is_none());
+}
+
+#[test]
+fn assistant_stop_death_removal_and_transfer_remove_only_the_departing_contribution() {
+    for action in [
+        "IssueImmediateOrderById",
+        "KillUnit",
+        "RemoveUnit",
+        "SetUnitOwner",
+    ] {
+        let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+        let site = site(&mut vm, primary);
+        let host = &mut vm.host().inner;
+        let owner = host.executed_unit(primary).unwrap().owner;
+        let a = assistant_worker(host, owner);
+        let b = assistant_worker(host, owner);
+        assert!(host.set_construction_worker(site, Some(a)).unwrap());
+        assert!(host.set_construction_worker(site, Some(b)).unwrap());
+        let paid = bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD");
+        let args = match action {
+            "IssueImmediateOrderById" => vec![Value::Handle(a), Value::Int(744)],
+            "SetUnitOwner" => vec![
+                Value::Handle(a),
+                host.native("Player", &[Value::Int(5)]).unwrap(),
+                Value::Bool(false),
+            ],
+            _ => vec![Value::Handle(a)],
+        };
+        host.native(action, &args).unwrap();
+        assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
+        assert_eq!(
+            host.unit_construction(site).unwrap().unwrap().worker,
+            Some(primary)
+        );
+        assert_eq!(
+            host.unit_construction_order(b).unwrap().unwrap().site,
+            Some(site)
+        );
+        step(&mut vm, 1.);
+        let host = &mut vm.host().inner;
+        assert!(
+            (host.unit_construction(site).unwrap().unwrap().elapsed - 1.5).abs() < 0.0001,
+            "{action}"
+        );
+        assert_eq!(
+            host.unit_construction_order(b).unwrap().unwrap().site,
+            Some(site)
+        );
+    }
+}
+
+#[test]
+fn surviving_assistant_reclaims_a_dead_primary_without_repaying_construction() {
+    let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+    let site = site(&mut vm, primary);
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(primary).unwrap().owner;
+    let helper = assistant_worker(host, owner);
+    assert!(host.set_construction_worker(site, Some(helper)).unwrap());
+    let paid = bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    host.native("KillUnit", &[Value::Handle(primary)]).unwrap();
+    assert_eq!(
+        host.unit_construction_order(helper).unwrap().unwrap().site,
+        Some(site)
+    );
+    step(&mut vm, 1.);
+    let host = &mut vm.host().inner;
+    assert_eq!(
+        host.unit_construction(site).unwrap().unwrap().worker,
+        Some(helper)
+    );
+    assert_eq!(host.unit_construction(site).unwrap().unwrap().elapsed, 1.);
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
+    host.native(
+        "IssueImmediateOrderById",
+        &[Value::Handle(helper), Value::Int(744)],
+    )
+    .unwrap();
+    step(&mut vm, 3.);
+    let host = &mut vm.host().inner;
+    assert_eq!(host.unit_construction(site).unwrap().unwrap().elapsed, 1.);
+    assert!(host.unit_construction_order(helper).unwrap().is_none());
+}
+
+#[test]
+fn depleted_banks_stop_assistants_and_restoring_funding_does_not_reenroll_them() {
+    let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+    let site = site(&mut vm, primary);
+    let owner = vm.host().inner.executed_unit(primary).unwrap().owner;
+    let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+    let wood = vm.global("PLAYER_STATE_RESOURCE_LUMBER");
+    let host = &mut vm.host().inner;
+    let helper = assistant_worker(host, owner);
+    assert!(host.set_construction_worker(site, Some(helper)).unwrap());
+    for resource in [gold.clone(), wood.clone()] {
+        host.native(
+            "SetPlayerState",
+            &[Value::Handle(owner), resource, Value::Int(0)],
+        )
+        .unwrap();
+    }
+    step(&mut vm, 1.);
+    let host = &mut vm.host().inner;
+    assert_eq!(host.unit_construction(site).unwrap().unwrap().elapsed, 1.);
+    assert!(host.unit_construction_order(helper).unwrap().is_none());
+    for resource in [gold, wood] {
+        host.native(
+            "SetPlayerState",
+            &[Value::Handle(owner), resource, Value::Int(1000)],
+        )
+        .unwrap();
+    }
+    step(&mut vm, 2.);
+    let host = &mut vm.host().inner;
+    assert_eq!(host.unit_construction(site).unwrap().unwrap().elapsed, 2.);
+    assert!(host.unit_construction_order(helper).unwrap().is_none());
+}
+
+#[test]
+fn source_powerbuild_profiles_and_overrides_control_rates_and_integer_cost_deadlines() {
+    let mut overlay = pcx_objects::editor::Overlay::default();
+    overlay.mods.insert(
+        "R007".into(),
+        vec![pcx_objects::Mod {
+            field: *b"Rep4",
+            value_type: pcx_objects::ValueType::Unreal,
+            selectors: Some([1, 4]),
+            value: pcx_objects::Value::Real(1.25),
+            end_word: 0,
+        }],
+    );
+    let (mut vm, primary, _) = assistant_fixture(".25", ".5", overlay);
+    let site = site(&mut vm, primary);
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(primary).unwrap().owner;
+    let helper = assistant_worker(host, owner);
+    let before = bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD");
+    assert!(host.set_construction_worker(site, Some(helper)).unwrap());
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), before - 1);
+    step(&mut vm, 1.);
+    let host = &mut vm.host().inner;
+    assert!((host.unit_construction(site).unwrap().unwrap().elapsed - 2.25).abs() < 0.0001);
+    // bldtm=37, reptm=83 and repair DataB=3.25 are deliberately distinct.
+    let period = 37. / 2.25 / (41. * 0.25);
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), before - 1);
+    step(&mut vm, period + 0.01);
+    assert_eq!(
+        bank(&vm.host().inner, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+        before - 2
+    );
+}
+
+#[test]
+fn malformed_assistant_profiles_refuse_before_order_or_resource_changes() {
+    for (ratio, rate) in [("broken", ".5"), (".25", "nan"), ("-.1", ".5"), ("_", ".5")] {
+        let (mut vm, primary, _) = assistant_fixture(ratio, rate, Default::default());
+        let site = site(&mut vm, primary);
+        let host = &mut vm.host().inner;
+        let owner = host.executed_unit(primary).unwrap().owner;
+        let helper = assistant_worker(host, owner);
+        let paid = bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD");
+        let revision = host.construction_request_revision(helper).unwrap();
+        if ratio == "_" {
+            assert_eq!(
+                host.hero_ability_level_cell_including_marker(
+                    *b"R007",
+                    "DataC",
+                    1,
+                    FieldKind::Unreal
+                )
+                .unwrap(),
+                "_"
+            );
+            assert!(
+                host.hero_ability_level_cell(*b"R007", "DataC", 1, FieldKind::Unreal)
+                    .is_err()
+            );
+        }
+        assert!(
+            host.native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(helper),
+                    Value::Str("repair".into()),
+                    Value::Handle(site)
+                ]
+            )
+            .is_err()
+        );
+        assert_eq!(
+            host.construction_request_revision(helper).unwrap(),
+            revision
+        );
+        assert!(host.unit_construction_order(helper).unwrap().is_none());
+        assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
+    }
 }

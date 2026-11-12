@@ -204,6 +204,7 @@ fn fixture_with_training_refunds_configured(
                 initial_life_fraction: 0.23,
                 human_build_ability: *b"ZYX9",
                 undead_build_ability: *b"ZYX8",
+                repair_ability: *b"ZYX7",
                 refund_rate: 0.37,
                 damage_refund_penalty: true,
                 life_drain_rate: 4.25,

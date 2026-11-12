@@ -16,6 +16,7 @@ pub struct Rules {
     pub initial_life_fraction: f32,
     pub human_build_ability: [u8; 4],
     pub undead_build_ability: [u8; 4],
+    pub repair_ability: [u8; 4],
     pub refund_rate: f32,
     pub damage_refund_penalty: bool,
     /// Retained source setting; the qualified Human stop observation does not apply it.
@@ -197,6 +198,8 @@ impl Rules {
                 .map_err(|error| format!("Human build class: {error}"))?;
             let undead_build_ability = build_class(&mut read, b"CAbilityUndeadBuild\0")
                 .map_err(|error| format!("Undead build class: {error}"))?;
+            let repair_ability = build_class(&mut read, b"CAbilityRepair\0")
+                .map_err(|error| format!("Repair class: {error}"))?;
             let ([refund, penalty, drain], profile_sources) =
                 pcx_objects::editor::misc::misc_scalars(
                     profiles,
@@ -230,6 +233,7 @@ impl Rules {
                 initial_life_fraction: fraction,
                 human_build_ability,
                 undead_build_ability,
+                repair_ability,
                 refund_rate,
                 damage_refund_penalty,
                 life_drain_rate,

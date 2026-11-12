@@ -135,6 +135,15 @@ fn fixture(shift: u32, fraction: f32) -> Vec<u8> {
     put(&mut text, 0xc80, &[0xb8, b'8', b'X', b'Y', b'Z', 0xc3]);
     put(&mut text, 0xca0, &[0xc7, 0x06]);
     word(&mut text, 0xca2, rdata_va + 0xf00);
+    put(&mut rdata, 0x180, b"CAbilityRepair\0");
+    put(&mut text, 0xcc0, &[0xb8]);
+    word(&mut text, 0xcc1, rdata_va + 0x180);
+    text[0xcc5] = 0xc3;
+    word(&mut rdata, 0x1158, text_va + 0xcc0);
+    word(&mut rdata, 0x111c, text_va + 0xce0);
+    put(&mut text, 0xce0, &[0xb8, b'7', b'X', b'Y', b'Z', 0xc3]);
+    put(&mut text, 0xd00, &[0xc7, 0x06]);
+    word(&mut text, 0xd02, rdata_va + 0x1100);
     let data = fraction.to_le_bytes();
     let mut image = synthetic_image(&[
         (TEXT, 0x1000, &text),
@@ -188,6 +197,7 @@ fn relocated_nonstock_initial_life_and_ordered_profiles() {
         assert_eq!(rules.initial_life_fraction, 0.23);
         assert_eq!(rules.human_build_ability, *b"ZYX9");
         assert_eq!(rules.undead_build_ability, *b"ZYX8");
+        assert_eq!(rules.repair_ability, *b"ZYX7");
         assert_eq!(rules.refund_rate, 0.61);
         assert_eq!(rules.life_drain_rate, 4.25);
         assert!(!rules.damage_refund_penalty);
