@@ -148,6 +148,7 @@ impl ObjectHost {
             // leaderboard_host.rs
             "DestroyLeaderboard",
             "LeaderboardDisplay",
+            "LeaderboardSetItemLabelColor",
             // location_host.rs
             "GetLocationX",
             "GetLocationY",

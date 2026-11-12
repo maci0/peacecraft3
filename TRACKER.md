@@ -7031,3 +7031,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   checks every offered ordinal; it passes on the local Legacy install.
   Workspace tests with the gate features: 5,452 passed, 0 failed, 355 ignored.
   Strict native and WASM Clippy, both workspace builds and formatting pass.
+
+- 2026-11-13: `LeaderboardSetItemLabelColor` now retains each integer channel's
+  low byte and ignores null/destroyed boards or absent rows, matching the
+  selected 1.29.2.9231 handler documented in
+  [script leaderboards](docs/re-notes/script-leaderboards.md). No-op calls retain
+  the canonical revision, rows and budgets; malformed arguments, unknown
+  identities and wrong handle families still refuse. The coverage audit now
+  includes the native. The gameplay library suite passes 2,987 tests with 108
+  explicit ignores; strict native all-target and WASM library Clippy, both
+  library builds and formatting pass. The unchanged Human08 opening skip plus
+  300-second idle script horizon passes headless and muted. The broader
+  archive-indexed campaign horizon sweep is still running and already exposes
+  music-volume, AI, range-enumeration and automatic-cast refusals. These are
+  host-state and script-horizon checks, not mission completion, rendered
+  fidelity or native tick/RNG parity.
