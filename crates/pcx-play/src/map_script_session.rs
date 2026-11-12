@@ -46,6 +46,22 @@ struct ActiveSession<H: Host> {
     witness: Arc<()>,
     context: Arc<ParsedMapContext>,
     vm: OwnedVm<OwnedLocalizedHost<H>>,
+    timer_delivery: Option<TimerDelivery>,
+}
+
+struct TimerDelivery {
+    expiry: crate::playercolor_host::TimerExpiry,
+    trigger: usize,
+    phase: TimerDeliveryPhase,
+}
+
+#[derive(Clone, Copy)]
+enum TimerDeliveryPhase {
+    Trigger,
+    Conditions { next: usize, accepted: bool },
+    Actions { accepted: bool },
+    Handler,
+    Complete,
 }
 pub struct MapScriptSession<H: Host + Send + Sync + 'static> {
     active: Option<ActiveSession<H>>,
@@ -146,6 +162,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
             witness: Arc::new(()),
             context,
             vm,
+            timer_delivery: None,
         });
         Ok(())
     }
@@ -243,6 +260,8 @@ fn execution_failure<H: Host>(
 
 #[derive(Debug, thiserror::Error)]
 pub enum TimerSessionError {
+    #[error("timer delivery is already active")]
+    PendingDelivery,
     #[error("campaign AI: {0}")]
     Ai(String),
     #[error("range callback work budget exhausted")]
@@ -415,52 +434,129 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 objects.flush_unit_activity_routes(now, &mut activity_work)?;
                 return Ok(delivered);
             };
-            let result = (|| -> Result<(), TimerSessionError> {
-                // Expiry-trigger order: every subscribed trigger's conditions
-                // (all evaluated, then combined) and actions run before the
-                // direct handler, which observes cleared trigger/event context.
-                for (index, trigger) in expiry.triggers().iter().enumerate() {
-                    if !self
+            self.deliver_timer_expiry(expiry)?;
+            delivered += 1;
+        }
+    }
+
+    fn deliver_timer_expiry(
+        &mut self,
+        expiry: crate::playercolor_host::TimerExpiry,
+    ) -> Result<(), TimerSessionError> {
+        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
+        if active.timer_delivery.is_some() {
+            return Err(TimerSessionError::PendingDelivery);
+        }
+        active.timer_delivery = Some(TimerDelivery {
+            expiry,
+            trigger: 0,
+            phase: TimerDeliveryPhase::Trigger,
+        });
+        let result = self.drive_timer_delivery();
+        let delivery = self
+            .active
+            .as_mut()
+            .expect("delivery retains its published session")
+            .timer_delivery
+            .take()
+            .expect("prepared timer delivery");
+        let objects = self
+            .host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects_mut();
+        if matches!(
+            delivery.phase,
+            TimerDeliveryPhase::Conditions { .. } | TimerDeliveryPhase::Actions { .. }
+        ) {
+            objects.finish_timer_trigger();
+        }
+        objects.finish_timer_expiry(delivery.expiry)?;
+        result
+    }
+
+    fn timer_delivery_mut(&mut self) -> &mut TimerDelivery {
+        self.active
+            .as_mut()
+            .expect("delivery retains its published session")
+            .timer_delivery
+            .as_mut()
+            .expect("prepared timer delivery")
+    }
+
+    fn drive_timer_delivery(&mut self) -> Result<(), TimerSessionError> {
+        loop {
+            let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
+            let delivery = active
+                .timer_delivery
+                .as_ref()
+                .expect("prepared timer delivery");
+            let trigger = delivery.trigger;
+            match delivery.phase {
+                TimerDeliveryPhase::Trigger => {
+                    if trigger == delivery.expiry.triggers().len() {
+                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Handler;
+                    } else if active
+                        .vm
                         .host()
-                        .ok_or(ScriptSessionError::NoSession)?
+                        .inner
                         .objects_mut()
-                        .begin_timer_trigger(&expiry, index)?
+                        .begin_timer_trigger(&delivery.expiry, trigger)?
                     {
-                        continue;
+                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Conditions {
+                            next: 0,
+                            accepted: true,
+                        };
+                    } else {
+                        self.timer_delivery_mut().trigger += 1;
                     }
-                    let result = (|| -> Result<(), TimerSessionError> {
-                        let mut accepted = true;
-                        for &id in &trigger.conditions {
-                            let ticket = self.callback_ticket(id)?;
-                            let value = self.call_callback(&ticket, &[])?;
-                            let Value::Bool(value) = value else {
-                                return Err(TimerSessionError::ConditionResult { id });
-                            };
-                            accepted &= value;
+                }
+                TimerDeliveryPhase::Conditions { next, accepted } => {
+                    let id = delivery.expiry.triggers()[trigger]
+                        .conditions
+                        .get(next)
+                        .copied();
+                    if let Some(id) = id {
+                        let ticket = self.callback_ticket(id)?;
+                        let value = self.call_callback(&ticket, &[])?;
+                        let Value::Bool(value) = value else {
+                            return Err(TimerSessionError::ConditionResult { id });
+                        };
+                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Conditions {
+                            next: next + 1,
+                            accepted: accepted & value,
+                        };
+                    } else {
+                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Actions { accepted };
+                    }
+                }
+                TimerDeliveryPhase::Actions { accepted } => {
+                    if accepted {
+                        let actions = &delivery.expiry.triggers()[trigger].actions;
+                        for &id in actions {
+                            function_name(&active.context, id)?;
                         }
-                        if accepted {
-                            self.run_thread(&trigger.actions)?;
-                        }
-                        Ok(())
-                    })();
+                        let first = actions.first().copied();
+                        active.vm.run_thread(actions).map_err(|error| {
+                            execution_failure(&active.context, &mut active.vm, first, error)
+                        })?;
+                    }
                     self.host()
                         .ok_or(ScriptSessionError::NoSession)?
                         .objects_mut()
                         .finish_timer_trigger();
-                    result?;
+                    let delivery = self.timer_delivery_mut();
+                    delivery.trigger += 1;
+                    delivery.phase = TimerDeliveryPhase::Trigger;
                 }
-                if let Some(id) = expiry.callback {
-                    let ticket = self.callback_ticket(id)?;
-                    self.call_callback(&ticket, &[])?;
+                TimerDeliveryPhase::Handler => {
+                    if let Some(id) = delivery.expiry.callback {
+                        let ticket = self.callback_ticket(id)?;
+                        self.call_callback(&ticket, &[])?;
+                    }
+                    self.timer_delivery_mut().phase = TimerDeliveryPhase::Complete;
                 }
-                Ok(())
-            })();
-            self.host()
-                .ok_or(ScriptSessionError::NoSession)?
-                .objects_mut()
-                .finish_timer_expiry(expiry)?;
-            result?;
-            delivered += 1;
+                TimerDeliveryPhase::Complete => return Ok(()),
+            }
         }
     }
 }
