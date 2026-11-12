@@ -123,6 +123,18 @@ const NATIVES: &[(&str, &[&str], &str)] = &[
         "nothing",
     ),
     (
+        "LeaderboardSetItemLabelColor",
+        &[
+            "leaderboard",
+            "integer",
+            "integer",
+            "integer",
+            "integer",
+            "integer",
+        ],
+        "nothing",
+    ),
+    (
         "LeaderboardSetItemValueColor",
         &[
             "leaderboard",
@@ -509,7 +521,7 @@ impl ObjectHost {
                 state.text_bytes = total;
             }
             (
-                "LeaderboardSetItemValueColor",
+                "LeaderboardSetItemLabelColor" | "LeaderboardSetItemValueColor",
                 [
                     _,
                     Value::Int(row),
@@ -529,8 +541,13 @@ impl ObjectHost {
                         "RGBA channels must fit bytes",
                     )));
                 };
-                self.leaderboards.as_mut().expect("admitted").boards[index].items[row]
-                    .value_color = Some([r, g, b, a]);
+                let item =
+                    &mut self.leaderboards.as_mut().expect("admitted").boards[index].items[row];
+                if name == "LeaderboardSetItemLabelColor" {
+                    item.label_color = Some([r, g, b, a]);
+                } else {
+                    item.value_color = Some([r, g, b, a]);
+                }
             }
             ("LeaderboardSetSizeByItemCount", [_, Value::Int(count)]) => {
                 if *count < 0 {

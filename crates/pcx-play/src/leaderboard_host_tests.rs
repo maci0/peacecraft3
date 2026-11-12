@@ -25,6 +25,7 @@ native LeaderboardSetValueColor takes leaderboard b, integer r, integer g, integ
 native LeaderboardSetStyle takes leaderboard b, boolean title, boolean names, boolean values, boolean icons returns nothing
 native LeaderboardSetItemLabel takes leaderboard b, integer i, string label returns nothing
 native LeaderboardSetItemValue takes leaderboard b, integer i, integer v returns nothing
+native LeaderboardSetItemLabelColor takes leaderboard b, integer i, integer r, integer g, integer blue, integer a returns nothing
 native LeaderboardSetItemValueColor takes leaderboard b, integer i, integer r, integer g, integer blue, integer a returns nothing
 "#;
 fn budget() -> LeaderboardBudget {
@@ -533,6 +534,23 @@ fn leaderboard_rows_preserve_color_and_style_history() {
     let board = &h.leaderboard_state().unwrap().boards()[0];
     assert_eq!(board.items[0].value_color, Some([7, 19, 37, 89]));
     assert_eq!(board.value_color, Some([7, 19, 37, 89]));
+    assert_eq!(board.items[1].value_color, Some([255, 255, 255, 255]));
+    h.native(
+        "LeaderboardSetItemLabelColor",
+        &[
+            b.clone(),
+            Value::Int(1),
+            Value::Int(9),
+            Value::Int(8),
+            Value::Int(7),
+            Value::Int(6),
+        ],
+    )
+    .unwrap();
+    let board = &h.leaderboard_state().unwrap().boards()[0];
+    assert_eq!(board.items[0].label_color, Some([13, 29, 57, 101]));
+    assert_eq!(board.label_color, Some([13, 29, 57, 101]));
+    assert_eq!(board.items[1].label_color, Some([9, 8, 7, 6]));
     assert_eq!(board.items[1].value_color, Some([255, 255, 255, 255]));
     h.native(
         "LeaderboardSetItemValue",
