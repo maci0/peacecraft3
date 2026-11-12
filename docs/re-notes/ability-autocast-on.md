@@ -168,3 +168,35 @@ class getters alone (`rechargeon`, `rechargeoff` are the strings the order regis
 
 The same vtable shape holds for `CAbilityReplenishLife` (`Arpl`, vtable `0xfc37bc`) and
 `CAbilityReplenishMana` (`Arpm`, `0xfc3c48`), which are not bound (not needed by any probed chapter).
+
+## Neutral Heal default activation (2026-11-13)
+
+After main integrated default scheduling at `5ad20afb`, the unchanged RoC Undead05 horizon
+refused `CreateUnit` for `Anh2` at script line 909; local receipt
+`/tmp/pc3-ai-horizon-main/Undead05.log`. The selected local Legacy `War3x.mpq` unprefixed
+`Units/AbilityData.slk` row resolves that alias to code `Anhe`, rather than `Ahea`.
+This is shipped-byte evidence for that archive member, not a claim about every dataset.
+
+Read-only disassembly of the reviewed image above identifies `CAbilityNeutralHeal` (name getter
+`0xbed5e0`, code getter `0xbed5f0`, vtable `0xf64efc`) and `CAbilityHeal` (vtable `0xf64a6c`).
+Their ON/OFF handlers, update hook, activation and deactivation virtuals are identical:
+`0xb99a80`, `0xb99b50`, `0xbdb5e0`, `0xb9c590`, `0xb9c5c0`. The Neutral Heal factory at
+`0xbf0260` calls the same base initializer `0xb2ac80`, clears the same timer region as the Heal
+factory, and adds no separate class-specific flag write. Both deleting-destructor wrappers call
+`0xb82570`. This supports using the existing decoded ordinary default activation lifecycle.
+The omitted class name is now included in the decoder; no duration, group or order ID was copied
+into the host. The default unit therefore reaches its scheduled evaluation instead of failing
+class admission during creation. Acquisition and healing still refuse explicitly at that boundary.
+
+Neutral Heal's three native order getters differ from Heal's, while the inspected expansion
+profile `Units/NeutralAbilityFunc.txt` spells the ordinary heal orders for `Anh2`. This mismatch
+does not enter default activation, which issues no order. Explicit order/profile reconciliation
+remains unqualified; the existing strict toggle cross-check is retained.
+
+The explicit original-image binding gate checks `Anhe` activation against `Ahea` and verifies
+their native toggle IDs differ. `selected_original_neutral_heal_activation_reaches_the_default_evaluation`
+feeds the decoded `Anhe` class code and delay into a synthetic unit definition with a different
+alias, creates it at nonzero game time through `CreateUnit`, and checks the exact first-evaluation
+boundary without changing unit state on refusal. This is a native-input/caller regression, not
+an original-client or unchanged-mission runtime parity result. Ghidra import timed out before
+returning a function dossier; the new native observations here are direct PE/disassembly evidence.

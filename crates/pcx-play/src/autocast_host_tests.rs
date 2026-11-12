@@ -110,6 +110,15 @@ fn open_setup_vm(
     profile: &[u8],
     enable: Option<crate::autocast_rules::Enable>,
 ) -> Vm {
+    open_setup_vm_with_code(default, abilities, profile, enable, *b"X001")
+}
+fn open_setup_vm_with_code(
+    default: &str,
+    abilities: &str,
+    profile: &[u8],
+    enable: Option<crate::autocast_rules::Enable>,
+    code: [u8; 4],
+) -> Vm {
     let mut fields = hero_fields("STR");
     fields.retain(|(id, _)| id != b"A008");
     fields.push(column(
@@ -137,7 +146,7 @@ fn open_setup_vm(
         origin: registry.binding().origin.clone(),
         image_sha256: registry.binding().image_sha256,
         classes: [
-            Some(class(b"X001", "repair", "delta")),
+            Some(class(&code, "repair", "delta")),
             // The peer class is registered only when a unit carries it: `gamma` and `beta` are
             // ordinary orders in the other tests.
             abilities
@@ -147,7 +156,7 @@ fn open_setup_vm(
         .into_iter()
         .flatten()
         .collect(),
-        groups: vec![(*b"X001", GROUP), (*b"X003", GROUP)],
+        groups: vec![(code, GROUP), (*b"X003", GROUP)],
         alarm_code: Some(*b"X005"),
     };
     let mut rules = hero_rules().0;
@@ -156,7 +165,14 @@ fn open_setup_vm(
     let data = sylk(
         &["alias", "code", "levels", "reqLevel", "levelSkip", "hero"],
         &[
-            &["X002", "X001", "1", "0", "0", "0"],
+            &[
+                "X002",
+                std::str::from_utf8(&code).unwrap(),
+                "1",
+                "0",
+                "0",
+                "0",
+            ],
             &["X004", "X003", "1", "0", "0", "0"],
             &["X006", "X005", "1", "0", "0", "0"],
         ],
@@ -512,6 +528,44 @@ fn default_activation_delay_starts_at_creation_in_an_advanced_session() {
             .unwrap_err()
             .contains("automatic cast of X002")
     );
+}
+#[test]
+#[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
+fn selected_original_neutral_heal_activation_reaches_the_default_evaluation() {
+    let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE")).unwrap();
+    let rules = crate::autocast_rules::Rules::read(
+        &image,
+        crate::scripts::AssetIdentity {
+            source: "explicit selected Legacy image".into(),
+            edition: "classic".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    let class = rules
+        .classes
+        .iter()
+        .find(|c| c.code == *b"Anhe")
+        .expect("Neutral Heal class");
+    let enable = class.enable.expect("Neutral Heal activation");
+    let default = std::str::from_utf8(&class.code).unwrap();
+    let mut vm = open_setup_vm_with_code(default, "X002", PROFILE, Some(enable), class.code);
+    let created_at = vm.host().inner.timer_game_time().unwrap() + 7.;
+    advance(&mut vm, created_at).unwrap();
+    vm.call("main", &[]).unwrap();
+    let Value::Handle(unit) = vm.global("U") else {
+        panic!("unit")
+    };
+    assert_eq!(state(&mut vm, unit, b"X002"), Some(true));
+    let due = created_at + f64::from(enable.first_tick);
+    advance(&mut vm, due.next_down()).unwrap();
+    let before = vm.host().inner.executed_unit(unit).unwrap().clone();
+    assert!(
+        advance(&mut vm, due)
+            .unwrap_err()
+            .contains("automatic cast of X002")
+    );
+    assert_eq!(vm.host().inner.executed_unit(unit).unwrap(), &before);
 }
 #[test]
 fn default_activation_off_and_removal_disarm_and_reenable_restarts_delay() {

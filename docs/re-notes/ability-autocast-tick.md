@@ -117,3 +117,33 @@ still the shared `0xb4a4a0` / `0xb4a530`; the scan-range getter `+0x44c` (`0xb81
 `0x46f840`. No ordinary Restoration cast-effect host exists here. Acquisition, source-field
 bindings, effect execution and retry scheduling therefore remain unsupported; substituting
 Slow's filter or a generic nearest-target heal would not be supported by this inspection.
+
+## Heal and Neutral Heal acquisition follow-up (2026-11-13)
+
+Current unchanged recreation horizons expose `Ahea` at its first due evaluation in
+`/tmp/pc3-ai-horizon-main/Undead04.log`, and `ACsw` in
+`/tmp/pc3-undead03-before-range/Undead03.log` (the latter precedes range-enumeration intake).
+These are concrete recreation frontiers, not original-client observations. Undead05's earlier
+`Anh2` creation refusal and its class correction are recorded in `ability-autocast-on.md`.
+
+The reviewed image's Heal and Neutral Heal classes share candidate filter `0xbed1a0` and
+comparator `0xbed270`. The filter calls the common `0xb9ca70`, applies a configuration-dependent
+target-flag check, explicitly calls visibility predicate `0x69df20`, tests a player-property
+query `0x697030`, and excludes a target carrying `Bhea` from a different source caster. The
+ordinary target check `0xbed0c0` compares maximum minus current life against global `0x112d810`
+and applies its own configuration and existing-heal-source checks.
+
+The comparator is **not** the shared nearest-metric comparator: it first divides candidates
+according to their metrics relative to a reference, and when both satisfy that reference it
+calls `0x635990` on each. That routine divides virtual `+0x12c` by `+0x130`, the current/max-life
+ratio qualified in `destructable-death-delivery.md` and `hero-vital-level-updates.md`. Thus a generic
+nearest-unit rule would lose a native health-ratio preference. Metric/range transformation,
+equal-ranking enumeration, the full common target filter, visibility and readiness remain to
+be mapped before faithful automatic Heal execution can be connected.
+
+The shared Heal effect routine `0xbed2f0` reads ranked DataA through `0x46ed70`, conditionally
+scales it through a configuration lookup, applies a life update via `0x690770`, updates timing,
+and creates or refreshes `Bhea` with source-caster identity. A one-shot call to the canonical heal
+helper would omit this retained effect/timing state. Actual acquisition, cost/effect execution,
+channels and cancellation therefore remain open; no guessed target selection or silent no-op
+was added by the Neutral Heal class correction.
