@@ -7133,3 +7133,37 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   synthetic session evidence; native mixed-event ordering, AI-VM comparison,
   browser execution and tick parity remain open. See
   [timer catch-up](docs/re-notes/legacy-timer-start.md).
+
+- 2026-11-13: Captain recruitment counts exact types before alternates and
+  applies healthy-exact, healthy-alternate, fallback-exact, fallback-alternate
+  passes. Recruitment and guard return admit retained inactive toggle state;
+  active unsupported behavior still refuses atomically. All five named new
+  regressions pass in main's independent complete gameplay package run:
+  3,153 passed, zero failed, 143 explicit ignores. Strict native/WASM all-target
+  Clippy, both library builds, formatting and the campaign-probe rebuild pass
+  with source hashes unchanged. Evidence is selected-image static code and
+  synthetic canonical commands; native controller cadence, tie ordering and
+  runtime tick parity remain open. See
+  [captain recruitment](docs/re-notes/campaign-ai-captains.md).
+
+- 2026-11-13: Secondary fractional RNG draws now have distinct `SecondaryReal`
+  trace identity and record their selected post-draw secondary word. Arithmetic,
+  seed inputs and draw order are unchanged. The mixed-channel exact-state and
+  actual orb/combat replay regressions both execute successfully in the main
+  package run above; strict native/WASM checks and library builds pass.
+  Selected-image static evidence distinguishes engine raw-seed input from the
+  script setter's post-draw secondary seed. Engine session-payload provenance,
+  consumer ownership and native runtime/tick parity remain open. See
+  [RNG evidence](docs/re-notes/original-rng-control.md).
+
+- 2026-11-13: Ordinary default-enabled autocast prepares source-derived first
+  evaluation deadlines during unit creation, relative to the actual creation
+  clock, without synthetic orders or events. Invalid activation refuses before
+  allocation. All four named new activation regressions execute successfully in
+  the main package run above; strict native/WASM checks and both libraries pass.
+  Actual automatic acquisition/casting, retries, restored timer phase and
+  corpse/illusion activation remain open. Default-on maps can now reach the
+  existing unsupported-acquisition refusal earlier; scheduling alone does not
+  complete autocast. See
+  [activation](docs/re-notes/ability-autocast-on.md) and
+  [evaluation gaps](docs/re-notes/ability-autocast-tick.md).

@@ -87,5 +87,33 @@ Arrow is a different class (`ANbs` / `AAsm`) and cannot establish `ANba` casting
 Automatic casting remains refused at the due tick, before acquisition. The
 remaining eligibility, visibility, metric and enumeration mappings above must
 be established before connecting Slow's existing effect host. This note adds no
-implementation, synthetic tests or runtime parity evidence. Default-on activation
-remains the earlier open gap.
+implementation or runtime parity evidence for acquisition. Default-on first-evaluation scheduling
+is now connected through unit creation (see `ability-autocast-on.md`); it exposes this same refusal
+at the decoded deadline and does not close the automatic-casting gap.
+
+## Restoration acquisition follow-up (2026-11-13)
+
+A recreation horizon run of unchanged RoC `Undead02Interlude.w3m` reaches an `Arst`
+automatic-acquisition refusal; this is a recreation failure, not an original-client observation.
+The local receipt is `/tmp/pc3-horizon-sweep/roc-Undead02Interlude.w3m/test.log`.
+The local Legacy install's `War3x.mpq` member `Units/UndeadAbilityFunc.txt` identifies its
+presentation as a repair action with an acolyte work loop. This is shipped-profile evidence,
+not a qualified healing-spell implementation or proof of the active map's dataset selection.
+
+Read-only PE mapping and `objdump` inspection of the same hash-qualified image above identify
+`CAbilityRestoration`: name getter `0xbb69e0`, class vtable `0xf4b670`. Its acquisition `+0x450`
+is the shared `0xb9c8e0`; outer candidate filter `+0x454` is `0xb9c980`; inner filter `+0x458`
+is `0xbb5ad0`; comparator `+0x460` is `0xb9cb20`. The ranking switch `+0x46c` (`0xbb4e00`)
+returns one, selecting the shared strict-smaller-metric branch. That does not establish that
+the metric is center distance or establish equal-metric enumeration order.
+
+The inner filter first calls `0xb9ca70`, then has a configuration-dependent target `+0x164`
+flag test, a comparison against global `0x112d88c` after `0x697030`, position/object tests
+through `0x7fcc50`, `0x7ff5d0`, `0x696c10` and `0x7f6a00`, and final target-flag tests.
+Those values and predicates are not yet mapped to canonical host state. `+0x45c` (`0xbb5c00`)
+returns one. Cast-flags getter `+0x354` (`0xbb4e20`) has bit 4 set and bit 1 clear, so the
+shared tick selects its targeted dispatch, rather than the immediate branch. Readiness is
+still the shared `0xb4a4a0` / `0xb4a530`; the scan-range getter `+0x44c` (`0xb81170`) calls
+`0x46f840`. No ordinary Restoration cast-effect host exists here. Acquisition, source-field
+bindings, effect execution and retry scheduling therefore remain unsupported; substituting
+Slow's filter or a generic nearest-target heal would not be supported by this inspection.

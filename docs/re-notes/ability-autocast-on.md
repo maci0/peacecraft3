@@ -87,8 +87,8 @@ filters `+0x3f4`, `+0x458`, `+0x45c`, `+0x460`, `+0x468`, ordering `0x9a01c0`); 
 mana and cooldown terms (`0xb4a4a0`, `0xb4a530`); the cast itself and the buff each class applies.
 
 Default-enabled abilities (`UnitAbilities.auto`: `Ainf` on `ntks`, `Aweb` on `ucry` and `nnwl`) run
-the same activation when the unit is created in the original. The recreation does not arm them; that
-gap predates this note and is unchanged.
+the same activation when the unit is created in the original. Creation now arms the decoded first
+evaluation for admitted ordinary autocast classes; automatic acquisition and casting remain open.
 
 ## `CAbilityWeb` (`Aweb`) uses the same ON handler (observed)
 
@@ -125,6 +125,31 @@ passes (`executed_units=279`).
 
 Inferred, not measured: the ON order stops the unit and emits the issued-order events exactly as the
 runtime-probed OFF does (same validation, order creation and issue path); no ON runtime probe exists.
+
+## Default activation scheduling (2026-11-13)
+
+The shared unit factory prepares default timers from the selected unit's `auto` list, matched
+against each present ability's source `code`, rather than its alias. The existing selected-image
+activation decode supplies the delay. Committing creation timestamps the timers against the game
+clock, without issuing an ON order, switching group peers or marking default state as edited.
+Malformed lists, an undecoded activation for a matching default, invalid delays and a missing clock
+refuse before allocating the unit. Hosts without the optional autocast capability retain their
+existing admission boundary. Corpse and illusion creation are excluded; their activation and
+resurrection behavior remain unqualified.
+
+This is scheduling support, not completed autocast. At the exact first due evaluation the existing
+unsupported-acquisition error is now exposed for default-on abilities too. Ordinary OFF, peer
+exclusion and unit removal retain their existing timer cleanup. Readiness, pause/death/transfer,
+ability addition/removal/learning, restored timer phase, visibility, acquisition ranking,
+subsequent retry delays and actual spell effects remain open as
+described in `ability-autocast-tick.md`. Maps that previously advanced while silently skipping these
+default-on evaluations may now refuse there.
+
+Synthetic `autocast_host_tests` cover a class code different from its alias, the last representable
+time before the deadline and the exact deadline, a repeated ON that must not rearm, unchanged
+unit/RNG state when the due evaluation refuses and is retried, OFF/removal cleanup, re-enabling,
+a missing ability and malformed/undecoded activation before unit allocation. These exercise the
+public creation/order paths and host clock; they do not add original-client runtime parity evidence.
 
 ## `CAbilityManaBattery` (`Ambt`, Moon Well) uses the same ON handler (observed)
 
