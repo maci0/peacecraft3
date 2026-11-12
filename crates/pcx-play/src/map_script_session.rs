@@ -348,30 +348,12 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .ok_or(ScriptSessionError::NoSession)?
                 .next_ai_wake(until);
             let step_until = ai_wake.map_or(until, |(at, _, _)| at);
-            let training_wake = self
+            let activity_wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects()
-                .next_training_completion(step_until);
-            let step_until = training_wake.unwrap_or(step_until);
-            let step_until = self
-                .host()
-                .ok_or(ScriptSessionError::NoSession)?
-                .objects()
-                .next_construction_completion(step_until)
-                .unwrap_or(step_until);
-            let mirror_wake = self
-                .host()
-                .ok_or(ScriptSessionError::NoSession)?
-                .objects()
-                .next_mirror_boundary(step_until);
-            let step_until = mirror_wake.unwrap_or(step_until);
-            let step_until = self
-                .host()
-                .ok_or(ScriptSessionError::NoSession)?
-                .objects()
-                .next_morph_boundary(step_until)
-                .unwrap_or(step_until);
+                .next_timer_activity_boundary(step_until);
+            let step_until = activity_wake.unwrap_or(step_until);
             let wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
@@ -412,7 +394,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 return Err(error.into());
             }
             let Some(expiry) = expiry else {
-                if training_wake == Some(step_until) || mirror_wake == Some(step_until) {
+                if activity_wake == Some(step_until) {
                     budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     continue;
                 }

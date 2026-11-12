@@ -158,6 +158,19 @@ impl ObjectHost {
         self.timers.as_ref().map(|state| state.now)
     }
 
+    /// Mandatory world work can split a timer advance, but cannot finish it early.
+    pub(crate) fn next_timer_activity_boundary(&self, until: f64) -> Option<f64> {
+        [
+            self.next_training_completion(until),
+            self.next_construction_completion(until),
+            self.next_mirror_boundary(until),
+            self.next_morph_boundary(until),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by(f64::total_cmp)
+    }
+
     /// Earliest pending timer or timed-event deadline.
     pub(super) fn next_timer_deadline(&self) -> Option<f64> {
         self.inner

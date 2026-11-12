@@ -308,3 +308,47 @@ new measurement of native zero-delay scheduling. The earlier positive-only
 scope above describes the preceding implementation. Synthetic tests exercise
 zero expiry and preserve the old run on invalid starts; native rounding, exact
 same-boundary order and edge-delay fidelity remain open.
+
+## Mandatory activity boundaries during timer catch-up (2026-11-13)
+
+Source inspection found that the published session retained the next construction
+or morph boundary only as a shortened timer target. When no timer expired there,
+it recognized training and mirror boundaries but could return at construction or
+morph work without reaching the requested game time. If an AI wake was retained
+at a later deadline, that same branch could resume the AI at the earlier boundary.
+
+The timer host now selects the earliest mandatory training, construction, mirror
+or morph boundary together. The session preserves that boundary identity and
+continues after mandatory work before considering a later AI wake or completing
+the requested timer advance. Existing expiry ordering, pause policy, callbacks,
+work limits and timer timeout admission are unchanged. Boundary deadlines still
+come from the canonical units and admitted rules; no source value is embedded.
+
+The nonstock morph fixture now supplies its prepared world and admitted context
+to the actual `MapScriptSession<MapStartupHost>`. A test-only startup constructor
+retains the existing neutral-host stack without duplicating asset preparation.
+The published VM executes the form order, then `advance_timers` must cross its
+earlier phase/flight boundaries, consume a later null-handler timer and reach
+every requested target. One catch-up and chunked advances must produce the same
+final clock, form and height. The former host-loop-only test was replaced because
+it could not catch a session early return. This regression does not run an AI VM.
+
+Evidence class: reconstruction source inspection and synthetic execution, not a
+new original-client observation. The selected native reference remains version
+1.29.2.9231, image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+No additional native queue/tie-order, pause/resume, zero-delay or tick-parity
+qualification is claimed by this correction.
+
+Isolated validation uses `/tmp/pc3-fidelity-sol61-02-target` and source hashes for
+this worktree. The named
+`published_session_reaches_target_after_morph_boundaries_and_later_timer`
+regression runs once and passes; the timer-runtime group passes nine tests with
+one explicit local-common-source gate ignored, and the morph group passes 27.
+Native and `wasm32-unknown-unknown` library builds pass with the workspace's
+warnings-denied policy. Formatting and source-hash checks pass. Test launches
+verify private Xvfb and null audio. Receipts are retained locally in
+`/tmp/pc3-timer-session-validation/`. A preceding shared-target command that
+selected zero tests was discarded, and the earlier host-loop-only test was not
+accepted as session coverage. No browser runtime or original-client comparison
+was run for this correction.

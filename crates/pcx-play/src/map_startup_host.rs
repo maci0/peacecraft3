@@ -417,6 +417,21 @@ type PlacementLoader = Box<
 >;
 
 impl MapStartupHost {
+    #[cfg(test)]
+    pub(crate) fn timer_session_fixture(inner: NeutralStack) -> Self {
+        Self {
+            preload: None,
+            sound_playback: None,
+            inner: Some(inner),
+            ai: crate::campaign_ai::Runtime::default(),
+            research: None,
+            day_night_loader: None,
+            placement_rules: None,
+            placement_tables: None,
+            placement_loader: None,
+        }
+    }
+
     fn world(&self) -> &NeutralStack {
         self.inner.as_ref().expect("map world is not lent to AI")
     }
