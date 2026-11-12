@@ -17,6 +17,9 @@ constant native SetPlayerHandicap takes player p, real factor returns nothing
 constant native GetPlayerHandicap takes player p returns real
 native SetUnitOwner takes unit u, player p, boolean changeColor returns nothing
 native UnitResetCooldown takes unit u returns nothing
+native UnitAddAbility takes unit u, integer ability returns boolean
+native UnitRemoveAbility takes unit u, integer ability returns boolean
+native SelectHeroSkill takes unit u, integer ability returns nothing
 native UnitRemoveBuffs takes unit whichUnit, boolean removePositive, boolean removeNegative returns nothing
 type gamecache extends agent
 native InitGameCache takes string filename returns gamecache
@@ -434,13 +437,32 @@ fn ability_table(plain: &[&[&str]]) -> Vec<u8> {
     for row in &mut rows {
         row.push("-");
         row.push(if row[0] == "AIrc" { "XOre" } else { "-" });
+        row.extend(["1", "1"]);
     }
     let refs: Vec<&[&str]> = rows.iter().map(Vec::as_slice).collect();
     sylk(
         &[
-            "alias", "code", "levels", "DataA1", "DataB1", "DataC1", "DataD1", "DataE1", "Rng1",
-            "Cool1", "targs1", "Area1", "Dur1", "HeroDur1", "BuffID1", "UnitID1", "Cost1",
-            "DataF1", "EfctID1",
+            "alias",
+            "code",
+            "levels",
+            "DataA1",
+            "DataB1",
+            "DataC1",
+            "DataD1",
+            "DataE1",
+            "Rng1",
+            "Cool1",
+            "targs1",
+            "Area1",
+            "Dur1",
+            "HeroDur1",
+            "BuffID1",
+            "UnitID1",
+            "Cost1",
+            "DataF1",
+            "EfctID1",
+            "reqLevel",
+            "levelSkip",
         ],
         &refs,
     )
@@ -3484,6 +3506,121 @@ fn cleanup_drops_sequential_fractional_max_life_without_spurious_refusal() {
     assert_close(life_of(&h, hero), 62.6, "clamped sequential life");
     assert_close(max_life_of(&h, hero), 62.6, "clamped sequential maximum");
     assert_eq!(std::iter::from_fn(|| h.take_fired_event()).count(), 2);
+}
+
+#[test]
+fn cached_ability_edits_rebuild_source_abilities_for_continuation() {
+    use crate::game_cache::tests::{Memory, budget};
+    let open = || {
+        open_with_regens_overlays_extra(
+            Overlay::default(),
+            Overlay::default(),
+            0.,
+            None,
+            0.,
+            "500",
+            &[column(
+                b"A009",
+                SlkId::UnitAbilities,
+                "heroAbilList",
+                FieldKind::Token,
+                "AIl2",
+            )],
+        )
+    };
+    for (native, alias, heroic) in [
+        ("UnitAddAbility", *b"AIl1", true),
+        ("UnitRemoveAbility", *b"L000", true),
+        ("UnitAddAbility", *b"AIl1", false),
+        ("UnitRemoveAbility", *b"L000", false),
+    ] {
+        let store = Arc::new(Memory::default());
+        let Fixture {
+            mut h,
+            hero,
+            ordinary,
+        } = open();
+        let hero = if heroic { hero } else { ordinary };
+        if heroic {
+            h.native(
+                "SelectHeroSkill",
+                &[
+                    Value::Handle(hero),
+                    Value::Int(i32::from_be_bytes(*b"AIl2")),
+                ],
+            )
+            .unwrap();
+            assert_eq!(
+                h.executed_unit(hero)
+                    .unwrap()
+                    .abilities
+                    .as_ref()
+                    .unwrap()
+                    .level(*b"AIl2"),
+                1
+            );
+        }
+        h.admit_game_caches(store.clone(), budget()).unwrap();
+        let cache = h
+            .native("InitGameCache", &[Value::Str("campaign".into())])
+            .unwrap();
+        let key = [
+            cache.clone(),
+            Value::Str("next".into()),
+            Value::Str("hero".into()),
+        ];
+        let mut put = key.to_vec();
+        put.push(Value::Handle(hero));
+        assert_eq!(h.native("StoreUnit", &put), Ok(Value::Bool(true)));
+        assert_eq!(
+            h.native("SaveGameCache", std::slice::from_ref(&cache)),
+            Ok(Value::Bool(true))
+        );
+        let before = store.bytes.lock().unwrap().clone();
+        let abilities = h.executed_unit(hero).unwrap().abilities.clone();
+        assert_eq!(
+            h.native(
+                native,
+                &[Value::Handle(hero), Value::Int(i32::from_be_bytes(alias))]
+            ),
+            Ok(Value::Bool(true))
+        );
+        let handles = h.inner().handles();
+        let edited = h.executed_unit(hero).unwrap().abilities.clone();
+        assert_ne!(edited, abilities);
+        assert_eq!(h.native("StoreUnit", &put), Ok(Value::Bool(true)));
+        assert_eq!(h.inner().handles(), handles);
+        assert_eq!(h.executed_unit(hero).unwrap().abilities, edited);
+        assert_eq!(h.native("HaveStoredUnit", &key), Ok(Value::Bool(true)));
+        assert_eq!(h.native("SaveGameCache", &[cache]), Ok(Value::Bool(true)));
+        assert_eq!(*store.bytes.lock().unwrap(), before);
+        drop(h);
+
+        let Fixture { mut h, .. } = open();
+        h.admit_game_caches(store, budget()).unwrap();
+        let cache = h
+            .native("InitGameCache", &[Value::Str("campaign".into())])
+            .unwrap();
+        let owner = h.native("Player", &[Value::Int(4)]).unwrap();
+        let Value::Handle(unit) = h
+            .native(
+                "RestoreUnit",
+                &[
+                    cache,
+                    Value::Str("next".into()),
+                    Value::Str("hero".into()),
+                    owner,
+                    Value::Real(64.),
+                    Value::Real(16.),
+                    Value::Real(90.),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!("restored hero");
+        };
+        assert_eq!(h.executed_unit(unit).unwrap().abilities, abilities);
+    }
 }
 
 #[test]

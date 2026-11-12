@@ -336,7 +336,7 @@ impl UnitAbilities {
         self.levels.remove(index);
         true
     }
-    fn is_learnable(&self, ability: [u8; 4]) -> bool {
+    pub(in super::super) fn is_learnable(&self, ability: [u8; 4]) -> bool {
         self.learnable.iter().any(|skill| skill.alias == ability)
     }
     /// Cooldown overrides or autocast state keyed by `ability`.
@@ -451,7 +451,7 @@ pub(super) struct Admission {
 }
 
 impl ObjectHost {
-    pub(super) fn restore_cached_abilities(
+    pub(in super::super) fn restore_cached_abilities(
         &self,
         state: &mut UnitAbilities,
         saved: &crate::game_cache::CachedUnit,

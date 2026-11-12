@@ -85,3 +85,60 @@ above. Saving and revisiting OrcX01/OrcX02 zones remain unsupported.
 Returning false unconditionally or relaunching the map would hide missing
 state and is not supported by this evidence. The existing ChangeLevel
 route probe bypasses SaveGame and cannot validate save or revisit fidelity.
+
+## Campaign unit ability projection (2026-11-13)
+
+The separate recreation-owned game-cache path captured added or removed ordinary
+abilities, but even a same-source `RestoreUnit` rejected that saved entry. The
+restore validator required the current source's ordinary abilities and refused
+extra runtime abilities. A successful store/save could therefore replace a usable
+hero checkpoint with one the continuation could not load.
+
+Read-only disassembly of the selected image above narrows the native contract:
+
+- Store path `0x519b50` calls `0x6d8b20` at `0x519c7f`. The latter calls
+  `0x6d7260` to aggregate ability contributions, then `0xb40510` on the hero
+  component when present. Aggregation is not a copy of the ability list.
+- `0xb40860` prepares five eight-byte records. The loop at `0xb408a0` reads
+  aliases from hero component `+0xf8`, queries each through `0x6d6570`, and
+  stores alias and internal rank plus one at `0xb40947`/`0xb4094e`. Its end
+  at `0xb4096c` bounds the records; there is no arbitrary ability-list loop in
+  this writer.
+- Restore `0x518ca0` creates a fresh unit through `0x687ca0`, then calls
+  `0xb40160` on its hero component. At `0xb40351` each nonzero saved alias
+  is searched against the receiving hero's five `+0xf8` slots; only a match
+  reaches the repeated rank-application call `0xb3f320` at `0xb40388`.
+
+These static observations support keeping hero learn-slot ranks and rebuilding
+ordinary abilities from the receiving source. They do not establish persistence
+of arbitrary runtime additions/removals. No new original-client run was made.
+
+Capture now projects onto the source ordinary abilities plus live hero learn-slot
+ranks. Added ordinary aliases are omitted, removed source aliases are reinstated,
+and ordinary ranks come from source creation. Cooldown overrides for omitted
+aliases are omitted too. The recreation's existing live sequence is retained
+for surviving aliases; missing source entries return at their creation indices.
+Native ordering and cooldown-override persistence remain unqualified. The existing
+restore validator runs before profile mutation, retaining strict errors for
+unsupported persisted progress. The payload version is unchanged.
+
+`cached_ability_edits_rebuild_source_abilities_for_continuation` uses synthetic
+source data through public add/remove, store, save and restore natives. It checks
+successful stores, identical persisted bytes for transient edits, unchanged live
+state and arena, and reconstructed hero and ordinary-unit abilities with a learned
+nonstock hero slot in a fresh host. This is a recreation continuation regression
+backed by static native evidence, not a
+matched native runtime comparison. Explicit permanent-ability edits, original
+W3V import and complete world/VM saves remain unsupported. This does not
+implement `SaveGame` or `LoadGame`.
+The existing restore validator still refuses receiving-map authored ability-list
+mismatches; cross-map changes to those definitions are outside this correction.
+Previously written snapshots containing unsupported transient edits still refuse;
+this correction changes capture, without migrating those old records.
+
+Validation: 13 targeted cache tests and 218 affected synthetic inventory/powerup
+tests pass in an independent build directory under a private offscreen display
+and null audio sink. The original-install attribute gate was explicitly skipped.
+The affected WebAssembly library build and touched-file formatting checks pass;
+workspace compiler warnings remain errors. These checks do not establish native
+runtime or browser execution parity.

@@ -160,18 +160,34 @@ impl ObjectHost {
             });
         }
         items.sort_unstable_by_key(|item| item.slot);
-        // Preserve the live ability order (creation/learn sequence). The
-        // chapter-continuation gate requires the restored unit to carry the
-        // same order the previous chapter stored, and presentation reads this
-        // order. Native restore order is unqualified; PC3UNIT is
-        // recreation-owned, so round-trip preservation is the contract.
-        let levels: Vec<_> = abilities.levels().collect();
+        let mut restored = self
+            .prepare_unit_abilities(&record.definition)
+            .map_err(|e| e.to_string())?
+            .ok_or("unit-cache abilities not admitted")?;
+        // Native cache retains hero learn slots; fresh creation rebuilds ordinary abilities.
+        let mut levels: Vec<_> = abilities
+            .levels()
+            .filter_map(|(alias, rank)| {
+                if restored.is_learnable(alias) {
+                    Some((alias, rank))
+                } else {
+                    let initial = restored.level(alias);
+                    (initial > 0).then_some((alias, initial))
+                }
+            })
+            .collect();
+        for (index, entry) in restored.levels().enumerate() {
+            if !levels.iter().any(|(alias, _)| *alias == entry.0) {
+                levels.insert(index.min(levels.len()), entry);
+            }
+        }
         // Order stored cooldowns by the live ability order so the payload
         // round-trips the same sequence the chapter stored. Duration overrides
         // are retained sorted in `ability_cooldown.rs`; this projects them into
         // live order. Native restore order is unqualified; PC3UNIT ordering is
         // recreation-owned.
         let mut cooldowns = abilities.cooldowns().to_vec();
+        cooldowns.retain(|(alias, _, _)| levels.iter().any(|(saved, _)| saved == alias));
         cooldowns.sort_by_key(|(alias, _, _)| {
             levels
                 .iter()
@@ -201,6 +217,8 @@ impl ObjectHost {
             rally: record.activity.as_ref().and_then(|activity| activity.rally),
         };
         saved.validate()?;
+        self.restore_cached_abilities(&mut restored, &saved)
+            .map_err(|e| format!("StoreUnit snapshot cannot restore: {e}"))?;
         Ok(saved)
     }
 }
