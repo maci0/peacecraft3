@@ -1749,6 +1749,29 @@ impl ObjectHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_weapon_missile_speed(&mut self, unit: HandleId, speed: MissileSpeed) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).unwrap() else {
+            panic!("unit");
+        };
+        record
+            .combat
+            .as_mut()
+            .unwrap()
+            .weapon
+            .as_mut()
+            .unwrap()
+            .missile_speed = speed;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_illusion_dealt_factor(&mut self, unit: HandleId, factor: f32) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).unwrap() else {
+            panic!("unit");
+        };
+        record.illusion.as_mut().unwrap().dealt_factor = factor;
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_queue_missile(
         &mut self,
         source: HandleId,
@@ -2352,6 +2375,11 @@ impl ObjectHost {
                     let checkpoint = self.script_random_primary_checkpoint();
                     let prepared = (|| -> Result<_, Error> {
                         let (damage, base) = self.roll_damage(unit, weapon, swung)?;
+                        let damage = if weapon.missile_speed == MissileSpeed::Instant {
+                            self.mirror_damage(unit, swung, damage)?
+                        } else {
+                            damage
+                        };
                         let retreat = if preflight {
                             let life = self
                                 .weapon_target(swung)

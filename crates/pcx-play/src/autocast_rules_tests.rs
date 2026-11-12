@@ -277,7 +277,18 @@ fn ambiguous_or_malformed_source_refuses() {
 #[test]
 #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
 fn selected_original_autocast_classes_bind() {
-    let image = std::fs::read(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE")).unwrap();
+    use std::io::Read;
+    const IMAGE_BUDGET: usize = 32 << 20;
+    let mut image = Vec::new();
+    std::fs::File::open(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE"))
+        .unwrap()
+        .take(IMAGE_BUDGET as u64 + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    assert!(
+        image.len() <= IMAGE_BUDGET,
+        "selected image exceeds test budget"
+    );
     let rules = Rules::read(
         &image,
         AssetIdentity {
@@ -292,14 +303,16 @@ fn selected_original_autocast_classes_bind() {
     let codes: Vec<[u8; 4]> = rules.classes.iter().map(|c| c.code).collect();
     for code in [
         b"Aweb", b"Afae", b"Aren", b"Ablo", b"AUfu", b"Arst", b"ANms", b"AEim", b"Arep", b"ANba",
-        b"Acrs", b"Ambt",
+        b"Acrs", b"Ambt", b"Anhe",
     ] {
         assert!(codes.contains(code), "missing autocast class {code:?}");
     }
     let class = |code: &[u8; 4]| rules.classes.iter().find(|c| c.code == *code).unwrap();
     // Inner Fire, Web, Raise Dead, Black Arrow and Heal share the decoded ON handler;
     // Mana Shield and Immolation override the update hook and stay undecoded.
-    for code in [b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt"] {
+    for code in [
+        b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt", b"Anhe",
+    ] {
         assert!(class(code).enable.is_some(), "no ON decode for {code:?}");
     }
     for code in [b"ANms", b"AEim"] {
@@ -313,6 +326,9 @@ fn selected_original_autocast_classes_bind() {
     assert_eq!(class(b"Ambt").enable.unwrap().group, 1);
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);
     assert_eq!(class(b"Ainf").enable.unwrap().first_tick, 0.02);
+    assert_eq!(class(b"Anhe").enable, class(b"Ahea").enable);
+    assert_ne!(class(b"Anhe").on, class(b"Ahea").on);
+    assert_ne!(class(b"Anhe").off, class(b"Ahea").off);
     for pair in [(*b"Ahea", 1), (*b"Aslo", 1), (*b"AHfa", 2), (*b"ANba", 2)] {
         assert!(rules.groups.contains(&pair), "missing group {pair:?}");
     }

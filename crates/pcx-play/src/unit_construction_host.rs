@@ -91,6 +91,15 @@ pub struct Site {
     linked_mine: Option<HandleId>,
 }
 impl Site {
+    pub(super) fn owner_transfer_supported(&self) -> bool {
+        // Worker-required sites are admitted through the qualified Human construction path.
+        !self.autonomous
+            && !self.initial_pending
+            && !self.canceled
+            && self.linked_mine.is_none()
+            && self.fault.is_none()
+    }
+
     pub(super) fn note_damage(&mut self) {
         self.damaged = true;
     }
@@ -851,11 +860,14 @@ impl ObjectHost {
                     true
                 } else {
                     let worker = self.executed_unit(site.worker?).ok()?;
-                    worker.paused_since.is_none()
+                    worker.owner == record.owner
+                        && worker.paused_since.is_none()
                         && worker.combat.as_ref().is_none_or(|state| !state.dead)
                 };
                 (!site.initial_pending
                     && !site.canceled
+                    && record.vitals.is_some_and(|vitals| vitals.life > 0.)
+                    && record.combat.as_ref().is_none_or(|state| !state.dead)
                     && record.paused_since.is_none()
                     && worker_ready)
                     .then(|| {
@@ -1473,7 +1485,11 @@ impl ObjectHost {
         let mut delta = now - state.through;
         if let Some(worker) = state.worker {
             let worker = self.executed_unit(worker)?;
-            if worker.owner != owner || worker.vitals.is_none_or(|v| v.life <= 0.) {
+            if worker.owner != owner {
+                // Site transfer keeps participation until ordinary work revalidates it.
+                state.worker = None;
+                delta = 0.;
+            } else if worker.vitals.is_none_or(|v| v.life <= 0.) {
                 return Err(
                     self.construction_error("construction worker lifecycle requires cleanup")
                 );
@@ -1543,7 +1559,23 @@ impl ObjectHost {
         site: HandleId,
         worker: Option<HandleId>,
     ) -> Result<bool, Error> {
-        let owner = self.executed_unit(site)?.owner;
+        let target = self.executed_unit(site)?;
+        let Some(state) = &target.construction else {
+            return Ok(false);
+        };
+        if let Some(fault) = &state.fault {
+            return Err(self.construction_error(fault.clone()));
+        }
+        if state.canceled
+            || state.initial_pending
+            || state.autonomous
+            || target.vitals.is_none_or(|vitals| vitals.life <= 0.)
+            || target.combat.as_ref().is_some_and(|combat| combat.dead)
+            || worker.is_some_and(|worker| state.worker.is_some_and(|current| current != worker))
+        {
+            return Ok(false);
+        }
+        let owner = target.owner;
         if let Some(worker) = worker {
             let record = self.executed_unit(worker)?;
             if record.owner != owner
@@ -1566,9 +1598,6 @@ impl ObjectHost {
         if let Entry::Unit { record } = self.inner.entry_mut(site)?
             && let Some(state) = &mut record.construction
         {
-            if state.canceled || state.initial_pending || state.autonomous {
-                return Ok(false);
-            }
             state.worker = worker;
             return Ok(true);
         }

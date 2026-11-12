@@ -595,7 +595,7 @@ fn spell_rolls(h: &ObjectHost) -> usize {
         .iter()
         .filter(|record| {
             record.site
-                == CallSite::SecondaryDie {
+                == CallSite::SecondaryReal {
                     channel: usize::from(SPELL_ORB_STREAM),
                 }
         })
@@ -658,8 +658,33 @@ fn a_later_hit_restarts_the_mark_timer() {
 fn an_orb_without_chance_never_marks_and_rolls_once_per_swing_on_its_own_stream() {
     let (Fixture { mut h, hero, .. }, _, target) = armed_hero(b"odez");
     let before = h.script_random_state().unwrap().clone();
+    let trace_start = h.script_random_calls().unwrap().len();
     attack(&mut h, hero, target);
     run(&mut h, 4.5);
+    let policy = crate::script_random::profile::fixture();
+    let mut expected = Some(before.clone());
+    for record in &h.script_random_calls().unwrap()[trace_start..] {
+        use crate::script_random::{order::CallSite, state};
+        match &record.site {
+            CallSite::SecondaryReal { channel } => {
+                state::secondary_real(&policy, &mut expected, *channel).unwrap();
+                assert_eq!(
+                    record.secondary_word,
+                    expected.as_ref().unwrap().secondary_words().nth(*channel),
+                );
+            }
+            CallSite::Gameplay { caller } if caller.as_ref() == "combat damage" => {
+                state::integer(&policy, &mut expected, 1, 1).unwrap();
+                assert_eq!(record.secondary_word, None);
+            }
+            site => panic!("unexpected swing consumer: {site:?}"),
+        }
+        assert_eq!(
+            record.primary_word,
+            Some(expected.as_ref().unwrap().primary_word())
+        );
+    }
+    assert_eq!(h.script_random_state(), expected.as_ref());
     assert!(!marked(&h, target));
     let hits = hit_count(&h, target, spell_orb_hit());
     assert!(hits >= 3, "{hits} hits");

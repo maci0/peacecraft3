@@ -346,3 +346,41 @@ fn player_event_response_uses_registered_player_and_symbolic_event() {
     h.finish_fired_event();
     assert_eq!(h.native("GetTriggerPlayer", &[]).unwrap(), Value::Null);
 }
+
+#[test]
+fn native_string_dialog_text_waits_for_dialog_identity_and_keeps_tag_data() {
+    use std::cell::Cell;
+    let mut h = host();
+    let d = create(&mut h);
+    let did = id(&d);
+    let calls = Cell::new(0);
+    let source = |_| {
+        calls.set(calls.get() + 1);
+        Ok(Some("^^x^^".into()))
+    };
+    assert!(
+        h.native_with_strings(
+            "DialogSetMessage",
+            &[Value::Null, Value::Str("TRIGSTR_7".into())],
+            &source
+        )
+        .is_err()
+    );
+    assert_eq!(calls.get(), 0);
+    h.native_with_strings(
+        "DialogSetMessage",
+        &[d.clone(), Value::Str("TRIGSTR_7".into())],
+        &source,
+    )
+    .unwrap();
+    h.native_with_strings(
+        "DialogAddButton",
+        &[d, Value::Str("TRIGSTR_7".into()), Value::Int(77)],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(calls.get(), 2);
+    let record = h.dialog_state().unwrap().get(did).unwrap();
+    assert_eq!(record.message.as_deref(), Some("^^x^^"));
+    assert_eq!(record.buttons[0].text, "^^x^^");
+}

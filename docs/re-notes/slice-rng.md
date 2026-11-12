@@ -1,5 +1,57 @@
 # Script RNG host: seed gate and call-site order
 
+## Current correction (2026-11-13)
+
+The historical inventory below predates the current caller log. `DrawLog` now
+records admitted calls, and the host already connects the held spell-orb consumer
+through `orb_swing_start`. Secondary real calls were incorrectly named
+`SecondaryDie` in that log. They now use `SecondaryReal`; both secondary call
+kinds record their selected channel's post-draw word as well as the primary word.
+Primary calls carry no secondary word. This changes trace identity and inspection,
+not generator arithmetic, seeds, or draw order. Secondary records identify the
+call kind and channel, not the runtime unit/ability owner.
+
+Fresh bounded GNU objdump inspection of the selected image confirms the
+`0xc9f35d` call to `0x69a030`. The helper's valid-owner/channel path selects
+`base + 4 + channel * 8` before invoking the arithmetic draw. The stream operand
+continues to come from the admitted orb policy; no observed operand is copied
+into production. This is native-code evidence, not runtime parity. Source identity
+is the `1.29.2.9231` image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The existing detailed binding is in [passive-held-items.md](passive-held-items.md#the-proc-roll-observed).
+
+`interleaved_secondary_real_and_die_retain_distinct_exact_state_records` checks
+mixed script integer/real and secondary real/die calls, including two channels,
+a one-sided die, failed channel/sides calls, unseeded refusal, and reseeding.
+Each checkpoint compares the complete retained State (including lanes) with
+explicit low-level draws and checks the exact caller/word log. The existing
+`an_orb_without_chance_never_marks_and_rolls_once_per_swing_on_its_own_stream`
+now replays the actual combat/orb trace and checks complete final state. These
+are synthetic host-routing/lifecycle regressions, not independent evidence for
+the low-level arithmetic or native tick parity.
+
+Engine initialization remains blocked on the semantic origin of the per-slot
+seed inputs and the complete owner/consumer lifecycle. The fresh
+[initializer review](original-rng-control.md#enginescript-initializer-distinction-rechecked-2026-11-13)
+confirms that the reviewed engine path seeds secondary state from the raw seed,
+whereas the script setter uses its discarded primary result. No captured seed or
+universal warmup is admitted. The preexisting selected-code and Wine evidence
+below remains scoped to its recorded inputs and selected paths.
+
+Independent native validation uses `/tmp/pc3-fidelity-sol61-03-target`, with
+source compilation from this worktree and explicit execution of both named
+regressions above: six host tests, eighteen numeric/profile tests and 113 orb
+cases pass. One separate venom selected-install gate remains explicitly ignored
+because it requires `PEACECRAFT3_INSTALL`. All runs verify private Xvfb and null
+audio before launch; workspace compiler warnings are errors. Shared-target logs
+are superseded because parallel worktrees can reuse stale workspace artifacts.
+The durable local receipt is `/tmp/pc3-sol61-03-validation.json`, with the exact
+commands and per-stage logs. The independent native library build, browser WASM
+compile check and browser WASM library build also pass with warnings denied.
+WASM runtime execution and a new original-client comparison were not run.
+
+## Historical inventory (superseded where noted above)
+
 `ObjectHost` script RNG in `crates/pcx-play/src/script_random_host.rs` does not draw before an executed `SetRandomSeed`. It also does not record the Human01 startup callers in `docs/re-notes/original-rng-control.md`. No seed, warmup count, or generator constant is added. Generator identity stays open. A matching Wine probe is not recreation parity.
 
 ## No draw before SetRandomSeed

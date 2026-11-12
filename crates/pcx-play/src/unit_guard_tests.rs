@@ -1682,3 +1682,6 @@ fn remove_all_guard_positions_releases_only_that_players_guards() {
     );
     assert_eq!(released(h, b), other_before);
 }
+
+#[path = "campaign_captain_recruitment_tests.rs"]
+mod campaign_captain_recruitment;

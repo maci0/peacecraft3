@@ -11,11 +11,15 @@ through `52d670`, writes its label color at row offset `68`, and invalidates
 the list through virtual slot `134`. It leaves other rows and value colors
 alone. Missing native objects/rows return without mutation.
 
-`LeaderboardSetItemLabelColor` remains unsupported in the host. The attempted
-sibling implementation did not complete the required gates and was discarded.
-A future implementation must account for native channel truncation and
-absent-object/row no-op behavior, or explicitly retain those limits. No rendered
-fidelity or successful Human08 replay is established here.
+Release 0.17.0 added `LeaderboardSetItemLabelColor` using the value-color
+setter's strict row/channel checks. The follow-up corrects this native's
+documented boundary behavior: signed integer channels retain their low byte,
+and null/destroyed boards or negative/missing rows return without mutation.
+These no-ops do not advance the canonical revision. Signature validation still
+precedes resolution; unknown identities and wrong handle families remain
+explicit refusals. Other setters retain their existing strict contracts until
+their own native boundaries are qualified. No rendered fidelity is established
+by these host-state checks.
 
 The opt-in `ObjectHost::with_leaderboards` implements the Human02 board path:
 `CreateLeaderboard`, `DestroyLeaderboard`, `LeaderboardDisplay`,
@@ -48,8 +52,10 @@ mutation. Errors preserve existing boards, associations, text accounting,
 revision and arena identities. They retain the native name through the ordinary
 host error and VM source diagnostic path. Duplicate native row additions,
 absent-player index/removal, negative/out-of-range indices or size, non-byte
-color arguments, NUL text and wrong handle families refuse explicitly. Null/stale
-board handles refuse except for the qualified display/destruction wrappers below. These are safe reconstruction contracts where original
+color arguments, NUL text and wrong handle families refuse explicitly, except
+for the qualified item-label-color behavior above. Null/stale board handles
+refuse except for item-label color and the display/destruction wrappers below.
+These are safe reconstruction contracts where original
 invalid-input behavior is unqualified. A player may explicitly disassociate
 with `PlayerSetLeaderboard(player, null)`; an unassigned player query returns
 null. Original-client null and disassociation parity has not been measured.
@@ -165,13 +171,14 @@ native-code evidence, not a fresh original-client runtime probe. Local bounded
 disassembly and selected-image identity are retained under
 `.scratch/leaderboard-destroyed-20261026/`.
 
-Only `LeaderboardDisplay` and `DestroyLeaderboard` treat null or a known typed
+`LeaderboardDisplay` and `DestroyLeaderboard` treat null or a known typed
 leaderboard tombstone as absent: they return without changing revision, budget,
 assignments or live records. A repeated destruction cannot reclaim resources
 twice, and display cannot resurrect the removed board. Never-admitted handle
 identities and wrong handle families still refuse with source context; their
 original invalid-input behavior is not inferred from this guard. Other native
-getters/setters retain their existing null/stale refusal. Signature validation
+getters/setters, except item-label color as qualified above, retain their
+existing null/stale refusal. Signature validation
 still precedes this branch. The typed arena tombstone, canonical destruction and
 renderer retirement paths remain unchanged.
 

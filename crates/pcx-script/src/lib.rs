@@ -91,9 +91,9 @@
 //!   An allocate call `T.create()` reaches resolution as a call to the type's
 //!   own name and is refused naming the rewrite; `method`, `cast`, `delegate`
 //!   and Zinc are refused by the parser.
-//! - **`^^` code tags and `TRIGSTR_`** are host seams ([`eval::Host::code_tag`],
-//!   [`eval::Host::table_string`]). `pcx-trig` owns `war3map.wts`; this crate
-//!   does not depend on it.
+//! - **`^^` markers and `TRIGSTR_`** stay literal during evaluation. Native
+//!   consumers use [`eval::Host::native_table_string`] at their own lookup
+//!   boundary. `pcx-trig` owns `war3map.wts`; this crate does not depend on it.
 //! - `.` member access and the `..` concatenation spelling do not exist in
 //!   vanilla (concatenation is `+`); both are rejected by the lexer.
 //! - Bare `!` is not an operator (JASS spells negation `not`); `!=` of course

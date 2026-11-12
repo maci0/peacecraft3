@@ -221,3 +221,38 @@ fn optional_declarations_require_matching_contract_and_source() {
     );
     assert!(h.begin_script_call("ForGroup", &[]).unwrap().is_none());
 }
+
+#[test]
+fn membership_null_queries_work_in_compiled_callbacks_and_destroyed_group_aliases() {
+    let mut v = vm(r#"
+function missing takes nothing returns boolean
+return IsUnitInGroup(null, G)
+endfunction
+function present takes nothing returns boolean
+return IsUnitInGroup(A, G)
+endfunction
+function CheckNull takes nothing returns nothing
+if IsUnitInGroup(null, G) or IsUnitInGroup(GetEnumUnit(), null) then
+set OK = false
+endif
+set HITS = HITS + 1
+endfunction
+function run takes nothing returns nothing
+call ForGroup(G, function CheckNull)
+endfunction
+function destroy takes nothing returns nothing
+call DestroyGroup(G)
+endfunction
+"#);
+    assert_eq!(v.call("missing", &[]).unwrap(), Value::Bool(false));
+    assert_eq!(v.call("present", &[]).unwrap(), Value::Bool(true));
+    let handles = v.host().inner.handles();
+    v.call("run", &[]).unwrap();
+    assert_eq!(v.global("HITS"), Value::Int(2));
+    assert_eq!(v.global("OK"), Value::Bool(true));
+    assert_eq!(v.host().memberships(), 2);
+    assert_eq!(v.host().inner.handles(), handles);
+    v.call("destroy", &[]).unwrap();
+    assert_eq!(v.call("missing", &[]).unwrap(), Value::Bool(false));
+    assert!(v.call("present", &[]).is_err());
+}

@@ -333,3 +333,27 @@ fn platform_layout_limits_are_checked_without_allocating_the_config_budget() {
         assert_eq!(result.is_err(), usize::BITS == 32);
     }
 }
+
+#[test]
+fn native_string_config_borrowed_and_owned_preserve_nested_tokens_and_tags() {
+    let scripts = scripts(b"STRING 7\r\n{\r\nTRIGSTR_9\r\n}\r\nSTRING 9\r\n{\r\n^^kept^^\r\n}\r\n");
+    let make = || {
+        object(scripts.shared_program())
+            .with_map_config(MapConfigBudget {
+                text_bytes: 64,
+                start_locations: 2,
+            })
+            .unwrap()
+    };
+    let mut borrowed = scripts.vm(make());
+    borrowed.call("config", &[]).unwrap();
+    let mut owned = Arc::clone(&scripts).owned_vm(make());
+    owned.call("config", &[]).unwrap();
+    for config in [
+        borrowed.host().inner.map_config().unwrap(),
+        owned.host().inner.map_config().unwrap(),
+    ] {
+        assert_eq!(config.name.as_deref(), Some("TRIGSTR_9"));
+        assert_eq!(config.description.as_deref(), Some("^^kept^^"));
+    }
+}

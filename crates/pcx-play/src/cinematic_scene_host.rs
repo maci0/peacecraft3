@@ -97,6 +97,7 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         self.cinematic_scene.as_ref()?;
         if !matches!(name, SET | END) {
@@ -121,11 +122,23 @@ impl ObjectHost {
                 else {
                     return Some(Err(self.inner.error(name, Failure::Signature)));
                 };
+                let speaker = match pcx_script::text::native_map_string(speaker, strings) {
+                    Ok(text) => text.into_owned(),
+                    Err(why) => {
+                        return Some(Err(self.inner.error(name, Failure::ScriptString(why))));
+                    }
+                };
+                let text = match pcx_script::text::native_map_string(text, strings) {
+                    Ok(text) => text.into_owned(),
+                    Err(why) => {
+                        return Some(Err(self.inner.error(name, Failure::ScriptString(why))));
+                    }
+                };
                 Some(CinematicScene {
                     portrait: *portrait,
                     color: *color,
-                    speaker: speaker.clone(),
-                    text: text.clone(),
+                    speaker,
+                    text,
                     scene_duration,
                     voiceover_duration,
                     started: self.timer_game_time().unwrap_or(0.0),

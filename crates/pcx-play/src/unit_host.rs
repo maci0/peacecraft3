@@ -97,6 +97,7 @@ pub(super) enum FormChange {
 
 pub(super) struct PreparedUnit {
     pub(super) record: ExecutedUnit,
+    autocast: Vec<([u8; 4], f32)>,
     placement: Option<crate::unit_placement::Prepared>,
     guard: Option<super::unit_guards::UnitGuard>,
     inventory: Option<super::item_creation::CachedInventory>,
@@ -1792,6 +1793,17 @@ impl ObjectHost {
         } else {
             None
         };
+        if self
+            .executed_unit(*unit)?
+            .construction
+            .as_ref()
+            .is_some_and(|site| !site.owner_transfer_supported())
+        {
+            return Err(self.inner.error(
+                SET_OWNER,
+                Failure::UnitState("incomplete construction ownership transfer is not qualified"),
+            ));
+        }
         // Producer-transfer cleanup: a transferred producer keeps no training
         // queue. Refund remaining entries per-entry with the admitted rate and
         // release active food, without training events, before the owner
@@ -2845,8 +2857,14 @@ impl ObjectHost {
                 .attack_destination = Some(binding.home);
             self.reserve_steer_commits(1, NATIVE)?;
         }
+        let autocast = if matches!(birth, Birth::Corpse | Birth::Illusion) {
+            Vec::new()
+        } else {
+            self.prepare_default_autocast(&record)?
+        };
         Ok(PreparedUnit {
             record,
+            autocast,
             placement,
             guard,
             inventory,
@@ -2860,6 +2878,7 @@ impl ObjectHost {
     ) -> Result<HandleId, Error> {
         let PreparedUnit {
             record,
+            autocast,
             placement,
             guard,
             inventory,
@@ -2869,6 +2888,9 @@ impl ObjectHost {
             game_time: self.timer_game_time(),
             position: record.position,
         };
+        self.autocast_ticks
+            .try_reserve(autocast.len())
+            .map_err(|_| self.inner.error(NATIVE, Failure::Capacity))?;
         let id = self.inner.allocate(
             Entry::Unit {
                 record: crate::playercolor_host::UnitRecord {
@@ -2878,6 +2900,13 @@ impl ObjectHost {
             },
             NATIVE,
         )?;
+        for (alias, delay) in autocast {
+            self.autocast_ticks.push((
+                id,
+                alias,
+                birth.game_time.expect("autocast clock") + f64::from(delay),
+            ));
+        }
         self.publish_unit_guard(id, guard);
         if let Some(prepared) = placement {
             self.unit_placement

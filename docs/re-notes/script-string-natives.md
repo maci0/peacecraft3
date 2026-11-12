@@ -4,22 +4,70 @@ Image: Warcraft III.exe 1.29.2.9231, SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 Static assembly observations; no original-client execution.
 
-## Length and case
+## StringLength implementation and trigger lookup
 
-Registration at `0x49b563` selects `StringLength` handler `0x4ac5d0`.
+`StringLength` registration at `0x49b563` selects handler `0x4ac5d0`.
 It returns zero for null/empty strings. Otherwise `0x708dc0` recognizes a
 trigger-string reference and `0x708d70` resolves its table entry before
 `0x433910` counts bytes to the first NUL. This is byte length, not a Unicode
-scalar count. Trigger-reference integer parsing and lookup failures still need
-qualification before implementing the native. No implementation is included.
+scalar count. `NativeImpl::StringLength` now dispatches through the VM with
+signature validation, the existing host WTS seam and byte/NUL counting.
+
+Follow-up static evidence (2026-11-13), from GNU objdump 2.47 against the selected
+image with its SHA-256 checked again:
+
+- `0x708dc0` obtains the length of the NUL-terminated prefix at `0xea85f0`
+  and compares that many bytes through `0x4339f0` -> `0xa77520`.
+  This is an exact, case-sensitive prefix comparison.
+- The suffix goes to `0x434390`. Only an initial minus is consumed; neither
+  whitespace nor plus is skipped. Decimal digits accumulate with wrapping
+  32-bit multiply/add, stopping at the first other byte. No digits means zero.
+  A negative suffix negates the wrapped accumulator.
+- The handler treats the parser result `-1` as no reference. Other results
+  are looked up once, including zero, negative bit patterns and wrapped ids.
+  A WTS body is not recursively resolved and no code-tag expansion occurs
+  in this handler. The new `native_trigstr_id` intentionally differs from
+  `trigstr_id`, which still describes the editor's exact identifier syntax.
+- `0x708d70` returns the empty string at `0xe68b80` on a missing entry.
+  The native lookup seam now distinguishes an absent map source (error) from
+  an absent id in an admitted table (`None`, yielding native empty text).
+  Invalid source encoding remains an error with the WTS label and entry id.
+
+The initial implementation in `0f8cc7d5` still expanded canonical literals and
+code tags before native dispatch. The migration below removes that earlier
+lookup, preserves raw script data and supplies the map source to real consumers.
+It does not establish complete native runtime or rendered string parity.
+
+At the start of inspection, REA reported the configured Ghidra installation
+unavailable (missing application properties/decompiler); these observations are shell-tool
+static assembly evidence, not REA Evidence records or original-client execution.
+The executable and disassembly remain local; no source asset bytes are committed.
+
+## Case, substring and hash qualification
 
 `StringCase` registration at `0x49b577` selects `0x4ac4c0`. It shares the
-trigger-string resolution, copies through `0x433500` with bound `0x400`, then
-selects `0x434600` for true or `0x4339e0` for false. Copy termination and
-non-ASCII conversion still need decoding; this native remains refused.
+trigger-string resolution above, copies through `0x433500` with bound `0x400`,
+then selects `0x434600` for true or `0x4339e0` for false. The copy helper uses
+`min(strlen(source), bound - 1)` and always appends NUL for a nonzero bound;
+it does not preserve a UTF-8 boundary. Null/empty input returns a null string
+handle. Non-ASCII conversion and locale behavior still need decoding; the
+native remains refused.
+
+`SubString` registration at `0x49b54f` selects `0x4ac8f0`, which forwards to
+`0x4699c0`. That helper counts bytes, narrows indices and source length to
+16-bit values and uses signed comparisons (`0x469a18`..`0x469a37`) before
+constructing the result by temporarily writing a NUL at the end position.
+Negative/reversed indices and large lengths need further qualification; an
+ordinary Rust character slice or unconditional unsigned clamp is unsupported.
+This native remains refused.
 
 `StringHash` registration at `0x49b58b` selects `0x4ac5a0`. Null/empty returns
-zero; otherwise it calls `0x433890`. The full hash is not yet implemented.
+zero; otherwise it calls `0x433890`, without the trigger-table lookup used by
+length/case. The helper uppercases ASCII a..z, replaces slash with backslash,
+and admits at most `0x3ff` bytes into its stack buffer before calling
+`0x4347f0` with zero as its third argument. Non-ASCII bytes pass through
+this preprocessing.
+The full hash is not yet implemented, so this native remains refused.
 
 ## Real formatting correction
 
@@ -39,9 +87,170 @@ both formatting natives remain refused rather than use Rust formatting.
 
 ## Remaining scope
 
-S2I/S2R, substring boundaries, localization natives and typed player counts
-remain unimplemented. No native/runtime parity or campaign validation is claimed.
-An ordinary-string length implementation passed 155 script tests with zero failures
-and five ignores, and the strict play/app Clippy check passed. It was discarded
-for the release because the required play and downstream suites had not completed.
-These validation results describe the discarded candidate, not native fidelity.
+S2I/S2R, case/substring boundaries, the full hash and real formatting remain
+unimplemented. Additional map-string wrapper families remain refused until their
+real native consumers are implemented. No native/runtime parity or campaign
+validation is claimed.
+
+## Initial StringLength validation (2026-11-13)
+
+Validation uses this worktree's `crates/pcx-script` source and the isolated
+`CARGO_TARGET_DIR=/tmp/pc3-fidelity-sol61-01-target`; shared-cache logs are
+superseded. `cargo test -p pcx-script --jobs 2 --offline` passes: 158 tests,
+zero failures, five explicit original-input/doc ignores across all targets.
+The new VM regressions cover null/empty text, UTF-8 byte counting, NUL termination,
+computed trigger references, suffix parsing/overflow, one-level lookup, raw tags,
+empty WTS bodies, missing/malformed sources, signature mismatches and recovery
+after an error. Two standalone text-module tests also pass with warnings denied.
+These are synthetic parser/VM checks, not native runtime or campaign parity.
+
+Strict `cargo clippy -p pcx-script --all-targets --jobs 2 --offline -- -D warnings`
+checks pass in that isolated target directory for native and
+`wasm32-unknown-unknown` targets. Formatting and diff checks pass.
+
+The isolated `cargo build -p pcx-script --target x86_64-unknown-linux-gnu
+--target wasm32-unknown-unknown --jobs 2 --offline` also passes for both libraries.
+
+Before the raw-literal migration below, main integration ran both complete
+affected package suites using caches
+independent of the parallel worktrees: 3,293 passed, zero failed, 148 explicit
+ignores. All four new byte-length, computed-reference, declaration/error and
+prefix-parsing regressions appear by name and pass. Strict native/WASM
+all-target Clippy, native/WASM library builds and the native campaign-probe
+rebuild pass. Per-command exit receipts and source hashes are retained locally
+under `/tmp/pc3-string-main-validation/`; that earlier run did not close the
+literal-expansion, missing-entry or native runtime comparison gaps. The next
+section supersedes its literal/table-entry behavior.
+
+
+## Raw literal and native-consumer migration
+
+Source/native-code evidence uses the same selected image above. Additional
+static reads cover `0x469010` (raw string backing pointer), `0x4afe80` (the common
+map-string wrapper), `0x493970` (GetLocalizedString), `0x493940`
+(GetLocalizedHotkey), and the registered entry/call sites below. These observations
+are not original-client execution. Disassembly and original bytes remain local.
+
+`0x4afe80` obtains the selected map table, reads the string backing pointer,
+returns null for initial null/empty input, and either returns the raw pointer or
+performs one `0x708dc0`/`0x708d70` lookup. It does not recursively resolve the
+result, query a UI dictionary, or replace `^^` markers. The selected disassembly
+contains 31 direct calls to this helper, across 29 registered native handlers.
+There are separately 16 inline prefix-parser call sites in 15 registered native
+handlers. These sets include unsupported APIs; they are evidence inventories,
+not permission to admit new natives.
+
+| Implemented consumer | Native boundary evidence | Map lookup |
+| --- | --- | --- |
+| DisplayTimedTextToPlayer | `0x48fbe0`, helper call `0x48fc00` after recipient/local checks | Text once |
+| SetPlayerName | `0x4a96d0`, helper `0x4a96e8` after player resolution | Name once |
+| SetMapName / SetMapDescription | `0x4a9370` / `0x4a92a0`, inline parsers `0x4a93b1` / `0x4a92e1` | Header once |
+| QuestSetTitle / QuestSetDescription / QuestItemSetDescription | Helpers `0x4a4aa8` / `0x4a4988` / `0x4a4928` | Text once after object resolution |
+| QuestSetIconPath | `0x4a4a30` reads through `0x469010`, copies to field `+0x4c` through `0x468d70` | Raw string, no map lookup |
+| DialogSetMessage / DialogAddButton / DialogAddQuitButton | Helpers `0x48f958` / `0x48f738` / `0x48f798` | Caption once after dialog resolution |
+| TimerDialogSetTitle | `0x4acfc0`, helper `0x4acfe3` | Title once after dialog resolution |
+| LeaderboardAddItem / LeaderboardSetLabel / LeaderboardSetItemLabel | Helpers `0x4a1d0d` / `0x4a2138` / `0x4a1fc3` | Label once after board resolution |
+| SetCinematicScene | Entry `0x4a78a0`, parsers `0x4a78cc` and `0x4a7913` | Speaker and text independently, in argument order |
+| SetAltMinimapIcon | Entry `0x4a6ea0`, parser `0x4a6ecc` | Path once; empty result leaves prior path |
+| TriggerRegisterPlayerChatEvent | Entry `0x4adbb0`, helper `0x4adc29` | Match text once after trigger/player checks |
+| GetLocalizedString | Entry `0x493970`, parser `0x4939b2`, lookup `0x4939c2`, dictionary `0x895a00` | Map once, then UI dictionary |
+| GetLocalizedHotkey | Entry `0x493940`, raw pointer then profile lookup `0x4304c0` | Raw key; no map lookup |
+
+The item-label call belongs to the registered entry `0x4a1fa0`, not the adjacent
+`LeaderboardRemovePlayerItem` entry `0x4a1f60`: those functions have no padding
+between them. Entry registrations plus bounded assembly were used to correct
+that initial padding-based candidate. No broad policy follows from proximity.
+
+The VM now escape-decodes literals while retaining their exact trigger tokens,
+paired markers and payload. The existing AST `decoded()` API continues to drop
+tag parts for its existing artifact callers; the new fallible `literal_text()`
+is the evaluation path. Escapes inside paired payloads receive normal JASS
+validation and decoding. Unsupported escapes or NUL remain errors, including in
+manually constructed payloads. Bare lowered trigger identifiers retain their
+exact spelling, including leading zeroes. Assignment, concatenation, equality,
+user-function parameters/returns and parked argument tails retain raw values.
+There is no persistent “already localized” marker: a later explicit native call
+can consume a returned trigger token once again, as the native wrappers do.
+
+`native_table_string` distinguishes a missing source from a missing entry.
+`MapScripts::table_string`, used by existing presentation readers, retains its
+prior API and missing-entry behavior. `native_with_strings` forwards a read-only
+lookup service without converting arbitrary native arguments. Both localized
+VM wrappers bind that service to their retained selected map. Recording,
+selected-neutral and startup hosts preserve their own dispatch before passing
+context onward; AI reads only its currently lent world, and preload preserves
+its cross-program callback refusal. No source is invented while a world is not
+lent. Consumer lookup occurs at its own branch, before resolved-byte budgets
+and state retention; invalid-object/local-recipient guards remain ahead of it.
+
+The UI dictionary bank has a distinct internal route for a key after map lookup,
+so a returned `TRIGSTR_` prefix is not interpreted twice or rejected as an
+unresolved original input. Direct uncontextualized bank lookup still refuses
+map references. Hotkey input is independently kept raw. Missing UI keys retain
+the checked bank fallback rules. No VM or WTS operation performs general UI tag
+formatting. The existing rich-text importer preserves closed markers with notes;
+actual native tag-formatting and rendered parity remain separate questions.
+
+A local pre-change proof fixture passed three checks showing the old defect:
+StringLength on a literal took two WTS lookups while the same supplied argument
+took one; raw returns demanded WTS/tag services prematurely; and legacy AST
+decoding dropped marker payloads. These checks demonstrated the old VM behavior,
+not original-client parity. The new regressions assert the corrected boundaries
+through the actual VM and real admitted host consumers.
+
+## Raw-string migration validation (2026-11-13)
+
+The isolated target above passes the complete `pcx-script`, `pcx-trig` and
+`pcx-play` package suites with `pcx-play/test-fixtures`: 3,403 passed, zero failed,
+157 explicitly ignored. This includes 3,008 play library tests and all 16 named
+`native_string_` consumer/source-forwarding regressions. The native coverage
+walk's negative fixture also passes: following context-aware dispatch must still
+reject a name appearing only in a declaration table.
+The same 16 focused consumer tests also pass with all features enabled, including
+the native-dispatch tracing entry point.
+
+The five affected integration targets (`custom_scripts`, `wts_materialization`,
+`string_identity`, `map_script_ownership`, `map_scripts_limits`) pass while
+retaining malformed-input, encoding, budget, source-diagnostic and owner-drop
+checks. Raw return/Capture assertions remain raw; real `StringLength` calls
+exercise demanded source/entry/encoding behavior. The first full run lacked
+this worktree's local corpus paths and failed five existing trigger asset
+checks. The successful rerun explicitly selected the existing local 1.28c and
+1.29.2.9231 installations; no tests or asset checks were removed.
+
+Strict all-target, all-feature Clippy checks pass for native and
+`wasm32-unknown-unknown`; both package builds pass for explicit
+`x86_64-unknown-linux-gnu` and WASM targets. Rust source hashes stayed unchanged
+through those checks. Formatting and diff checks pass.
+
+The app's shared script-session fixture now retains raw Capture arguments and
+demands invalid WTS text through `StringLength`. Its `map_loading` and
+`script_audio_session` integration targets require downstream validation in the
+application build; they were not run by these library gates. No original client,
+GPU window or audio playback was launched. Native runtime/rendered parity,
+case/substring/hash boundaries and custom real formatting remain unqualified.
+
+Independent main integration runs all affected script, trigger and gameplay
+package suites: 3,444 passed, zero failed, 159 explicit ignores. All sixteen
+native-consumer/forwarding regressions execute, alongside the construction
+transfer cases integrated in the same immutable source run. Strict native/WASM
+all-target/all-feature Clippy and both library builds pass. The local corpus
+inputs and per-step source hashes are recorded in
+`/tmp/pc3-strings-construction-main-validation/`.
+
+The first application session run found two stale fixture expectations: eager
+Capture text and the column/span of the now-explicit `call StringLength` error.
+Correcting those expectations leaves production/core source unchanged. Both
+application integration targets then pass all thirteen session cases each,
+including callback-ticket cases; the application test binary also rebuilds.
+Precise diagnostic spans, failed-candidate rollback and owner release remain
+asserted. Corrected receipts are in
+`/tmp/pc3-strings-construction-app-validation/`, whose acceptance record links
+the unchanged successful core checks rather than discarding the failed run.
+
+The rebuilt unchanged Human01 and Undead02 pass their 300-second post-control
+idle-script horizons. Orc02 and Human08 refuse earlier unsupported `ACcs` and
+`ACwb` automatic acquisition respectively. These are current recreation
+frontiers, not completed missions or rendered/original-client string parity.
+Exact commands and executable identity remain in
+`/tmp/pc3-strings-construction-horizons/`.

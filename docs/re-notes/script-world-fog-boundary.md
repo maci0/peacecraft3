@@ -70,3 +70,49 @@ Cargo-WASM factory gate cases pass. Strict native/WASM Clippy, affected builds
 and formatting pass. The Vulkan test is a synthetic float-target correctness
 check, not an original-game pixel comparison or performance threshold. No fresh
 original game or browser render was run, and Human01 is not playable yet.
+
+## Canonical Sentinel source accounting (2026-11-13)
+
+The canonical visibility sampler must include attached Sentinel owls in its
+candidate count, alongside executed units and started fog modifiers. Previously
+the listing emitted owls but its caller budgeted only units and modifiers. One
+owl violated the debug scan-count assertion; multiple owls could exhaust the
+scan limit. Count all attached owls before filtering by viewer sharing, so every
+viewer charges the same candidate traversal, including viewers receiving no
+owl sight. Geometry, the selected-client lattice and predecessor graph remain
+unchanged.
+
+This is a shipped-script requirement: the unchanged RoC `NightElf03` setup
+contains three Sentinel orders, recorded in the linked Sentinel note below.
+The synthetic two-charge caster exercises the same multiple-effect accounting
+without claiming a completed original-map playthrough.
+
+The existing [Sentinel evidence](ability-sentinel.md) identifies the caster-owned
+sight area in static code at `0xc4e9e0`/`0xc4e4f0` and effect termination at
+`0xc4de30`, on Legacy `1.29.2.9231`, image SHA256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+Those static findings motivate connecting the existing effect to canonical
+sampling; they do not prove native fog-stamp or shared-alliance parity.
+
+The synthetic regression
+`sentinel_sources_sample_for_every_viewer_and_retain_exploration_after_removal`
+casts through `IssueTargetOrder` with two authored fixture charges, samples the
+owner and an unrelated viewer, checks refusal preserves the accepted ledger,
+checks unchanged sampling performs no stamp work, and damages the tree through
+the public host to remove both owls. The owner retains explored fog after
+removal; the unrelated viewer gains no exploration. Original-client flight,
+effect occlusion and tick timing remain unqualified.
+
+Verification: all 27 tests selected by `vision` and all 13 selected by
+`ability_orders` (including all five `sentinel` tests) pass in the compiled
+`pcx-play` library test binary, with a verified
+private offscreen display and null audio. These are synthetic host/ledger gates,
+not a new original-client comparison.
+
+Main-checkout integration validation uses target directories independent of the
+parallel worktrees. The complete gameplay library suite passes 2,989 tests with
+108 explicit ignores, including the named Sentinel sampling regression above.
+Strict native library/test and WASM library Clippy and both library builds pass.
+The retained NightElf03 horizon still stops at the separate automatic `Ainf`
+cast refusal; its three authored Sentinel setup orders are source motivation,
+not evidence that this patch clears the mission's observed first refusal.

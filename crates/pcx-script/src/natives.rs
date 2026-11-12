@@ -9,8 +9,8 @@
 //!
 //! # What is implemented
 //!
-//! Three natives. `I2R` and `R2I` are proved from the shipped scripts rather
-//! than from their names:
+//! Numeric conversions and byte string length. `I2R` and `R2I` are proved
+//! from the shipped scripts rather than from their names:
 //!
 //! - `I2R`: integer to real. `Blizzard.j`'s `ModuloReal` computes
 //!   `dividend - I2R(R2I(dividend / divisor)) * divisor`, which only
@@ -25,10 +25,14 @@
 //!   `0xe6ddd8` into a 256-byte buffer, then makes a script string of it, so
 //!   the result is the signed decimal text (`-5`, not `-005`).
 //!
+//! - `StringLength`: byte length through the first NUL, with one native
+//!   trigger-table lookup. See `docs/re-notes/script-string-natives.md` for
+//!   the selected-image evidence and native-specific lookup boundary.
+//!
 //! Everything else is refused with its name and the span of the call, which
 //! is what `PLAN.md` requires of a missing native. The other formatting natives
-//! (`R2S`, `R2SW`) and the string natives (`SubString`, `StringLength`,
-//! `StringCase`, `StringHash`) are refused because their exact output is not
+//! (`R2S`, `R2SW`) and the string natives (`SubString`, `StringCase`,
+//! `StringHash`) are refused because their exact output is not
 //! derived yet, and a slightly-wrong substring or number format is exactly the
 //! failure a loud error prevents.
 
@@ -64,10 +68,12 @@ pub enum NativeImpl {
     RealToInt,
     /// `I2S`, integer to its signed decimal text.
     IntToString,
+    /// `StringLength`, NUL-terminated byte length after trigger-table lookup.
+    StringLength,
 }
 
 impl NativeImpl {
-    // The conversion bodies each consume one scalar and return its converted scalar.
+    // Each builtin consumes one scalar and returns one scalar.
     fn accepts_signature(self, declaration: &Native) -> bool {
         let [parameter] = declaration.params.as_slice() else {
             return false;
@@ -76,6 +82,7 @@ impl NativeImpl {
             Self::IntToReal => (TypeKind::Integer, TypeKind::Real),
             Self::RealToInt => (TypeKind::Real, TypeKind::Integer),
             Self::IntToString => (TypeKind::Integer, TypeKind::String),
+            Self::StringLength => (TypeKind::String, TypeKind::Integer),
         };
         !parameter.ty.array
             && !declaration.ret.array
@@ -91,7 +98,7 @@ pub enum NativeCall<'a> {
     Unimplemented(&'a Native),
     /// One declaration the table can run.
     Implemented(&'a Native, NativeImpl),
-    /// Recognized conversion, but the supplied declaration cannot describe its implementation.
+    /// Recognized builtin, but the supplied declaration cannot describe its implementation.
     SignatureMismatch(&'a Native, NativeImpl),
 }
 
@@ -238,6 +245,7 @@ pub fn implemented(name: &str) -> Option<NativeImpl> {
         "I2R" => Some(NativeImpl::IntToReal),
         "R2I" => Some(NativeImpl::RealToInt),
         "I2S" => Some(NativeImpl::IntToString),
+        "StringLength" => Some(NativeImpl::StringLength),
         _ => None,
     }
 }

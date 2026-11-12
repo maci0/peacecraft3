@@ -2,10 +2,6 @@ use super::{Error, Failure, ObjectHost};
 use pcx_script::Value;
 
 const NATIVE: &str = "SetAltMinimapIcon";
-/// Prefix `0x708dc0` tests before it reads a trigger string number
-/// (`0xea85f0`). A matching text is looked up in the map string table.
-const TRIGGER_STRING_PREFIX: &str = "TRIGSTR_";
-
 impl ObjectHost {
     pub(super) fn alt_minimap_icon_declaration(&self, source: &str) -> Result<(), Error> {
         let Some(native) = self.inner.program.natives().get(NATIVE) else {
@@ -34,6 +30,15 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        self.alt_minimap_icon_native_with_strings(name, args, None)
+    }
+    pub(super) fn alt_minimap_icon_native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Option<Result<Value, Error>> {
+        self.units.as_ref()?;
         if name != NATIVE || self.inner.program.natives().get(name).is_none() {
             return None;
         }
@@ -45,14 +50,12 @@ impl ObjectHost {
         if path.is_empty() {
             return Some(Ok(Value::Null));
         }
-        if path
-            .get(..TRIGGER_STRING_PREFIX.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(TRIGGER_STRING_PREFIX))
-        {
-            return Some(Err(self.inner.error(
-                name,
-                Failure::UnitState("trigger string icon path needs the map string table"),
-            )));
+        let path = match pcx_script::text::native_map_string(path, strings) {
+            Ok(path) => path,
+            Err(why) => return Some(Err(self.inner.error(name, Failure::ScriptString(why)))),
+        };
+        if path.is_empty() {
+            return Some(Ok(Value::Null));
         }
         self.units.as_mut()?.alt_minimap_icon = Some(path.to_string());
         Some(Ok(Value::Null))
