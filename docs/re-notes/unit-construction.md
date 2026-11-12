@@ -151,6 +151,14 @@ lifecycle regressions ran and passed. Native and `wasm32-unknown-unknown`
 `cargo check -p pcx-play --lib` passed with the workspace's warnings-as-errors
 policy. Every run used the verified private display and null audio sink.
 
+Independent main integration validates all five named regressions in the full
+`pcx-play` package suite: 3,140 passed, zero failed, 143 explicit ignores.
+Strict native/WASM all-target Clippy, native/WASM library builds, formatting
+and the native campaign-probe rebuild pass. Per-command exit receipts and
+unchanged source hashes remain under `/tmp/pc3-construction-main-validation/`.
+These gates establish canonical lifecycle consistency, not native transfer,
+multiple-builder behavior, polling cadence or rendered parity.
+
 ## Human ownership and assistance qualification, 2026-11-13
 
 Four new controlled original-client runs use the selected 1.29.2.9231 executable
@@ -261,3 +269,14 @@ both library builds passed. The receipt
 logs and successful exit statuses; those Rust sources were unchanged throughout
 the successful validation. These checks do not establish native polling parity,
 rendered behavior or full-workspace integration.
+
+Independent main integration executes every named transfer/death/autonomous
+regression in the complete affected script/trigger/gameplay suites: 3,444
+passed, zero failed, 159 explicit ignores. Strict native/WASM all-target and
+all-feature Clippy, both library builds, formatting, both application session
+targets (26 cases) and the application test-binary rebuild pass. The corrected
+autonomous setup is included. Source hashes and per-command receipts are under
+`/tmp/pc3-strings-construction-main-validation/` and
+`/tmp/pc3-strings-construction-app-validation/`. This qualifies the sampled
+Human transfer slice; it does not implement assistant builders or prove exact
+native polling, automatic reacquisition or cancellation after transfer.

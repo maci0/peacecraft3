@@ -34,7 +34,7 @@ pub struct Rules {
     pub alarm_code: Option<[u8; 4]>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
-const CLASS_NAMES: [&str; 17] = [
+const CLASS_NAMES: [&str; 18] = [
     "CAbilitySlow",
     "CAbilityInnerFire",
     "CAbilityHeal",
@@ -52,6 +52,7 @@ const CLASS_NAMES: [&str; 17] = [
     "CAbilityBlackArrow",
     "CAbilityCurse",
     "CAbilityManaBattery",
+    "CAbilityNeutralHeal",
 ];
 const SCANS_PER_CLASS: usize = 3;
 /// One data scan for the vtables that share an ON handler.

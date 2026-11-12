@@ -249,6 +249,22 @@ impl MapStartupHost {
 }
 struct Shared<'a>(&'a mut MapStartupHost);
 impl Host for Shared<'_> {
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.0.native_table_string(id)
+    }
+    fn native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: &pcx_script::text::NativeStringLookup<'_>,
+    ) -> Result<Value, String> {
+        if args.iter().any(|v| matches!(v, Value::Code(_))) {
+            return Err(format!(
+                "Preloader {name}: cross-program callbacks are unsupported"
+            ));
+        }
+        self.0.native_with_strings(name, args, strings)
+    }
     fn real_ops(&self) -> Option<&dyn RealOps> {
         self.0.real_ops()
     }
@@ -260,5 +276,64 @@ impl Host for Shared<'_> {
             ));
         }
         self.0.native(name, args)
+    }
+}
+
+#[cfg(test)]
+mod native_string_tests {
+    use super::*;
+    const WTS: &[u8] = b"STRING 7\r\n{\r\nTRIGSTR_23\r\n}\r\nSTRING 23\r\n{\r\nother\r\n}\r\n";
+    #[test]
+    fn native_string_preload_shared_uses_selected_table_and_retains_callback_guard() {
+        let world = crate::neutral_player::native_string_world_fixture(Some(WTS));
+        let program = world.context().scripts.shared_program();
+        let callback = program.function_id("length").unwrap();
+        let mut startup = MapStartupHost::timer_session_fixture(world);
+        let mut vm = Vm::new(&program, Shared(&mut startup));
+        assert_eq!(vm.call("length", &[]).unwrap(), Value::Int(10));
+        drop(vm);
+        let mut shared = Shared(&mut startup);
+        let source = |_| Ok(Some("explicit source".into()));
+        shared
+            .native_with_strings("SetMapName", &[Value::Str("TRIGSTR_7".into())], &source)
+            .unwrap();
+        assert!(
+            shared
+                .native("SetMapName", &[Value::Code(callback)])
+                .unwrap_err()
+                .contains("cross-program callbacks")
+        );
+        assert!(
+            shared
+                .native_with_strings("SetMapName", &[Value::Code(callback)], &source)
+                .unwrap_err()
+                .contains("cross-program callbacks")
+        );
+        assert_eq!(
+            startup.objects().map_config().unwrap().name.as_deref(),
+            Some("explicit source")
+        );
+    }
+    #[test]
+    fn native_string_preload_shared_keeps_missing_source_distinct_from_absent_entry() {
+        let world = crate::neutral_player::native_string_world_fixture(None);
+        let mut startup = MapStartupHost::timer_session_fixture(world);
+        assert!(
+            Shared(&mut startup)
+                .native_table_string(7)
+                .unwrap_err()
+                .contains("source was not supplied")
+        );
+        let world = crate::neutral_player::native_string_world_fixture(Some(WTS));
+        let mut startup = MapStartupHost::timer_session_fixture(world);
+        assert_eq!(Shared(&mut startup).native_table_string(91).unwrap(), None);
+        let world = startup.inner.take().unwrap();
+        assert!(
+            Shared(&mut startup)
+                .native_table_string(7)
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        startup.inner = Some(world);
     }
 }

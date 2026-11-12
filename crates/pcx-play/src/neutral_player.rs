@@ -396,9 +396,26 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
     fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
         self.inner.after_script_spawn()
     }
+    fn native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: &pcx_script::text::NativeStringLookup<'_>,
+    ) -> Result<Value, String> {
+        if name == self.rule.native_name {
+            self.native(name, args)
+        } else {
+            self.inner.native_with_strings(name, args, strings)
+        }
+    }
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.context.scripts.native_table_string(id)
+    }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         if name != self.rule.native_name {
-            return self.inner.native(name, args);
+            let context = std::sync::Arc::clone(&self.context);
+            let strings = |id| context.scripts.native_table_string(id);
+            return self.inner.native_with_strings(name, args, &strings);
         }
         if !args.is_empty() {
             return Err(NeutralError::Context {
@@ -423,3 +440,6 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
 #[cfg(test)]
 #[path = "neutral_player_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::native_string_world_fixture;

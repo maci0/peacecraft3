@@ -30,6 +30,8 @@ pub enum CallSite {
     ScriptReal,
     /// One die from an already retained secondary stream.
     SecondaryDie { channel: usize },
+    /// One fractional draw from an already retained secondary stream.
+    SecondaryReal { channel: usize },
     /// Any other admitted gameplay consumer, named by its caller.
     Gameplay { caller: Box<str> },
 }
@@ -48,11 +50,11 @@ impl CallSite {
     }
 }
 
-/// One admitted call in execution order, plus the primary word afterwards.
+/// One admitted call in execution order, with post-call primary and selected secondary words.
 ///
 /// The word mirrors [`super::state::State::primary_word`] right after the
 /// call, so a replay can verify exact state progression alongside site order.
-/// Refused calls push no record, so stored records always carry a word, but
+/// Refused calls push no record. Degenerate unseeded calls carry no word, and
 /// the field stays optional to match the accessor. Equal-bound calls that
 /// consume no draw are still recorded: they are caller sequence, even though
 /// the generator did not advance.
@@ -60,6 +62,8 @@ impl CallSite {
 pub struct DrawRecord {
     pub site: CallSite,
     pub primary_word: Option<u32>,
+    /// Selected secondary word after a secondary call; absent for primary calls.
+    pub secondary_word: Option<u32>,
 }
 
 /// Caller sequence for one session, oldest first.

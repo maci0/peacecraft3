@@ -54,9 +54,9 @@ impl Drop for Capture {
         self.drops.fetch_add(1, Ordering::SeqCst);
     }
 }
-const COMMON: &str = "native Init takes nothing returns integer\nnative Register takes code callback returns nothing\nnative Capture takes string text returns nothing\nnative Refuse takes nothing returns nothing\n";
+const COMMON: &str = "native Init takes nothing returns integer\nnative Register takes code callback returns nothing\nnative Capture takes string text returns nothing\nnative Refuse takes nothing returns nothing\nnative StringLength takes string text returns integer\n";
 const BJ: &str = "// deliberate diagnostic padding\n\nfunction PreludeFail takes nothing returns nothing\ncall Refuse()\nendfunction\n";
-const MAP: &str = "globals\ninteger counter = Init()\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Register(function Callback)\nendfunction\nfunction Callback takes nothing returns nothing\nset counter = counter + 1\ncall Capture(\"TRIGSTR_7\")\nendfunction\nfunction Add takes integer amount returns integer\nset counter = counter + amount\nreturn counter\nendfunction\nfunction Read takes nothing returns integer\nreturn counter\nendfunction\nfunction BadText takes nothing returns string\nreturn \"TRIGSTR_9\"\nendfunction\nfunction MissingText takes nothing returns string\nreturn \"TRIGSTR_8\"\nendfunction\nfunction Tagged takes nothing returns string\nreturn \"^^fixture^^\"\nendfunction\n";
+const MAP: &str = "globals\ninteger counter = Init()\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Register(function Callback)\nendfunction\nfunction Callback takes nothing returns nothing\nset counter = counter + 1\ncall Capture(\"TRIGSTR_7\")\nendfunction\nfunction Add takes integer amount returns integer\nset counter = counter + amount\nreturn counter\nendfunction\nfunction Read takes nothing returns integer\nreturn counter\nendfunction\nfunction BadText takes nothing returns integer\nreturn StringLength(\"TRIGSTR_9\")\nendfunction\nfunction MissingText takes nothing returns integer\nreturn StringLength(\"TRIGSTR_8\")\nendfunction\nfunction Tagged takes nothing returns string\nreturn \"^^fixture^^\"\nendfunction\n";
 const WTS: &[u8] =
     b"STRING 7\r\n{\r\n|cffff0000Authored|r|nText\r\n}\r\nSTRING 9\r\n{\r\n\xff\r\n}\r\n";
 fn compile(map: &str, wts: Option<&[u8]>, source: &str) -> MapScripts {
@@ -142,9 +142,12 @@ pub fn map_session_retains_globals_callbacks_wts_and_replaces_without_leaks() {
     }
     assert_eq!(vm.call("Add", &[Value::Int(7)]).unwrap(), Value::Int(20));
     assert_eq!(vm.call("Read", &[]).unwrap(), Value::Int(20));
-    assert_eq!(vm.call("Tagged", &[]).unwrap(), Value::Str("kept".into()));
+    assert_eq!(
+        vm.call("Tagged", &[]).unwrap(),
+        Value::Str("^^fixture^^".into())
+    );
     assert_eq!(vm.host().inner.inits, 1);
-    assert_eq!(vm.host().inner.text, vec!["|cffff0000Authored|r|nText"; 3]);
+    assert_eq!(vm.host().inner.text, vec!["TRIGSTR_7"; 3]);
     let replacement = Arc::new(compile(
         MAP,
         Some(b"STRING 7\r\n{\r\nReplacement text\r\n}\r\n"),
@@ -157,7 +160,11 @@ pub fn map_session_retains_globals_callbacks_wts_and_replaces_without_leaks() {
     assert_eq!(vm.host().context().identity.source, "second-map");
     vm.call("Callback", &[]).unwrap();
     assert_eq!(vm.call("Read", &[]).unwrap(), Value::Int(11));
-    assert_eq!(vm.host().inner.text, ["Replacement text"]);
+    assert_eq!(vm.host().inner.text, ["TRIGSTR_7"]);
+    assert_eq!(
+        vm.host().native_table_string(7).unwrap().as_deref(),
+        Some("Replacement text")
+    );
     drop(vm);
     assert!(replacement_weak.upgrade().is_none());
     assert_eq!(drops.load(Ordering::SeqCst), 2);
@@ -176,17 +183,12 @@ pub fn retained_diagnostics_distinguish_sources_wts_and_missing() {
     assert_eq!(vm.error_source(), Some("the map script"));
     assert_eq!(
         &MAP[e.span.start as usize..e.span.end as usize],
-        "\"TRIGSTR_9\""
+        "StringLength(\"TRIGSTR_9\")"
     );
     let text = diagnostic(&mut vm, &e);
     assert!(text.starts_with("owned/war3map.j:21:8"), "{text}");
     assert!(text.contains("owned/war3map.wts: WTS entry 9 is not UTF-8 at body byte 0"));
-    let e = vm.call("MissingText", &[]).unwrap_err();
-    assert!(
-        e.message
-            .contains("TRIGSTR_8 is not in this map's war3map.wts")
-    );
-    assert!(!e.message.contains("not UTF-8"));
+    assert_eq!(vm.call("MissingText", &[]).unwrap(), Value::Int(0));
     let e = vm.call("Add", &[]).unwrap_err();
     assert_eq!(vm.error_source(), Some("the map script"));
     assert!(e.message.contains("1 argument, 0 given"));
@@ -196,11 +198,10 @@ pub fn retained_diagnostics_distinguish_sources_wts_and_missing() {
     assert_eq!(vm.error_source(), None);
     let scripts = Arc::new(compile(MAP, None, "no-table-map"));
     let mut vm = scripts.owned_vm(Capture::new(&drops));
-    let e = vm.call("Callback", &[]).unwrap_err();
-    assert!(
-        e.message
-            .contains("TRIGSTR_7 is not in this map's war3map.wts")
-    );
+    vm.call("Callback", &[]).unwrap();
+    assert_eq!(vm.host().inner.text, ["TRIGSTR_7"]);
+    let e = vm.call("MissingText", &[]).unwrap_err();
+    assert!(e.message.contains("war3map.wts source was not supplied"));
 }
 
 pub fn initialization_refusal_is_sticky_with_retained_context() {

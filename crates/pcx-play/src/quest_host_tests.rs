@@ -124,3 +124,57 @@ fn renamed_formals_use_the_same_object_host_lifecycle() {
     let timer_still = host.native("DestroyTimer", &[timer]).unwrap();
     assert_eq!(timer_still, Value::Null);
 }
+
+#[test]
+fn native_string_quest_text_localizes_but_icon_path_stays_raw() {
+    use std::cell::RefCell;
+    let mut h = host().with_quests(budget()).unwrap();
+    let q = h.native("CreateQuest", &[]).unwrap();
+    let Value::Handle(qid) = q.clone() else {
+        panic!("quest")
+    };
+    let calls = RefCell::new(Vec::new());
+    let source = |id| {
+        calls.borrow_mut().push(id);
+        Ok(match id {
+            7 => Some("TRIGSTR_23".into()),
+            9 => Some("^^x^^".into()),
+            _ => None,
+        })
+    };
+    assert!(
+        h.native_with_strings(
+            "QuestSetTitle",
+            &[Value::Null, Value::Str("TRIGSTR_7".into())],
+            &source
+        )
+        .is_err()
+    );
+    assert!(calls.borrow().is_empty());
+    for (native, token) in [
+        ("QuestSetTitle", "TRIGSTR_7"),
+        ("QuestSetDescription", "TRIGSTR_8"),
+        ("QuestSetIconPath", "TRIGSTR_7"),
+    ] {
+        h.native_with_strings(native, &[q.clone(), Value::Str(token.into())], &source)
+            .unwrap();
+    }
+    let item = h
+        .native("QuestCreateItem", std::slice::from_ref(&q))
+        .unwrap();
+    let Value::Handle(item_id) = item.clone() else {
+        panic!("item")
+    };
+    h.native_with_strings(
+        "QuestItemSetDescription",
+        &[item, Value::Str("TRIGSTR_9".into())],
+        &source,
+    )
+    .unwrap();
+    assert_eq!(*calls.borrow(), [7, 8, 9]);
+    let state = h.quest_session().unwrap();
+    assert_eq!(state.quest_title(qid).unwrap(), Some("TRIGSTR_23"));
+    assert_eq!(state.quest_description(qid).unwrap(), Some(""));
+    assert_eq!(state.quest_icon_path(qid).unwrap(), Some("TRIGSTR_7"));
+    assert_eq!(state.item_description(item_id).unwrap(), Some("^^x^^"));
+}

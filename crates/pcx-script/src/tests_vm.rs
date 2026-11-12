@@ -11,7 +11,6 @@ use crate::resolve::{Prelude, resolve, resolve_with};
 use crate::span::Span;
 use crate::value::{Class, OpError, Value, binary, unary};
 use crate::{BinOp, Exec, NullHost, OwnedVm, Script, UnOp, Vm, parse};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // ----- harness -----------------------------------------------------------
@@ -638,7 +637,7 @@ fn an_unimplemented_native_carries_its_name_the_declaration_and_the_call_span() 
 }
 
 #[test]
-fn i2r_r2i_and_i2s_are_the_only_natives_the_table_runs() {
+fn numeric_conversions_and_string_length_are_the_natives_the_table_runs() {
     assert_eq!(
         crate::natives::implemented("I2S"),
         Some(crate::natives::NativeImpl::IntToString)
@@ -650,6 +649,10 @@ fn i2r_r2i_and_i2s_are_the_only_natives_the_table_runs() {
     assert_eq!(
         crate::natives::implemented("R2I"),
         Some(crate::natives::NativeImpl::RealToInt)
+    );
+    assert_eq!(
+        crate::natives::implemented("StringLength"),
+        Some(crate::natives::NativeImpl::StringLength)
     );
     assert_eq!(crate::natives::implemented("i2r"), None);
     assert_eq!(crate::natives::implemented("R2S"), None);
@@ -704,78 +707,39 @@ fn i2s_with_a_foreign_signature_is_refused_not_run() {
 // ----- the text seam -----------------------------------------------------
 
 #[test]
-fn a_trigger_string_resolves_through_the_host_table() {
-    struct Table(BTreeMap<u32, &'static str>);
-    impl crate::Host for Table {
-        fn native(&mut self, _name: &str, _args: &[Value]) -> Result<Value, String> {
-            Err("no natives in this test".into())
-        }
-        fn table_string(&self, id: u32) -> Option<String> {
-            self.0.get(&id).map(|s| (*s).to_string())
-        }
+fn trigger_tokens_remain_raw_until_a_native_consumes_them() {
+    for (source, expected) in [
+        (
+            "function f takes nothing returns string\nreturn \"TRIGSTR_00374\"\nendfunction\n",
+            "TRIGSTR_00374",
+        ),
+        (
+            "globals\nstring s = TRIGSTR_00374\nendglobals\nfunction f takes nothing returns string\nreturn s\nendfunction\n",
+            "TRIGSTR_00374",
+        ),
+    ] {
+        assert_eq!(call(source, "f", &[]).unwrap(), Value::Str(expected.into()));
     }
-    let table = Table(BTreeMap::from([(374, "First blood!")]));
-
-    // The literal spelling Footman Frenzy ships.
-    let src = "function f takes nothing returns string\n    return \"TRIGSTR_374\"\nendfunction\n";
-    let program = program_of(src);
-    let mut vm = Vm::new(&program, Table(table.0.clone()));
-    assert_eq!(
-        vm.call("f", &[]).expect("call"),
-        Value::Str("First blood!".into())
-    );
-
-    // The identifier spelling a desugared trigger graph produces.
-    let src = "globals\n    string s = TRIGSTR_374\nendglobals\nfunction f takes nothing returns string\n    return s\nendfunction\n";
-    let program = program_of(src);
-    let mut vm = Vm::new(&program, Table(table.0));
-    assert_eq!(
-        vm.call("f", &[]).expect("call"),
-        Value::Str("First blood!".into())
-    );
 }
 
 #[test]
-fn a_trigger_string_no_table_carries_is_a_loud_error() {
-    let src = "function f takes nothing returns string\n    return \"TRIGSTR_999\"\nendfunction\n";
-    let e = call(src, "f", &[]).expect_err("no table");
-    assert!(e.message.contains("TRIGSTR_999"), "{}", e.message);
-    assert!(e.message.contains("war3map.wts"), "{}", e.message);
-    // An identifier with no table fails the same way, not as an unresolved
-    // name: resolution deliberately does not require a declaration for it.
-    let e = call(
-        "function f takes nothing returns string\n    return TRIGSTR_999\nendfunction\n",
-        "f",
-        &[],
-    )
-    .expect_err("no table");
-    assert!(e.message.contains("TRIGSTR_999"), "{}", e.message);
-}
-
-#[test]
-fn a_code_tag_needs_a_substitution_or_it_is_a_named_error() {
-    struct Tags;
-    impl crate::Host for Tags {
-        fn native(&mut self, _name: &str, _args: &[Value]) -> Result<Value, String> {
-            Err("no natives".into())
+fn literal_tags_are_data_without_demanding_a_ui_formatter() {
+    struct NoFormatting;
+    impl crate::Host for NoFormatting {
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("no native")
         }
-        fn code_tag(&self, tag: &str) -> Option<String> {
-            Some(format!("<{tag}>"))
+        fn code_tag(&self, _: &str) -> Option<String> {
+            panic!("literal evaluation cannot format UI text")
+        }
+        fn table_string(&self, _: u32) -> Option<String> {
+            panic!("literal evaluation cannot read WTS")
         }
     }
-    let src = "function f takes nothing returns string\n    return \"a ^^b^^ c\"\nendfunction\n";
-    let program = program_of(src);
-    let mut vm = Vm::new(&program, Tags);
-    assert_eq!(
-        vm.call("f", &[]).expect("call"),
-        Value::Str("a <b> c".into())
-    );
-
-    let src = "function f takes nothing returns string\n    return \"a ^^b^^ c\"\nendfunction\n";
-    let program = program_of(src);
-    let mut vm = Vm::new(&program, NullHost);
-    let e = vm.call("f", &[]).expect_err("no substitution");
-    assert!(e.message.contains("`^b^`"), "{}", e.message);
+    let source = "function f takes nothing returns string\nreturn \"a ^^b^^ c\\n\"\nendfunction\n";
+    let program = program_of(source);
+    let mut vm = Vm::new(&program, NoFormatting);
+    assert_eq!(vm.call("f", &[]).unwrap(), Value::Str("a ^^b^^ c\n".into()));
 }
 
 // ----- debug -------------------------------------------------------------
@@ -1973,4 +1937,174 @@ fn spawned_threads_park_alone_and_resume_with_their_remaining_callbacks() {
     let mut plain = Vm::new(&program, Probe::default());
     plain.init_globals().unwrap();
     assert!(plain.run_thread(&[id("b")]).is_ok());
+}
+
+#[test]
+fn string_length_counts_bytes_and_stops_at_nul_through_vm_calls() {
+    let src = "native StringLength takes string s returns integer\nfunction f takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
+    for (input, expected) in [
+        (Value::Null, 0),
+        (Value::Str(String::new()), 0),
+        (Value::Str("é界".into()), 5),
+        (Value::Str("é\0ignored".into()), 2),
+        (Value::Str("\0TRIGSTR_12".into()), 0),
+        (Value::Str("trigstr_12".into()), 10),
+        (Value::Str("TRIGSTR_-1".into()), 10),
+        (Value::Str("TRIGSTR_4294967295".into()), 18),
+    ] {
+        assert_eq!(call(src, "f", &[input]).unwrap(), Value::Int(expected));
+    }
+}
+
+#[test]
+fn string_length_resolves_computed_trigger_references_once_without_expanding_tags() {
+    struct Table;
+    impl crate::Host for Table {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("implemented native reached host: {name}");
+        }
+        fn table_string(&self, id: u32) -> Option<String> {
+            match id {
+                0 => Some("zero".into()),
+                12 => Some("é^^unknown^^\0tail".into()),
+                23 => Some("TRIGSTR_12".into()),
+                41 => Some(String::new()),
+                _ => None,
+            }
+        }
+    }
+    let src = "native StringLength takes string s returns integer\nfunction f takes string suffix returns integer\nreturn StringLength(\"TRIGSTR_\" + suffix)\nendfunction\n";
+    let program = program_of(src);
+    let mut vm = Vm::new(&program, Table);
+    for (suffix, expected) in [
+        ("12", 13),
+        ("12suffix", 13),
+        ("00012", 13),
+        ("4294967308", 13),
+        ("", 4),
+        ("nondigit", 4),
+        ("+12", 4),
+        (" 12", 4),
+        ("23", 10),
+        ("41", 0),
+    ] {
+        assert_eq!(
+            vm.call("f", &[Value::Str(suffix.into())]).unwrap(),
+            Value::Int(expected)
+        );
+    }
+    let error = vm.call("f", &[Value::Str("91".into())]).unwrap_err();
+    assert!(error.message.contains("TRIGSTR_91"));
+    assert!(error.message.contains("war3map.wts"));
+    assert_eq!(
+        vm.call("f", &[Value::Str("12".into())]).unwrap(),
+        Value::Int(13)
+    );
+}
+
+#[test]
+fn string_length_preserves_table_source_errors_and_rejects_wrong_declarations() {
+    struct FailedTable;
+    impl crate::Host for FailedTable {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("implemented native reached host: {name}");
+        }
+        fn resolve_table_string(&self, _: u32) -> Result<Option<String>, String> {
+            Err("synthetic map.wts: invalid record".into())
+        }
+    }
+    let src = "native StringLength takes string s returns integer\nfunction f takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
+    let program = program_of(src);
+    let mut vm = Vm::new(&program, FailedTable);
+    let error = vm
+        .call("f", &[Value::Str("TRIGSTR_77".into())])
+        .unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("TRIGSTR_77: synthetic map.wts: invalid record")
+    );
+    for declaration in [
+        "native StringLength takes integer s returns integer\n",
+        "native StringLength takes string s returns string\n",
+        "native StringLength takes string s, integer extra returns integer\n",
+    ] {
+        let script = parse(declaration).unwrap();
+        let mut table = NativeTable::new();
+        for item in &script.items {
+            if let crate::Item::Native(native) = item {
+                table.insert(native, "synthetic.j");
+            }
+        }
+        assert!(matches!(
+            table.call("StringLength"),
+            Some(crate::natives::NativeCall::SignatureMismatch(..))
+        ));
+    }
+}
+
+#[test]
+fn string_length_literals_and_computed_values_resolve_once_with_identical_results() {
+    use std::cell::RefCell;
+    #[derive(Default)]
+    struct Source {
+        calls: RefCell<Vec<u32>>,
+    }
+    impl crate::Host for Source {
+        fn native(&mut self, _: &str, _: &[Value]) -> Result<Value, String> {
+            panic!("builtin")
+        }
+        fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+            self.calls.borrow_mut().push(id);
+            Ok(match id {
+                12 => Some("TRIGSTR_23".into()),
+                23 => Some("é".into()),
+                _ => None,
+            })
+        }
+    }
+    let source = "native StringLength takes string s returns integer\nfunction literal takes nothing returns integer\nreturn StringLength(\"TRIGSTR_12\")\nendfunction\nfunction argument takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
+    let program = program_of(source);
+    let mut vm = Vm::new(&program, Source::default());
+    assert_eq!(vm.call("literal", &[]).unwrap(), Value::Int(10));
+    assert_eq!(*vm.host().calls.borrow(), [12]);
+    vm.host().calls.borrow_mut().clear();
+    assert_eq!(
+        vm.call("argument", &[Value::Str("TRIGSTR_12".into())])
+            .unwrap(),
+        Value::Int(10)
+    );
+    assert_eq!(*vm.host().calls.borrow(), [12]);
+    assert_eq!(
+        vm.call("argument", &[Value::Str("TRIGSTR_91".into())])
+            .unwrap(),
+        Value::Int(0)
+    );
+    assert_eq!(
+        vm.call("argument", &[Value::Str("^^raw^^".into())])
+            .unwrap(),
+        Value::Int(7)
+    );
+}
+
+#[test]
+fn raw_literal_tag_payload_decodes_escapes_and_rejects_unknown_ones() {
+    let source = r#"function f takes nothing returns string
+return "a ^^b\n\t^^ c"
+endfunction
+"#;
+    assert_eq!(
+        call(source, "f", &[]).unwrap(),
+        Value::Str("a ^^b\n\t^^ c".into())
+    );
+    let invalid = r#"function f takes nothing returns string
+return "a ^^b\q^^ c"
+endfunction
+"#;
+    assert!(
+        parse(invalid)
+            .unwrap_err()
+            .message
+            .contains("invalid escape")
+    );
 }

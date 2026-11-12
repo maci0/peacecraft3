@@ -151,11 +151,12 @@ acts on the unit's ability list, the state that `GetUnitAbilityLevel`, the
   autocast-off record, because those records are not withdrawn.
 
 The boolean results are this recreation's contract. The retained native's return
-values for these calls are unverified. The game cache does not carry an edited
-list. `CachedUnit` restore compares the saved list with the authored `abilList`,
-so a saved game that contains an added or removed entry refuses to restore with
-`cached unit lacks a current source ability` or `cached ability is absent from
-current unit data`. The refusal is loud. Persisting the edited list is open.
+values for these calls are unverified. Campaign unit-cache capture now projects
+ordinary abilities onto source creation state and retains qualified hero
+learn-slot ranks. Transient ordinary additions/removals are not preserved across
+restore; they no longer produce an unrestorable checkpoint. See the
+[native writer/restore trace](script-saved-games.md#campaign-unit-ability-projection-2026-11-13).
+Native runtime ordering and permanent-ability edits remain unqualified.
 
 Evidence: the locked chapter `Maps\FrozenThrone\Campaign\UndeadX07c.w3x` ran its
 `UnitRemoveAbilityBJ` and `UnitAddAbilityBJ` calls (`war3map.j:2357-2361`, inside

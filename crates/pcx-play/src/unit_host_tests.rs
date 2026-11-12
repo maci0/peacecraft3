@@ -4337,3 +4337,6 @@ fn selected_original_look_at_helper_is_in_the_admitted_joint_list() {
         1
     );
 }
+
+#[path = "group_membership_lifecycle_tests.rs"]
+mod group_membership_lifecycle;

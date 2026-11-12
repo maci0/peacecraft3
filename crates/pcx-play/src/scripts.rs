@@ -137,6 +137,9 @@ impl MapScripts {
     pub fn table_string(&self, id: u32) -> Result<Option<String>, String> {
         resolve_table_string(self.wts.as_ref(), self.wts_label.as_deref(), id)
     }
+    pub(crate) fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        resolve_native_table_string(self.wts.as_ref(), self.wts_label.as_deref(), id)
+    }
     /// Share this exact compiled program with a session-owned Host.
     pub fn shared_program(&self) -> Arc<Program> {
         Arc::clone(&self.program)
@@ -234,7 +237,11 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
         self.inner.after_script_spawn()
     }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
-        self.inner.native(name, args)
+        let lookup = |id| resolve_native_table_string(self.table, self.label, id);
+        self.inner.native_with_strings(name, args, &lookup)
+    }
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        resolve_native_table_string(self.table, self.label, id)
     }
     fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
         resolve_table_string(self.table, self.label, id)
@@ -293,7 +300,11 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
         self.inner.after_script_spawn()
     }
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
-        self.inner.native(name, args)
+        let lookup = |id| self.context.native_table_string(id);
+        self.inner.native_with_strings(name, args, &lookup)
+    }
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.context.native_table_string(id)
     }
     fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
         resolve_table_string(
@@ -305,6 +316,15 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
     fn code_tag(&self, tag: &str) -> Option<String> {
         self.inner.code_tag(tag)
     }
+}
+
+fn resolve_native_table_string(
+    table: Option<&Table>,
+    label: Option<&str>,
+    id: u32,
+) -> Result<Option<String>, String> {
+    let table = table.ok_or("war3map.wts source was not supplied for this map")?;
+    resolve_table_string(Some(table), label, id)
 }
 
 fn resolve_table_string(
@@ -443,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_supplied_prelude_body_runs_and_localization_keeps_bytes() {
+    fn supplied_prelude_keeps_raw_native_arguments_and_retained_table_bytes() {
         let scripts = load(b"native Capture takes string text returns nothing\n", b"function Message takes nothing returns nothing\ncall Capture(\"TRIGSTR_5\")\nendfunction\n", b"function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Message()\nendfunction\n", Some(b"STRING 5\r\n{\r\n|cffff0000Authored|r|nText\r\n}\r\n")).unwrap();
         struct Capture(Vec<String>);
         impl Host for Capture {
@@ -460,7 +480,11 @@ mod tests {
         let mut vm = scripts.vm(Capture(Vec::new()));
         vm.call("config", &[]).unwrap();
         vm.call("main", &[]).unwrap();
-        assert_eq!(vm.host().inner.0, ["|cffff0000Authored|r|nText"]);
+        assert_eq!(vm.host().inner.0, ["TRIGSTR_5"]);
+        assert_eq!(
+            scripts.table_string(5).unwrap().as_deref(),
+            Some("|cffff0000Authored|r|nText")
+        );
         assert_eq!(scripts.digests.len(), 4);
     }
     #[test]
@@ -473,9 +497,9 @@ mod tests {
     #[test]
     fn only_used_wts_entry_needs_utf8_and_missing_is_distinct() {
         let scripts = load(
+            b"native StringLength takes string s returns integer\n",
             b"",
-            b"",
-            b"function main takes nothing returns string\nreturn \"TRIGSTR_8\"\nendfunction\n",
+            b"function main takes nothing returns integer\nreturn StringLength(\"TRIGSTR_8\")\nendfunction\n",
             Some(b"STRING 8\r\n{\r\n\xff\r\n}\r\n"),
         )
         .unwrap();
@@ -494,6 +518,28 @@ mod tests {
             .err()
             .unwrap()
             .contains("duplicate WTS")
+        );
+    }
+}
+
+#[cfg(test)]
+mod native_table_state_tests {
+    use super::*;
+    #[test]
+    fn native_string_table_source_absence_is_distinct_from_missing_entry() {
+        assert!(
+            resolve_native_table_string(None, None, 7)
+                .unwrap_err()
+                .contains("source was not supplied")
+        );
+        let table = Table::parse(b"STRING 8\r\n{\r\ntext\r\n}\r\n").unwrap();
+        assert_eq!(
+            resolve_native_table_string(Some(&table), Some("fixture.wts"), 7).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_native_table_string(Some(&table), Some("fixture.wts"), 8).unwrap(),
+            Some("text".into())
         );
     }
 }

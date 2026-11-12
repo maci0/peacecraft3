@@ -59,6 +59,28 @@ fn query(h: &mut ObjectHost, name: &str, timer: &Value) -> Value {
 }
 
 #[test]
+fn fresh_timer_queries_are_zero_without_starting_or_advancing_the_timer() {
+    let mut h = host();
+    let timer = h.native("CreateTimer", &[]).unwrap();
+    for name in ["TimerGetElapsed", "TimerGetRemaining", "TimerGetTimeout"] {
+        assert_eq!(query(&mut h, name, &timer), Value::Real(0.0));
+        assert!(h.native(name, &[Value::Null]).is_err());
+        assert!(h.native(name, &[]).is_err());
+    }
+    assert_eq!(h.timer_game_time(), Some(20.0));
+    assert!(h.next_timer_expiry(23.0, &mut 0).unwrap().is_none());
+    assert_eq!(h.timer_game_time(), Some(23.0));
+    assert_eq!(query(&mut h, "TimerGetRemaining", &timer), Value::Real(0.0));
+    start(&mut h, &timer, 0.75, false);
+    assert_eq!(query(&mut h, "TimerGetTimeout", &timer), Value::Real(0.75));
+    h.native("DestroyTimer", std::slice::from_ref(&timer))
+        .unwrap();
+    for name in ["TimerGetElapsed", "TimerGetRemaining", "TimerGetTimeout"] {
+        assert!(h.native(name, std::slice::from_ref(&timer)).is_err());
+    }
+}
+
+#[test]
 fn bounded_delivery_preserves_next_expiry_and_restarted_order_without_replay() {
     let mut h = host();
     let a = h.native("CreateTimer", &[]).unwrap();
@@ -123,10 +145,7 @@ fn periodic_callback_queries_and_restart_destroy_use_the_same_timer_entry() {
 fn invalid_start_time_identity_or_callback_keeps_the_previous_run() {
     let mut h = host();
     let timer = h.native("CreateTimer", &[]).unwrap();
-    assert!(
-        h.native("TimerGetElapsed", std::slice::from_ref(&timer))
-            .is_err()
-    );
+    assert_eq!(query(&mut h, "TimerGetElapsed", &timer), Value::Real(0.0));
     start(&mut h, &timer, 1.0, false);
     for (timeout, periodic) in [
         (0.0, true),

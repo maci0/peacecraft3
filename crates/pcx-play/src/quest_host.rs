@@ -56,6 +56,7 @@ impl QuestArena for EnumBridge<'_> {
 
 fn map_failure(failure: QuestFailure) -> Failure {
     match failure {
+        QuestFailure::TextSource(why) => Failure::ScriptString(why),
         QuestFailure::Arguments => Failure::QuestArguments,
         QuestFailure::Identity => Failure::Identity,
         QuestFailure::WrongFamily => Failure::WrongFamily,
@@ -104,19 +105,25 @@ impl ObjectHost {
         &mut self,
         name: &str,
         args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Option<Result<Value, Error>> {
         if self.quests.is_none() || !accepts(name) {
             return None;
         }
-        Some(self.apply_quest(name, args))
+        Some(self.apply_quest(name, args, strings))
     }
 
-    fn apply_quest(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+    fn apply_quest(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         let result = {
             let ObjectHost { inner, quests, .. } = self;
             if let Some(quests) = quests.as_mut() {
                 let mut bridge = EnumBridge { inner };
-                Some(quests.call(&mut bridge, name, args))
+                Some(quests.call_with_strings(&mut bridge, name, args, strings))
             } else {
                 None
             }

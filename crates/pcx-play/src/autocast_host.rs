@@ -34,6 +34,66 @@ fn set_autocast(abilities: &mut UnitAbilities, alias: [u8; 4], on: bool) {
 }
 
 impl ObjectHost {
+    pub(in super::super) fn prepare_default_autocast(
+        &self,
+        record: &ExecutedUnit,
+    ) -> Result<Vec<([u8; 4], f32)>, Error> {
+        let fail = |detail| {
+            self.inner
+                .error("CreateUnit", Failure::UnitActivity(detail))
+        };
+        let Some(input) = self.units.as_ref().and_then(|u| u.heroes.as_ref()) else {
+            return Ok(Vec::new());
+        };
+        let Ok(rules) = &input.rules.autocast else {
+            return Ok(Vec::new());
+        };
+        let Some(abilities) = &record.abilities else {
+            return Ok(Vec::new());
+        };
+        let defaults = ability_list(&record.definition, "auto", input.budget.abilities_per_unit)
+            .map_err(fail)?;
+        if defaults.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut ticks = Vec::new();
+        for (alias, rank) in abilities.levels() {
+            if rank <= 0 {
+                continue;
+            }
+            let code = self.ability_data_text(alias, "code").map_err(fail)?;
+            if !defaults
+                .iter()
+                .any(|default| default.as_slice() == code.as_bytes())
+            {
+                continue;
+            }
+            let enable = rules
+                .classes
+                .iter()
+                .find(|class| class.code.as_slice() == code.as_bytes())
+                .and_then(|class| class.enable)
+                .ok_or_else(|| {
+                    fail(format!(
+                        "default autocast activation of {alias:?} is not admitted"
+                    ))
+                })?;
+            if !enable.first_tick.is_finite() || enable.first_tick < 0.0 {
+                return Err(fail(
+                    "default autocast delay must be finite and nonnegative".into(),
+                ));
+            }
+            ticks
+                .try_reserve(1)
+                .map_err(|_| fail("default autocast allocation failed".into()))?;
+            ticks.push((alias, enable.first_tick));
+        }
+        if !ticks.is_empty() && self.timer_game_time().is_none() {
+            return Err(fail("default autocast needs the game clock".into()));
+        }
+        Ok(ticks)
+    }
+
     pub(crate) fn immediate_order_id(&self, name: &str, args: &[Value]) -> Option<i32> {
         let [_, order] = args else { return None };
         match (name, order) {

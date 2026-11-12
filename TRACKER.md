@@ -7031,3 +7031,237 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   checks every offered ordinal; it passes on the local Legacy install.
   Workspace tests with the gate features: 5,452 passed, 0 failed, 355 ignored.
   Strict native and WASM Clippy, both workspace builds and formatting pass.
+
+- 2026-11-13: `LeaderboardSetItemLabelColor` now retains each integer channel's
+  low byte and ignores null/destroyed boards or absent rows, matching the
+  selected 1.29.2.9231 handler documented in
+  [script leaderboards](docs/re-notes/script-leaderboards.md). No-op calls retain
+  the canonical revision, rows and budgets; malformed arguments, unknown
+  identities and wrong handle families still refuse. The coverage audit now
+  includes the native. The gameplay library suite passes 2,987 tests with 108
+  explicit ignores; strict native all-target and WASM library Clippy, both
+  library builds and formatting pass. The unchanged Human08 opening skip plus
+  300-second idle script horizon passes headless and muted. The broader
+  archive-indexed campaign horizon sweep is still running and already exposes
+  music-volume, AI, range-enumeration and automatic-cast refusals. These are
+  host-state and script-horizon checks, not mission completion, rendered
+  fidelity or native tick/RNG parity.
+
+- 2026-11-13: Fresh timer elapsed/remaining/timeout queries return zero, matching
+  the retained original-client probe, instead of refusing Orc02's unchanged
+  script. Queries do not start a run or advance time; malformed and retired
+  identities still refuse. The gameplay library suite passes 2,988 tests with
+  108 explicit ignores; strict native/WASM Clippy, the rebuilt native campaign
+  probe and WASM library build pass. Orc02's opening skip and 300-second idle
+  horizon now pass offscreen and muted. The full pre-fix indexed sweep completed
+  79 maps: 31 passed, 47 refused, one diagnostic timeout. Frontier categories and
+  provenance are recorded in [the sweep](docs/re-notes/chapter-startup-refusals.md#complete-indexed-openingidle-sweep-2026-11-13).
+  These gates do not establish mission completion or native tick/RNG parity.
+
+- 2026-11-13: Canonical vision sampling now counts all attached Sentinel owls
+  before viewer-specific sharing filters. This fixes candidate-count assertions
+  and scan-budget refusal with multiple effects while keeping deterministic work
+  limits consistent across viewers. The public-order regression verifies two
+  owls, owner/unrelated-player sampling, rejected-work atomicity, unchanged-plan
+  behavior and explored fog after tree damage removes the effects. Main's
+  independent-cache gameplay suite passes 2,989 tests with 108 explicit ignores,
+  including the named new regression. Strict native/WASM Clippy, both library
+  builds and the rebuilt native campaign probe pass. NightElf03's separate
+  automatic `Ainf` refusal remains; no completed horizon, original-client fog
+  comparison or native tick parity is claimed. See
+  [vision boundary](docs/re-notes/script-world-fog-boundary.md).
+
+- 2026-11-13: Instant weapon release now uses the existing source-derived Mirror
+  Image damage factors before retreat planning, life steal and HP commit.
+  Traveling weapons retain impact-time scaling, avoiding a second multiplier.
+  Public-order regressions cover outgoing/incoming/product/zero factors, one
+  impact, unchanged RNG consumption and refused-hit retry preserving swing,
+  life and RNG state. Both named new regressions pass within main's independent
+  gameplay suite: 2,991 passed, 108 explicit ignores. Strict native/WASM Clippy,
+  both library builds, formatting and the native campaign-probe rebuild pass.
+  This corrects an existing canonical consumer; no matched original-client duel,
+  native damage-event nesting or tick/RNG parity is claimed. See
+  [weapon damage](docs/re-notes/weapon-invulnerability.md#illusion-weapon-damage-at-melee-release).
+
+- 2026-11-13: The VM now implements `StringLength` with declared-signature
+  checks, null/empty zero, byte counting to NUL and native trigger-reference
+  prefix parsing (wrapping integer suffix, minus sign, trailing nondigits and
+  the no-lookup sentinel). Computed/direct references perform one WTS lookup;
+  host errors retain source context. Independent main integration runs all
+  affected script/gameplay package suites: 3,293 passed, zero failed, 148
+  explicit ignores, including all four named new string/prefix regressions.
+  Strict native/WASM all-target Clippy, both library builds and the rebuilt
+  native campaign probe pass with source hashes unchanged throughout. Existing
+  eager literal/tag expansion can still resolve WTS an extra time, and missing
+  WTS entries remain strict errors because table availability is not yet
+  distinguished. Other string natives, runtime/campaign comparisons and full
+  native tick parity remain open. See
+  [string native evidence](docs/re-notes/script-string-natives.md).
+
+- 2026-11-13: Construction completion scheduling ignores terminal dead sites;
+  repair enrollment rejects terminal/unready/autonomous targets and cannot
+  replace an existing participant. An unqualified incomplete-site owner transfer
+  now refuses before changing participants, resources or ownership. Worker
+  transfers retain pending-reservation refunds or detach paid work. All five
+  named new lifecycle regressions pass in main's independent complete gameplay
+  package suite: 3,140 passed, zero failed, 143 explicit ignores. Strict
+  native/WASM all-target Clippy, both library builds, formatting and the native
+  campaign-probe rebuild pass with unchanged source hashes. The source-admission
+  gate also passed on the selected 1.29.2.9231 input. Actual incomplete-site
+  transfer, multi-builder work, native polling/tick behavior and presentation
+  parity remain open; the atomic refusal is not a transfer implementation. See
+  [construction evidence](docs/re-notes/unit-construction.md).
+
+- 2026-11-13: Queued research cancellation and producer death use the parsed
+  `ResearchRefundRate` independently of training refunds, including the paid
+  research level's cost. Missing research refund policy refuses before state
+  mutation. Main's independent gameplay package run passes 3,143 tests with
+  zero failures and 143 explicit ignores, including all three named new refund
+  regressions and the real-session timer regression below. Strict native/WASM
+  all-target Clippy, both library builds and scoped formatting pass with source
+  hashes unchanged. Evidence is selected-image static code and synthetic host
+  execution; matched original-client research events, transfer/removal behavior
+  and runtime tick parity remain open. See
+  [research refund policy](docs/re-notes/player-production-queues.md#research-refund-policy).
+
+- 2026-11-13: Published timer sessions continue across mandatory construction
+  and morph boundaries before reaching a later timer or AI wake. The real
+  `MapScriptSession` regression verifies an earlier morph, a later timer,
+  reaching every requested target and equivalent chunked advancement. The
+  named regression passes in the independent main package run above; strict
+  native/WASM checks and library builds pass. This is source inspection and
+  synthetic session evidence; native mixed-event ordering, AI-VM comparison,
+  browser execution and tick parity remain open. See
+  [timer catch-up](docs/re-notes/legacy-timer-start.md).
+
+- 2026-11-13: Captain recruitment counts exact types before alternates and
+  applies healthy-exact, healthy-alternate, fallback-exact, fallback-alternate
+  passes. Recruitment and guard return admit retained inactive toggle state;
+  active unsupported behavior still refuses atomically. All five named new
+  regressions pass in main's independent complete gameplay package run:
+  3,153 passed, zero failed, 143 explicit ignores. Strict native/WASM all-target
+  Clippy, both library builds, formatting and the campaign-probe rebuild pass
+  with source hashes unchanged. Evidence is selected-image static code and
+  synthetic canonical commands; native controller cadence, tie ordering and
+  runtime tick parity remain open. See
+  [captain recruitment](docs/re-notes/campaign-ai-captains.md).
+
+- 2026-11-13: Secondary fractional RNG draws now have distinct `SecondaryReal`
+  trace identity and record their selected post-draw secondary word. Arithmetic,
+  seed inputs and draw order are unchanged. The mixed-channel exact-state and
+  actual orb/combat replay regressions both execute successfully in the main
+  package run above; strict native/WASM checks and library builds pass.
+  Selected-image static evidence distinguishes engine raw-seed input from the
+  script setter's post-draw secondary seed. Engine session-payload provenance,
+  consumer ownership and native runtime/tick parity remain open. See
+  [RNG evidence](docs/re-notes/original-rng-control.md).
+
+- 2026-11-13: Ordinary default-enabled autocast prepares source-derived first
+  evaluation deadlines during unit creation, relative to the actual creation
+  clock, without synthetic orders or events. Invalid activation refuses before
+  allocation. All four named new activation regressions execute successfully in
+  the main package run above; strict native/WASM checks and both libraries pass.
+  Actual automatic acquisition/casting, retries, restored timer phase and
+  corpse/illusion activation remain open. Default-on maps can now reach the
+  existing unsupported-acquisition refusal earlier; scheduling alone does not
+  complete autocast. See
+  [activation](docs/re-notes/ability-autocast-on.md) and
+  [evaluation gaps](docs/re-notes/ability-autocast-tick.md).
+
+- 2026-11-13: Campaign cache capture and valid legacy restore reconstruct
+  ordinary abilities in source creation order, then source hero learn-slot
+  ranks. Transient ordinary additions disappear and removed source abilities
+  return without mutating the live unit. Strict payload/source/rank/cooldown
+  checks remain. Both new public cache regressions pass, including remove/readd
+  with colliding command-card slots and a valid older ordered-vector payload.
+  Campaign carryover assertions compare semantic ranks while the dedicated
+  button regression checks source sequence. Main's independent full gameplay
+  package passes 3,159 tests, zero failed, 143 explicit ignores; all six required
+  new cache/upgrade names execute. Strict native/WASM all-target Clippy, both
+  libraries, formatting and the application test-binary rebuild pass with
+  unchanged source hashes. Full world/VM save-load, permanent edits, foreign
+  authored ability changes and original-client/browser parity remain open.
+  See [cache reconstruction](docs/re-notes/script-saved-games.md).
+
+- 2026-11-13: Structure upgrades derive their debit from `RelativeUpgradeCost`
+  and retain that paid cost for independent `UpgradeRefundRate` cancellation,
+  death and queue previews. Target-price mode does not read unneeded original
+  costs. Missing policy, enabled unqualified damage penalties and negative cost
+  deltas refuse before debit. All three new interrupted-lifecycle tests and the
+  ordered-profile policy test pass in the main package run above. Native/WASM
+  checks/builds and the application fixture-feature build pass after restricting
+  an internal fixture helper to tests and fixing an unnecessary closure borrow.
+  The superseded validation attempt is not acceptance evidence. Negative upgrade
+  credits, enabled damage penalties, transfer/removal, intermediate type/pool
+  transitions and original-client timing remain open. See
+  [upgrade policy](docs/re-notes/player-production-queues.md).
+
+- 2026-11-13: Both group range natives use source-decoded normalized inclusive
+  centre geometry, canonical accepted positions and existing same-VM filter
+  continuations. Location snapshots, null/retired-location no-ops, bounded
+  preflight and callback unwind are covered. Main's independent complete
+  gameplay package passes 3,169 tests, zero failed, 144 explicit ignores;
+  all ten new range/membership names execute, and the selected-image range gate
+  separately passes. Strict native/WASM all-target Clippy, both libraries,
+  formatting and the application rebuild pass with unchanged source hashes.
+  The native-coverage inventory includes the actual two new consumers.
+  Undead03 still refuses earlier `ACsw` automatic acquisition before reaching
+  its historical range call; no horizon improvement is claimed there. Spatial
+  iteration/mutation order, special eligibility and original-client numeric
+  comparison remain open; known Locust candidates explicitly refuse. See
+  [range enumeration](docs/re-notes/slice-group-enum.md).
+
+- 2026-11-13: Native-qualified null membership queries return false in the
+  selected unit-first resolution order while retaining strict malformed,
+  wrong-family and nonnull-unit/destroyed-group boundaries. Real CreateUnit/
+  RemoveUnit coverage verifies canonical membership cleanup and typed tombstone
+  queries without allocation. All three named membership regressions pass in
+  the main package run above. The rebuilt unchanged Undead02 replay now reaches
+  player control and passes 300 seconds of idle script advancement. This is
+  not mission completion or original-client timing parity; nonnull queries on
+  destroyed groups remain unqualified. See
+  [group arena](docs/re-notes/script-group-arena.md) and
+  [chapter receipts](docs/re-notes/chapter-startup-refusals.md).
+
+- 2026-11-13: The source `Anh2` alias now binds the decoded `Anhe` Neutral Heal
+  class for default activation. Native order IDs remain distinct from ordinary
+  Heal; no profile alias or actual cast is fabricated. Independent main checks
+  pass: full gameplay package 3,169 passed, 145 explicit ignores; all 36 autocast
+  tests with both selected-image gates enabled; strict native/WASM all-target
+  Clippy, both libraries, formatting and application rebuild. Local image reads
+  are bounded before allocation, and source hashes remain unchanged. Unchanged
+  Undead05 now publishes 194 units instead of refusing creation, then reaches
+  the existing `ACbl` acquisition refusal at the first deadline. Actual Heal
+  acquisition, caster-owned channel state, effects and original-client tick
+  parity remain open. See
+  [Neutral Heal activation](docs/re-notes/ability-autocast-on.md).
+
+- 2026-11-13: Raw script literals decode escapes and retain code-tag markers
+  through variables, arrays, concatenation and calls. Evidenced native
+  consumers perform their own single WTS lookup after identity/local-recipient
+  checks; no generic native-argument expansion occurs. Missing source, missing
+  entry and malformed text remain distinct. Borrowed/owned sessions, AI,
+  preload and recording decorators preserve the selected map source. Main's
+  affected full package suites pass 3,444 tests, zero failed, 159 explicit
+  ignores, including sixteen actual consumer/forwarding regressions. Strict
+  native/WASM all-target/all-feature Clippy and both libraries pass. Corrected
+  application fixtures retain raw Capture and precise call diagnostics; all 26
+  session/callback cases and the application rebuild pass with core source
+  unchanged. Human01 and Undead02 pass current 300-second idle horizons; Orc02
+  and Human08 reach unsupported `ACcs`/`ACwb` work. Native string rendering,
+  case/hash/formatting and complete mission/tick parity remain open. See
+  [string boundaries](docs/re-notes/script-string-natives.md).
+
+- 2026-11-13: Paid worker-required Human construction sites survive ownership
+  transfer with site identity, HP, elapsed work and banks preserved. The old
+  worker remains observable immediately; ordinary work revalidation releases
+  an owner mismatch without refund/error. Same-owner repair can reenroll and
+  complete already-paid work. Other unqualified site classes still refuse.
+  Four controlled original-client/Wine traces, source-native observations and
+  public lifecycle tests support this sampled slice. All named main transfer
+  tests pass in the complete package run above; native/WASM checks, libraries
+  and application checks pass. The autonomous death/transfer fixtures now
+  actually issue the public request selecting that mode. Assistant builders,
+  exact polling/ownership-event timing, automatic reacquisition and transfer
+  cancellation remain open. See
+  [construction matrix](docs/re-notes/unit-construction.md).

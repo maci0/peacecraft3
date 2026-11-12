@@ -76,8 +76,21 @@ impl ObjectHost {
                 &["group", "player", "boolexpr"][..],
                 "nothing",
             ),
+            (
+                "GroupEnumUnitsInRange",
+                &["group", "real", "real", "real", "boolexpr"][..],
+                "nothing",
+            ),
+            (
+                "GroupEnumUnitsInRangeOfLoc",
+                &["group", "location", "real", "boolexpr"][..],
+                "nothing",
+            ),
         ] {
-            if name == "GroupEnumUnitsOfPlayer" && self.inner.program.natives().get(name).is_none()
+            if matches!(
+                name,
+                "GroupEnumUnitsOfPlayer" | "GroupEnumUnitsInRange" | "GroupEnumUnitsInRangeOfLoc"
+            ) && self.inner.program.natives().get(name).is_none()
             {
                 continue;
             }
@@ -210,10 +223,27 @@ impl ObjectHost {
         let name = match name {
             "GroupEnumUnitsInRect" => "GroupEnumUnitsInRect",
             "GroupEnumUnitsOfPlayer" => "GroupEnumUnitsOfPlayer",
+            "GroupEnumUnitsInRange" => "GroupEnumUnitsInRange",
+            "GroupEnumUnitsInRangeOfLoc" => "GroupEnumUnitsInRangeOfLoc",
             _ => return Ok(None),
         };
         if self.unit_placement.is_none() || self.inner.program.natives().get(name).is_none() {
             return Ok(None);
+        }
+        if matches!(name, "GroupEnumUnitsInRange" | "GroupEnumUnitsInRangeOfLoc") {
+            let Some((group, candidates)) = self.range_candidates(name, args)? else {
+                return Ok(Some(ScriptCall::Return(Value::Null)));
+            };
+            let predicate = match args.last() {
+                Some(Value::Null) => None,
+                Some(Value::Handle(filter)) => Some(match self.inner.entry(*filter)? {
+                    Entry::Filter { .. } => self.filter_callback(*filter)?.function,
+                    Entry::Condition { .. } => self.condition_callback(*filter)?.function,
+                    _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                }),
+                _ => return Err(self.inner.error(name, Failure::Signature)),
+            };
+            return self.begin_unit_enumeration(name, group, candidates, predicate);
         }
         if matches!(args, [_, _, Value::Null]) {
             return Ok(None);
@@ -235,6 +265,78 @@ impl ObjectHost {
             self.rectangle_candidates(group, *subject)?
         };
         self.begin_unit_enumeration(name, group, candidates, Some(predicate))
+    }
+
+    fn range_candidates(
+        &self,
+        name: &'static str,
+        args: &[Value],
+    ) -> Result<Option<(HandleId, Vec<HandleId>)>, Error> {
+        let fail = |detail| self.inner.error(name, Failure::UnitActivity(detail));
+        let (group, center, radius) = match (name, args) {
+            ("GroupEnumUnitsInRange", [group, x, y, radius, _]) => {
+                let [Some(x), Some(y)] = [x, y].map(Value::as_real) else {
+                    return Err(self.inner.error(name, Failure::Signature));
+                };
+                (group, [x, y], radius)
+            }
+            ("GroupEnumUnitsInRangeOfLoc", [_, Value::Null, _, _]) => return Ok(None),
+            ("GroupEnumUnitsInRangeOfLoc", [group, location, radius, _]) => {
+                if let Value::Handle(location) = location
+                    && matches!(
+                        self.inner.entry(*location)?,
+                        Entry::Location { point: None }
+                    )
+                {
+                    return Ok(None);
+                }
+                (group, self.location_point(location, name)?, radius)
+            }
+            _ => return Err(self.inner.error(name, Failure::Signature)),
+        };
+        if matches!(group, Value::Null) {
+            return Ok(None);
+        }
+        let group = self.inner.id(self.group_index(group, name)?, name)?;
+        let radius = radius
+            .as_real()
+            .ok_or_else(|| self.inner.error(name, Failure::Signature))?;
+        let placement = self
+            .unit_placement
+            .as_ref()
+            .expect("placement admission checked");
+        let rules = placement
+            .rules()
+            .group_range()
+            .map_err(|e| fail(e.to_string()))?;
+        let query = rules
+            .prepare(center, radius, placement.world_bounds()[0])
+            .map_err(fail)?;
+        let mut found = Vec::new();
+        for (unit, record) in self.executed_units() {
+            if !record.shown {
+                continue;
+            }
+            let position = record
+                .position
+                .ok_or_else(|| fail("accepted unit position missing".into()))?;
+            if query.contains(position).map_err(fail)? {
+                // Locust changes spatial eligibility; its native entry-bit mapping is not qualified.
+                if record
+                    .abilities
+                    .as_ref()
+                    .is_some_and(|a| a.level(*b"Aloc") > 0)
+                {
+                    return Err(fail("Locust group-range eligibility is unqualified".into()));
+                }
+                found
+                    .try_reserve(1)
+                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                found.push(unit);
+            }
+        }
+        // shortcut: creation-order snapshot, replace after native spatial order and callback mutation are qualified.
+        Ok(Some((group, found)))
     }
 
     fn player_candidates(
@@ -372,12 +474,36 @@ impl ObjectHost {
         }
         if !matches!(
             name,
-            "GetUnitX" | "GetUnitY" | "GroupEnumUnitsInRect" | "GroupEnumUnitsOfPlayer"
+            "GetUnitX"
+                | "GetUnitY"
+                | "GroupEnumUnitsInRect"
+                | "GroupEnumUnitsOfPlayer"
+                | "GroupEnumUnitsInRange"
+                | "GroupEnumUnitsInRangeOfLoc"
         ) {
             return None;
         }
         self.inner.program.natives().get(name)?;
         Some((|| {
+            if matches!(name, "GroupEnumUnitsInRange" | "GroupEnumUnitsInRangeOfLoc") {
+                if !matches!(args.last(), Some(Value::Null)) {
+                    return Err(self.inner.error(
+                        name,
+                        Failure::UnitState(
+                            "filtered unit enumeration requires the owned VM callback path",
+                        ),
+                    ));
+                }
+                let name = if name == "GroupEnumUnitsInRange" {
+                    "GroupEnumUnitsInRange"
+                } else {
+                    "GroupEnumUnitsInRangeOfLoc"
+                };
+                if let Some((group, candidates)) = self.range_candidates(name, args)? {
+                    self.begin_unit_enumeration(name, group, candidates, None)?;
+                }
+                return Ok(Value::Null);
+            }
             let fail = |detail| self.inner.error(name, Failure::UnitState(detail));
             if matches!(name, "GetUnitX" | "GetUnitY") {
                 let id = match args {

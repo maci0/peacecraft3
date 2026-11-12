@@ -277,6 +277,26 @@ impl<H: Host> Host for RecordingHost<H> {
         });
         Ok(result)
     }
+    fn native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: &pcx_script::text::NativeStringLookup<'_>,
+    ) -> Result<Value, String> {
+        let result = self.inner.native_with_strings(name, args, strings)?;
+        let sequence = self.next_sequence();
+        self.natives.push(NativeRecord {
+            sequence,
+            tick: self.tick,
+            name: name.into(),
+            args: args.to_vec(),
+            result: result.clone(),
+        });
+        Ok(result)
+    }
+    fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
+        self.inner.native_table_string(id)
+    }
     fn resolve_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.inner.resolve_table_string(id)
     }
@@ -766,5 +786,50 @@ mod recording_tests {
         for (i, event) in events.iter().enumerate() {
             assert!(event.starts_with(&format!("event {i} ")));
         }
+    }
+}
+
+#[cfg(test)]
+mod native_string_recording_tests {
+    use super::*;
+    use pcx_script::Host;
+    #[test]
+    fn native_string_recording_forwards_once_and_records_original_argument() {
+        let world = crate::neutral_player::native_string_world_fixture(Some(
+            b"STRING 7\r\n{\r\nsource text\r\n}\r\n",
+        ));
+        let mut recording = RecordingHost {
+            inner: world,
+            tick: Some(9),
+            natives: Vec::new(),
+            sequence: 0,
+        };
+        let arg = Value::Str("TRIGSTR_7".into());
+        let source = |_| Ok(Some("TRIGSTR_23 ^^x^^".into()));
+        recording
+            .native_with_strings("SetMapName", std::slice::from_ref(&arg), &source)
+            .unwrap();
+        assert_eq!(recording.natives.len(), 1);
+        assert_eq!(recording.natives[0].args, [arg]);
+        assert_eq!(recording.natives[0].tick, Some(9));
+        assert_eq!(
+            recording.native_table_string(7).unwrap().as_deref(),
+            Some("source text")
+        );
+        let world = recording.inner;
+        assert_eq!(
+            world
+                .inner()
+                .inner()
+                .inner()
+                .inner()
+                .inner()
+                .inner()
+                .map_config()
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("TRIGSTR_23 ^^x^^")
+        );
     }
 }

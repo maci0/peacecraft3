@@ -87,8 +87,8 @@ filters `+0x3f4`, `+0x458`, `+0x45c`, `+0x460`, `+0x468`, ordering `0x9a01c0`); 
 mana and cooldown terms (`0xb4a4a0`, `0xb4a530`); the cast itself and the buff each class applies.
 
 Default-enabled abilities (`UnitAbilities.auto`: `Ainf` on `ntks`, `Aweb` on `ucry` and `nnwl`) run
-the same activation when the unit is created in the original. The recreation does not arm them; that
-gap predates this note and is unchanged.
+the same activation when the unit is created in the original. Creation now arms the decoded first
+evaluation for admitted ordinary autocast classes; automatic acquisition and casting remain open.
 
 ## `CAbilityWeb` (`Aweb`) uses the same ON handler (observed)
 
@@ -126,6 +126,31 @@ passes (`executed_units=279`).
 Inferred, not measured: the ON order stops the unit and emits the issued-order events exactly as the
 runtime-probed OFF does (same validation, order creation and issue path); no ON runtime probe exists.
 
+## Default activation scheduling (2026-11-13)
+
+The shared unit factory prepares default timers from the selected unit's `auto` list, matched
+against each present ability's source `code`, rather than its alias. The existing selected-image
+activation decode supplies the delay. Committing creation timestamps the timers against the game
+clock, without issuing an ON order, switching group peers or marking default state as edited.
+Malformed lists, an undecoded activation for a matching default, invalid delays and a missing clock
+refuse before allocating the unit. Hosts without the optional autocast capability retain their
+existing admission boundary. Corpse and illusion creation are excluded; their activation and
+resurrection behavior remain unqualified.
+
+This is scheduling support, not completed autocast. At the exact first due evaluation the existing
+unsupported-acquisition error is now exposed for default-on abilities too. Ordinary OFF, peer
+exclusion and unit removal retain their existing timer cleanup. Readiness, pause/death/transfer,
+ability addition/removal/learning, restored timer phase, visibility, acquisition ranking,
+subsequent retry delays and actual spell effects remain open as
+described in `ability-autocast-tick.md`. Maps that previously advanced while silently skipping these
+default-on evaluations may now refuse there.
+
+Synthetic `autocast_host_tests` cover a class code different from its alias, the last representable
+time before the deadline and the exact deadline, a repeated ON that must not rearm, unchanged
+unit/RNG state when the due evaluation refuses and is retried, OFF/removal cleanup, re-enabling,
+a missing ability and malformed/undecoded activation before unit allocation. These exercise the
+public creation/order paths and host clock; they do not add original-client runtime parity evidence.
+
 ## `CAbilityManaBattery` (`Ambt`, Moon Well) uses the same ON handler (observed)
 
 The class name string is `0xf2ffb4` (`CAbilityManaBattery`), its getter `0xb813a0` and its name
@@ -143,3 +168,49 @@ class getters alone (`rechargeon`, `rechargeoff` are the strings the order regis
 
 The same vtable shape holds for `CAbilityReplenishLife` (`Arpl`, vtable `0xfc37bc`) and
 `CAbilityReplenishMana` (`Arpm`, `0xfc3c48`), which are not bound (not needed by any probed chapter).
+
+## Neutral Heal default activation (2026-11-13)
+
+After main integrated default scheduling at `5ad20afb`, the unchanged RoC Undead05 horizon
+refused `CreateUnit` for `Anh2` at script line 909; local receipt
+`/tmp/pc3-ai-horizon-main/Undead05.log`. The selected local Legacy `War3x.mpq` unprefixed
+`Units/AbilityData.slk` row resolves that alias to code `Anhe`, rather than `Ahea`.
+This is shipped-byte evidence for that archive member, not a claim about every dataset.
+
+Read-only disassembly of the reviewed image above identifies `CAbilityNeutralHeal` (name getter
+`0xbed5e0`, code getter `0xbed5f0`, vtable `0xf64efc`) and `CAbilityHeal` (vtable `0xf64a6c`).
+Their ON/OFF handlers, update hook, activation and deactivation virtuals are identical:
+`0xb99a80`, `0xb99b50`, `0xbdb5e0`, `0xb9c590`, `0xb9c5c0`. The Neutral Heal factory at
+`0xbf0260` calls the same base initializer `0xb2ac80`, clears the same timer region as the Heal
+factory, and adds no separate class-specific flag write. Both deleting-destructor wrappers call
+`0xb82570`. This supports using the existing decoded ordinary default activation lifecycle.
+The omitted class name is now included in the decoder; no duration, group or order ID was copied
+into the host. The default unit therefore reaches its scheduled evaluation instead of failing
+class admission during creation. Acquisition and healing still refuse explicitly at that boundary.
+
+Neutral Heal's three native order getters differ from Heal's, while the inspected expansion
+profile `Units/NeutralAbilityFunc.txt` spells the ordinary heal orders for `Anh2`. This mismatch
+does not enter default activation, which issues no order. Explicit order/profile reconciliation
+remains unqualified; the existing strict toggle cross-check is retained.
+
+The explicit original-image binding gate checks `Anhe` activation against `Ahea` and verifies
+their native toggle IDs differ. `selected_original_neutral_heal_activation_reaches_the_default_evaluation`
+feeds the decoded `Anhe` class code and delay into a synthetic unit definition with a different
+alias, creates it at nonzero game time through `CreateUnit`, and checks the exact first-evaluation
+boundary without changing unit state on refusal. This is a native-input/caller regression, not
+an original-client or unchanged-mission runtime parity result. Ghidra import timed out before
+returning a function dossier; the new native observations here are direct PE/disassembly evidence.
+
+Independent main validation passes the full gameplay package (3,169 passed,
+zero failed, 145 explicit ignores) and all 36 autocast tests with both explicit
+selected-image gates enabled. Strict native/WASM all-target Clippy, both
+libraries, formatting and the application test-binary rebuild pass with source
+hashes unchanged. The local image gates bound file reads before allocation.
+Receipts are retained in `/tmp/pc3-neutral-heal-main-validation/`.
+
+The unchanged Undead05 replay now publishes 194 units; it no longer refuses
+`CreateUnit` for `Anh2`. It then refuses automatic `ACbl` acquisition at
+`0.019999999552965164`, so it does not complete the opening or idle horizon.
+The exact executable hash and failed command are retained under
+`/tmp/pc3-neutral-heal-horizon-main/`. This is recreation frontier evidence,
+not an observed `Anhe` cast or original-client parity.

@@ -1503,11 +1503,19 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        self.player_native_with_strings(name, args, None)
+    }
+    pub(super) fn player_native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Option<Result<Value, Error>> {
         let players = self.players.as_ref()?;
         if name == "GetLocalPlayer" {
             let number = players.local_player?;
             return Some(if args.is_empty() {
-                self.apply_player("Player", &[Value::Int(number)])
+                self.apply_player_with_strings("Player", &[Value::Int(number)], strings)
                     .map_err(|error| self.inner.error(name, error.failure))
             } else {
                 Err(self.inner.error(name, Failure::PlayerArguments))
@@ -1535,7 +1543,7 @@ impl ObjectHost {
         }
         if name == "GetPlayerSlotState" {
             players.slot_states.as_ref()?;
-            return Some(self.apply_player(name, args));
+            return Some(self.apply_player_with_strings(name, args, strings));
         }
         if name == "GetPlayerTechResearched" {
             if players.current_research.is_none() && players.upgrade_research.is_none() {
@@ -1561,9 +1569,17 @@ impl ObjectHost {
         if research && players.upgrade_research.is_some() {
             return Some(self.set_researched_with_effects(args));
         }
-        Some(self.apply_player(name, args))
+        Some(self.apply_player_with_strings(name, args, strings))
     }
     fn apply_player(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        self.apply_player_with_strings(name, args, None)
+    }
+    fn apply_player_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, Error> {
         if name == "Player" {
             let [Value::Int(number)] = args else {
                 return Err(self.inner.error(name, Failure::PlayerArguments));
@@ -1691,6 +1707,8 @@ impl ObjectHost {
                 Ok(Value::Null)
             }
             ("SetPlayerName", [Value::Str(text)]) => {
+                let text = pcx_script::text::native_map_string(text, strings)
+                    .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
                 players
                     .rows
                     .iter()
@@ -1704,7 +1722,7 @@ impl ObjectHost {
                 let mut copy = String::new();
                 copy.try_reserve_exact(text.len())
                     .map_err(|_| fail(Failure::Capacity))?;
-                copy.push_str(text);
+                copy.push_str(&text);
                 players.rows[at].name = Some(copy);
                 Ok(Value::Null)
             }
@@ -2260,7 +2278,11 @@ impl ObjectHost {
         Ok(training.queue_slots)
     }
 
-    pub(super) fn training_refund(&self, cost: i32) -> Result<i32, Error> {
+    pub(super) fn training_refund(
+        &self,
+        cost: i32,
+        kind: crate::training_rules::RefundKind,
+    ) -> Result<i32, Error> {
         self.training_queue_slots()?;
         let rules = &self
             .players
@@ -2276,14 +2298,45 @@ impl ObjectHost {
                 Failure::UnitActivity("source numeric rules are not admitted".into()),
             )
         })?;
-        rules
-            .training_rules()
+        let training = rules.training_rules().expect("checked");
+        let refund = training.refund_for(numeric, cost, kind);
+        refund.map_err(|why| {
+            self.inner
+                .error("training refund", Failure::UnitActivity(why))
+        })
+    }
+
+    pub(super) fn structure_upgrade_costs(
+        &self,
+        original: &pcx_sim::world::Definition,
+        target: [i32; 2],
+    ) -> Result<[i32; 2], Error> {
+        self.training_queue_slots()?;
+        let fail = |why| self.inner.error("SetProduce", Failure::UnitActivity(why));
+        let rules = self
+            .players
+            .as_ref()
             .expect("checked")
-            .refund(numeric, cost)
-            .map_err(|why| {
-                self.inner
-                    .error("training refund", Failure::UnitActivity(why))
-            })
+            .resources
+            .as_ref()
+            .expect("checked")
+            .rules
+            .training_rules()
+            .expect("checked");
+        let original = if rules.upgrade_policy().map_err(fail)?.relative_cost {
+            None
+        } else {
+            let [gold, lumber] = ["goldcost", "lumbercost"].map(|column| {
+                crate::player_unit_cost::amount(original, column).map_err(|why| {
+                    fail(format!(
+                        "upgrade source {:?} {column}: {why}",
+                        original.rawcode
+                    ))
+                })
+            });
+            Some([gold?, lumber?])
+        };
+        rules.upgrade_costs(original, target).map_err(fail)
     }
 
     pub(super) fn prepare_training_debit(

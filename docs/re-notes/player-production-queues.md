@@ -179,3 +179,89 @@ through the source cost classifier until token transitions are implemented.
 Hero training/revival, research, construction and race-specific workers remain
 the subsequent parts of the economy stage. This contract does not close that
 stage or the first-mission playthrough requirement.
+
+## Research refund policy
+
+Research entries in the shared queue now use `Misc/ResearchRefundRate` for
+explicit cancellation, producer-death cleanup and queue-detail refunds. Ordinary
+training retains `TrainRefundRate`; structure upgrades use their separate policy
+below. Training and research values
+come from the ordered source profiles, including map overrides; a missing
+research rate refuses a research refund before money, life or queue mutation.
+It does not substitute the training rate. Conversion remains per entry and
+uses the admitted numeric policy, with finite in-range results truncated toward
+zero.
+
+Evidence class: native instruction inspection with GNU objdump of the selected
+1.29.2.9231 executable, SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+In the queue cancellation walker `0xb56f90`, the research branch pushes the
+`ResearchRefundRate` key at `0xb570d2`, calls the profile getter at `0xb570e0`,
+and reads level-priced gold/lumber through `0x6df7e0` / `0x6e0a30` at
+`0xb570f8` / `0xb57136`. Integer-to-real, multiply, truncation and credit calls
+are `0xb57102` / `0xb5710f` / `0xb57115` / `0xb57121` for gold and
+`0xb57140` / `0xb5714d` / `0xb57153` / `0xb5715f` for lumber. The rule reader
+checks those call targets and reads the profile-key pointer from the image;
+it does not copy either refund rate into production constants.
+
+Synthetic regressions distinguish training rate 0.37 from research rate 0.61,
+check cancellation and producer death exactly once without awarding a level,
+check the queue-detail refund, and reject a missing research policy without
+changing the bank, queue or producer life. Parser checks cover ordered overrides,
+missing/malformed rates, truncated instructions, source identity and numeric
+conversion. These are recreation and source-binding checks; no new matched
+original-client research cancellation/death runtime run was performed. Research
+events, player research commands and transfer/removal semantics remain open.
+
+## Structure-upgrade cost and refund policy
+
+The selected executable's upgrade admission method `0xb63580` and cancellation
+method `0xb63ad0` distinguish `Misc/RelativeUpgradeCost`. When enabled, the target
+unit's gold and lumber fields are the job cost. When disabled, both methods
+subtract the original unit type's corresponding fields. Target-price mode skips
+original-cost metadata reads, matching the conditional native getter path.
+The queue now derives
+that amount for each chosen producer before spending, retains the paid amount
+in the canonical job, and uses it for cancellation and producer-death refunds.
+The target's authored build time remains the job duration; a zero cost does not
+make a job instantaneous. Ordinary training and research retain their own cost
+and refund paths.
+
+Evidence class: GNU objdump 2.47 instruction/data inspection of the selected
+1.29.2.9231 image identified above. Admission reads the mode key at `0xb635c5`
+and calls its integer profile getter at `0xb635d2`; target cost calls
+`0xb635af` / `0xb635bc` are negated. With the mode disabled, original cost calls
+`0xb635e1` / `0xb635ec` are added before bank calls `0xb63622` / `0xb63633`.
+Cancellation reads the same key at `0xb63b5d`, obtains target costs at
+`0xb63b4b` / `0xb63b56`, and conditionally subtracts original costs through
+`0xb63b79` / `0xb63b84`. It calls the upgrade rate method through virtual slot
+`+0x350` at `0xb63b38`; the inspected table entry `0xf24f28` points to
+`0xb63df0`. This method reads `UpgradeRefundRate` at `0xb63dfd` and also reads
+`UpgradeDamageRefundPenalty` at `0xb63e11`. The rule reader checks the profile-key
+operands and the relevant getter, cost, conversion, multiplication, truncation
+and bank call targets against the pinned image.
+
+The ordered game/map profiles supply all three upgrade fields, with no training
+rate substitute. Missing fields and unsupported boolean classes report errors.
+An enabled damage penalty refuses admission before spending: its native damage
+accumulator is not yet modelled. Negative price deltas likewise refuse as an
+unqualified class rather than inventing a clamp or credit policy. With the
+penalty disabled, conversion uses the source numeric policy and per-entry
+truncation, and current life does not scale the refund.
+
+Nonstock regressions use distinct producer/target prices and separate training,
+research and upgrade rates. They exercise both cost modes, affordability at the
+derived delta, source duration and completion, damaged life with the penalty
+disabled, pause, cancellation/death/repeated cleanup, queue-detail refunds,
+missing policy and enabled-penalty refusal. Parser checks cover layered profiles,
+invalid/missing flags, negative deltas, overflow and the explicit local original
+image/profile binding. These checks do not establish original-client upgrade
+runtime parity. Damage-penalty support, transfer/removal, upgrade events and
+intermediate type/pool transitions remain open.
+
+Validation of this slice: 86 training/construction lifecycle tests and five
+source-rule tests passed in a dedicated target directory, including the
+explicit original-image/profile test. Native and WASM library builds and strict
+compile checks passed with workspace warnings denied. The final frozen-source
+binary reran all 86 lifecycle and five rule tests under a private offscreen
+display with null audio; source hashes matched before and after the run.
