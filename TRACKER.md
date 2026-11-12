@@ -7057,3 +7057,16 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   79 maps: 31 passed, 47 refused, one diagnostic timeout. Frontier categories and
   provenance are recorded in [the sweep](docs/re-notes/chapter-startup-refusals.md#complete-indexed-openingidle-sweep-2026-11-13).
   These gates do not establish mission completion or native tick/RNG parity.
+
+- 2026-11-13: Canonical vision sampling now counts all attached Sentinel owls
+  before viewer-specific sharing filters. This fixes candidate-count assertions
+  and scan-budget refusal with multiple effects while keeping deterministic work
+  limits consistent across viewers. The public-order regression verifies two
+  owls, owner/unrelated-player sampling, rejected-work atomicity, unchanged-plan
+  behavior and explored fog after tree damage removes the effects. Main's
+  independent-cache gameplay suite passes 2,989 tests with 108 explicit ignores,
+  including the named new regression. Strict native/WASM Clippy, both library
+  builds and the rebuilt native campaign probe pass. NightElf03's separate
+  automatic `Ainf` refusal remains; no completed horizon, original-client fog
+  comparison or native tick parity is claimed. See
+  [vision boundary](docs/re-notes/script-world-fog-boundary.md).

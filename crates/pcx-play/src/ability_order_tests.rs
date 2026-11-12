@@ -270,6 +270,10 @@ impl ObjectCatalog for Types {
 }
 
 fn open() -> (Vm, [HandleId; 5]) {
+    open_with_clock(false)
+}
+
+fn open_with_clock(clock: bool) -> (Vm, [HandleId; 5]) {
     let (registry, activity) = super::activity::rules_with_load();
     let (hero_rules, combat_rules) = hero_rules();
     let mut fields = hero_fields("STR");
@@ -295,10 +299,11 @@ fn open() -> (Vm, [HandleId; 5]) {
         "_",
     ));
     let extra = format!(
-        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}\n{}",
+        "{}\n{}{DECLARATIONS}{HOLY_DECLARATIONS}\n{}\n{}",
         enumeration::TRIGGERS,
         super::activity::ORDERS,
         super::resource::RESOURCE_FAMILY_NATIVES,
+        if clock { CLOCK_DECLARATIONS } else { "" },
     );
     let ability_overlay = Overlay::default();
     let hero_budget = crate::playercolor_host::HeroBudget {
@@ -364,6 +369,17 @@ fn open() -> (Vm, [HandleId; 5]) {
     h.set_neutral_passive(15);
     let types = Arc::new(Types(h.unit_catalog().unwrap()));
     h.construction_test_catalog(types);
+    if clock {
+        h = h
+            .with_startup_clock(crate::startup_clock::tests::input(9), "CLOCK", 64, 16, 1000)
+            .unwrap();
+        h.admit_time_of_day(&pcx_objects::editor::misc::DayCycle {
+            day_length: 360.,
+            day_hours: 24.,
+            sources: vec!["synthetic".into()],
+        })
+        .unwrap();
+    }
     let context = Arc::clone(h.player_context().unwrap());
     let mut vm = context.scripts.clone().owned_vm(h);
     vm.init_globals().unwrap();
@@ -626,6 +642,55 @@ fn a_sentinel_owl_gives_its_owner_a_circle_of_sight_at_the_tree() {
         }]
     );
     assert!(circles(&mut vm, other).is_empty());
+}
+
+#[test]
+fn sentinel_sources_sample_for_every_viewer_and_retain_exploration_after_removal() {
+    use crate::playercolor_host::VisionState;
+    let (mut vm, _) = open_with_clock(true);
+    let caster = global_unit(&vm, "S");
+    let tree = tree_at(&mut vm, NEAR_TREE);
+    let owner = player(&mut vm, 4);
+    let other = player(&mut vm, 5);
+    let point = [16., 80.];
+    let sample = |vm: &mut Vm, viewer| {
+        let h = &mut vm.host().inner;
+        let budget = h.shared_vision_work_limit().unwrap();
+        h.sample_shared_vision(budget).unwrap();
+        h.vision_cell(viewer, point).unwrap().unwrap()
+    };
+    assert!(vm.host().inner.admit_shared_vision().unwrap());
+    assert!(!sample(&mut vm, owner).explored);
+    for _ in 0..2 {
+        assert_eq!(
+            issue_target(&mut vm, caster, "sentinel", tree).unwrap(),
+            Value::Bool(true)
+        );
+        let h = &mut vm.host().inner;
+        let previous = h.vision_cell(owner, point).unwrap();
+        let revision = h.vision_revision();
+        assert!(h.sample_shared_vision(0).is_err());
+        assert_eq!(h.vision_cell(owner, point).unwrap(), previous);
+        assert_eq!(h.vision_revision(), revision);
+        let cell = sample(&mut vm, owner);
+        assert!(cell.explored);
+        assert_eq!(cell.raw, VisionState::Visible);
+        assert!(!sample(&mut vm, other).explored);
+    }
+    let h = &mut vm.host().inner;
+    let candidates = h.executed_units().count() + h.sentinel_owls().count();
+    assert!(h.vision_sources(other, false, candidates - 1).is_err());
+    let revision = h.vision_revision();
+    assert!(
+        h.sample_shared_vision(0).is_ok(),
+        "unchanged sample stamps no cells"
+    );
+    assert_eq!(h.vision_revision(), revision);
+    h.damage_destructable(tree, 1.).unwrap();
+    let cell = sample(&mut vm, owner);
+    assert_eq!(cell.raw, VisionState::Fogged);
+    assert!(cell.explored);
+    assert!(!sample(&mut vm, other).explored);
 }
 
 #[test]
