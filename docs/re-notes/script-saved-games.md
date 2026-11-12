@@ -344,3 +344,29 @@ after merging the released baseline. Strict native/WebAssembly pcx-play
 all-target Clippy and the WebAssembly library build pass with unchanged source
 hashes. This fixes a script-visible continuation field; it does not implement
 durable world saves or establish every expired-timer lifetime behavior.
+
+### Handler selection after expiry subscriptions
+
+Replicated isolated original-client probes on the selected 1.29.2.9231 image
+show that a subscription's TimerStart replacement affects the direct handler of
+that same firing. A null replacement omits it, and the final replacement across
+multiple subscriptions wins. DestroyTimer instead retains the latest handler
+record while GetExpiredTimer becomes null. Replacing with a handler and then
+destroying still calls that handler; replacing with null and then destroying
+calls none. Local witnesses are `/tmp/pc3-sol02-subscription-witness.json` and
+`/tmp/pc3-sol02-subscription-destroy-witness.json`; both have identical replicated
+records and the cleanup receipt confirms all four private clients stopped.
+
+The production session now resolves that retained record after its subscription
+cursor finishes. A successful TimerStart updates the record after fallible
+preparation and commit; destruction clears only the active expired identity.
+Subscription snapshots and expiry source/sequence validation remain in place.
+Six published-session regressions exercise replacement, null, final replacement,
+destruction and both replacement/destruction combinations, including trigger
+context cleanup and a following independent expiry. Component regressions also
+check unrelated timer edits and failed-restart atomicity. The original prepared
+callback field remains historical diagnostic data, not the delivery read point.
+
+This adds another active-delivery field to the full-save inventory. Its saved
+projection and the pending Resume dispatch still need their own save/load
+qualification; the ordinary pending-expiry replay witness does not settle them.

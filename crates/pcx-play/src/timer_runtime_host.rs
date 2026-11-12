@@ -39,6 +39,7 @@ struct Expired {
     query_now: Option<f32>,
     query_epoch: Option<crate::script_numeric::timer_query::Epoch>,
     resume_dispatch: bool,
+    retained_callback: Option<FunctionId>,
 }
 
 /// One prepared expiry. Finish it even when its callback fails.
@@ -47,12 +48,14 @@ struct Expired {
 /// order. The session delivers each trigger's conditions and actions before
 /// the direct `callback`: expiry-trigger actions observe the expired timer
 /// first, and the direct handler runs with cleared trigger/event context.
-/// Snapshots are prepared before the deadline is consumed, so callback-list
-/// edits apply on the next firing.
+/// Subscription snapshots are prepared before the deadline is consumed, so
+/// subscription-list edits apply on the next firing. Resolve the direct handler with
+/// `current_timer_callback` after the subscription actions have finished.
 #[derive(Debug)]
 pub struct TimerExpiry {
     source: HandleId,
     sequence: u64,
+    /// Handler when prepared, useful for diagnostics; delivery resolves the current record.
     pub callback: Option<FunctionId>,
     triggers: Vec<super::TriggerDelivery>,
 }
@@ -356,6 +359,14 @@ impl ObjectHost {
             *slot = Some(run);
         }
         self.commit_timer_sequence(&run);
+        if let Some(active) = self
+            .timers
+            .as_mut()
+            .and_then(|state| state.active.as_mut())
+            .filter(|active| active.source == *timer)
+        {
+            active.retained_callback = handler;
+        }
         Ok(Value::Null)
     }
 
@@ -599,7 +610,7 @@ impl ObjectHost {
             run.timeout
         } else if let Some(active) = state
             .active
-            .filter(|active| active.timer == Some(*timer) && active.sequence == run.sequence)
+            .filter(|active| active.source == *timer && active.sequence == run.sequence)
         {
             active.timeout
         } else {
@@ -749,6 +760,7 @@ impl ObjectHost {
             query_now,
             query_epoch,
             resume_dispatch,
+            retained_callback: run.handler,
         });
         match &mut self.inner.arena[index] {
             Entry::Timer { run: slot, .. } => *slot = Some(run),
@@ -777,6 +789,32 @@ impl ObjectHost {
             ));
         }
         Ok(())
+    }
+
+    pub(super) fn retire_timer_delivery_identity(&mut self, timer: HandleId) {
+        if let Some(active) = self
+            .timers
+            .as_mut()
+            .and_then(|state| state.active.as_mut())
+            .filter(|active| active.timer == Some(timer))
+        {
+            active.timer = None;
+        }
+    }
+
+    /// Read after expiry subscriptions: restart/null replacement changes this firing's handler.
+    /// Destruction revokes the timer identity but the active delivery retains its callback record.
+    pub fn current_timer_callback(
+        &self,
+        expiry: &TimerExpiry,
+    ) -> Result<Option<FunctionId>, Error> {
+        self.check_timer_expiry(expiry)?;
+        Ok(self
+            .timers
+            .as_ref()
+            .and_then(|state| state.active)
+            .expect("checked above")
+            .retained_callback)
     }
 
     /// Finish the source resume-dispatch rearm, then clear callback context.

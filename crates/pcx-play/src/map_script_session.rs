@@ -549,7 +549,13 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     delivery.phase = TimerDeliveryPhase::Trigger;
                 }
                 TimerDeliveryPhase::Handler => {
-                    if let Some(id) = delivery.expiry.callback {
+                    let callback = active
+                        .vm
+                        .host()
+                        .inner
+                        .objects()
+                        .current_timer_callback(&delivery.expiry)?;
+                    if let Some(id) = callback {
                         let ticket = self.callback_ticket(id)?;
                         self.call_callback(&ticket, &[])?;
                     }

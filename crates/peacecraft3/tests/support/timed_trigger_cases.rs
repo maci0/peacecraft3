@@ -471,6 +471,129 @@ endfunction
     assert_eq!(session.advance_timers(20.0, 0).unwrap(), 0);
 }
 
+fn assert_subscription_handler(first: &str, second: &str, destroyed: bool, expected: i32) {
+    let source = format!(
+        "\
+globals
+trigger first = CreateTrigger()
+trigger second = CreateTrigger()
+timer clock = CreateTimer()
+timer next = CreateTimer()
+integer seen = 0
+boolean context_ok = true
+endglobals
+function check_handler takes nothing returns nothing
+set context_ok = context_ok and GetTriggeringTrigger() == null and GetTriggerEventId() == null and GetExpiredTimer() == {identity}
+call DestroyTimer(clock)
+endfunction
+function a takes nothing returns nothing
+call check_handler()
+set seen = seen * 10 + 3
+endfunction
+function b takes nothing returns nothing
+call check_handler()
+set seen = seen * 10 + 4
+endfunction
+function c takes nothing returns nothing
+call check_handler()
+set seen = seen * 10 + 5
+endfunction
+function first_action takes nothing returns nothing
+set context_ok = context_ok and GetTriggeringTrigger() == first and GetExpiredTimer() == clock
+set seen = seen * 10 + 1
+{first}
+endfunction
+function second_action takes nothing returns nothing
+set context_ok = context_ok and GetTriggeringTrigger() == second and GetExpiredTimer() == {identity}
+set seen = seen * 10 + 2
+{second}
+endfunction
+function following takes nothing returns nothing
+set context_ok = context_ok and GetTriggeringTrigger() == null and GetExpiredTimer() == next
+set seen = seen * 10 + 6
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(first,function first_action)
+call TriggerAddAction(second,function second_action)
+call TriggerRegisterTimerExpireEvent(first,clock)
+call TriggerRegisterTimerExpireEvent(second,clock)
+call TimerStart(clock,0.5,false,function a)
+call TimerStart(next,0.75,false,function following)
+endfunction
+",
+        identity = if destroyed { "null" } else { "clock" }
+    );
+    let mut app = timer_app();
+    deliver_timed_trigger(&mut app, &source, 1);
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none()
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.advance_timers(10.5, 1).unwrap(), 1);
+    assert_eq!(session.global("seen"), Some(Value::Int(expected)));
+    assert_eq!(session.global("context_ok"), Some(Value::Bool(true)));
+    assert_eq!(session.advance_timers(10.75, 1).unwrap(), 1);
+    assert_eq!(session.global("seen"), Some(Value::Int(expected * 10 + 6)));
+    assert_eq!(session.global("context_ok"), Some(Value::Bool(true)));
+}
+
+#[test]
+fn timer_subscription_replacement_selects_current_direct_handler() {
+    assert_subscription_handler(
+        "call TimerStart(clock,2.0,false,function b)",
+        "",
+        false,
+        124,
+    );
+}
+
+#[test]
+fn timer_subscription_null_replacement_omits_direct_handler() {
+    assert_subscription_handler("call TimerStart(clock,2.0,false,null)", "", false, 12);
+}
+
+#[test]
+fn timer_subscriptions_select_final_replacement_after_all_actions() {
+    assert_subscription_handler(
+        "call TimerStart(clock,2.0,false,function b)",
+        "call TimerStart(clock,3.0,false,function c)",
+        false,
+        125,
+    );
+}
+
+#[test]
+fn timer_subscription_destroy_retains_handler_with_null_expired_identity() {
+    assert_subscription_handler("call DestroyTimer(clock)", "", true, 123);
+}
+
+#[test]
+fn timer_subscription_replace_then_destroy_retains_latest_handler() {
+    assert_subscription_handler(
+        "call TimerStart(clock,2.0,false,function b)\ncall DestroyTimer(clock)",
+        "",
+        true,
+        124,
+    );
+}
+
+#[test]
+fn timer_subscription_null_then_destroy_omits_direct_handler() {
+    assert_subscription_handler(
+        "call TimerStart(clock,2.0,false,null)\ncall DestroyTimer(clock)",
+        "",
+        true,
+        12,
+    );
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn browser_timed_trigger_gate() -> u32 {
@@ -480,7 +603,13 @@ pub fn browser_timed_trigger_gate() -> u32 {
     timed_callback_failure_cleans_context_and_candidate_replacement_keeps_previous_state();
     timer_delivery_cursor_keeps_condition_snapshot_and_skips_retired_subscription();
     timer_delivery_cursor_failure_retires_expiry_before_next_callback();
-    6
+    timer_subscription_replacement_selects_current_direct_handler();
+    timer_subscription_null_replacement_omits_direct_handler();
+    timer_subscriptions_select_final_replacement_after_all_actions();
+    timer_subscription_destroy_retains_handler_with_null_expired_identity();
+    timer_subscription_replace_then_destroy_retains_latest_handler();
+    timer_subscription_null_then_destroy_omits_direct_handler();
+    12
 }
 
 #[cfg(target_arch = "wasm32")]

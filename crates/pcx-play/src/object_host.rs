@@ -752,6 +752,7 @@ impl ObjectHost {
             Some(Entry::Timer { live, run }) => {
                 *run = None;
                 *live = false;
+                self.retire_timer_delivery_identity(*id);
                 return Ok(Value::Null);
             }
             None => Failure::Identity,
