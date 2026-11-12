@@ -267,7 +267,7 @@ impl ObjectHost {
             }
         }
         self.autocast_ticks
-            .retain(|(unit, ability, _)| *unit != caster || *ability != alias);
+            .retain(|(unit, ability, _, _)| *unit != caster || *ability != alias);
     }
 
     pub(super) fn step_slow_cast(&mut self, caster: HandleId, now: f64) -> Result<(), Error> {

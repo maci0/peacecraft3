@@ -3,6 +3,8 @@ use super::Limits;
 use super::{Entry, EnumHost, Error, Failure, below};
 use pcx_script::{HandleId, Host, Value, ast::Expr};
 use std::sync::Arc;
+type PreparedDefaultAutocast = ([u8; 4], f64, Option<crate::native_game_clock::Point>);
+
 /// Opt-in session objects and authored map/player setup in one bounded arena.
 /// Timer delivery uses explicit game time; world enumeration remains unsupported.
 pub struct ObjectHost {
@@ -60,7 +62,12 @@ pub struct ObjectHost {
     unit_activity: Option<unit_activity::State>,
     harvest: Option<harvest_runtime::State>,
     /// Automatic-cast evaluations armed by an ON order: unit, ability alias, game time of the first tick.
-    autocast_ticks: Vec<(HandleId, [u8; 4], f64)>,
+    autocast_ticks: Vec<(
+        HandleId,
+        [u8; 4],
+        f64,
+        Option<crate::native_game_clock::Point>,
+    )>,
     order_queue: Option<order_queue::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     unit_ids: Option<unit_id::UnitIds>,
@@ -92,6 +99,7 @@ pub struct ObjectHost {
     stacked_sound_requests: Vec<StackedSoundRequest>,
     startup_clock: Option<clock::StartupClockState>,
     numeric: Option<crate::script_numeric::NumericPolicy>,
+    native_game_clock: Option<crate::native_game_clock::State>,
     terrain_pathing: Option<crate::terrain_pathing::TerrainPathing>,
     cliff_overlay: Option<crate::terrain_pathing::CliffOverlay>,
     initial_blight: Option<crate::terrain_blight::InitialBlight>,
@@ -289,6 +297,7 @@ impl ObjectHost {
             stacked_sound_requests: Vec::new(),
             startup_clock: None,
             numeric: None,
+            native_game_clock: None,
             terrain_pathing: None,
             cliff_overlay: None,
             initial_blight: None,
@@ -1844,3 +1853,6 @@ pub use world_snapshots::WorldSnapshot;
 #[path = "native_coverage_host.rs"]
 mod native_coverages;
 pub use native_coverages::NativeCoverage;
+
+#[path = "native_game_clock_host.rs"]
+mod native_game_clock_host;

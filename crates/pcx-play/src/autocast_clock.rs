@@ -23,7 +23,7 @@ fn call(bytes: &[u8], base: u32, at: usize, target: u32) -> Result<(), String> {
 }
 
 impl Rules {
-    pub(super) fn read(
+    pub(crate) fn read(
         read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
     ) -> Result<Self, String> {
         // The embedded simple timer's virtual +8, rather than the extended JASS timer.

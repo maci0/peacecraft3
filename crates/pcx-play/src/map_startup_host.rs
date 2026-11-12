@@ -982,6 +982,7 @@ fn assemble_inner(
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
+        object.admit_native_game_clock()?;
     }
     if let Some(policy) = destructable_restore {
         object = object.with_destructable_restore(policy)?;

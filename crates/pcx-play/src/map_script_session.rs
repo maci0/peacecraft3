@@ -313,9 +313,22 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     pub fn advance_timers(
         &mut self,
         until: f64,
-        budget: usize,
+        mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
-        let result = self.advance_timers_inner(until, budget);
+        let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+        let advances_clock = host.objects().game_paused() != Some(true);
+        host.objects_mut()
+            .select_legacy_clock_domain(until, advances_clock)?;
+        self.advance_native_timers(until, &mut budget, &mut 65536)
+    }
+
+    pub(crate) fn advance_native_timers(
+        &mut self,
+        until: f64,
+        budget: &mut usize,
+        activity_work: &mut usize,
+    ) -> Result<usize, TimerSessionError> {
+        let result = self.advance_timers_inner(until, budget, activity_work);
         if result.is_err()
             && let Some(host) = self.host()
         {
@@ -327,14 +340,14 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     fn advance_timers_inner(
         &mut self,
         until: f64,
-        mut budget: usize,
+        budget: &mut usize,
+        activity_work: &mut usize,
     ) -> Result<usize, TimerSessionError> {
         self.host()
             .ok_or(ScriptSessionError::NoSession)?
             .objects()
             .validate_timer_target(until)?;
         let mut delivered = 0;
-        let mut activity_work = 65536;
         loop {
             if self
                 .host()
@@ -347,8 +360,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .objects()
                     .has_queued_mirror_events()
             {
-                let events = self.advance_queued_events(budget)?;
-                budget = budget
+                let events = self.advance_queued_events(*budget)?;
+                *budget = budget
                     .checked_sub(events.max(1))
                     .ok_or(TimerSessionError::WakeBudget)?;
                 delivered += events;
@@ -384,8 +397,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.advance_unit_activity_mandatory(now, &mut activity_work)?;
-                budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                objects.advance_unit_activity_mandatory(now, activity_work)?;
+                *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                 self.resume_thread(ticket)?;
                 delivered += 1;
                 continue;
@@ -394,14 +407,14 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_timer_expiry(step_until, &mut budget)?;
+                .next_timer_expiry(step_until, budget)?;
             let movement = {
                 let objects = self
                     .host()
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.advance_unit_activity_mandatory(now, &mut activity_work)
+                objects.advance_unit_activity_mandatory(now, activity_work)
             };
             if let Err(error) = movement {
                 if let Some(expiry) = expiry {
@@ -414,11 +427,11 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             }
             let Some(expiry) = expiry else {
                 if activity_wake == Some(step_until) {
-                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     continue;
                 }
                 if let Some((_, player, ticket)) = ai_wake {
-                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     self.host()
                         .ok_or(ScriptSessionError::NoSession)?
                         .resume_ai(player, ticket)
@@ -431,7 +444,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.flush_unit_activity_routes(now, &mut activity_work)?;
+                objects.flush_unit_activity_routes(now, activity_work)?;
                 return Ok(delivered);
             };
             self.deliver_timer_expiry(expiry)?;
