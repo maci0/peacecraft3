@@ -274,6 +274,110 @@ fn ambiguous_or_malformed_source_refuses() {
     m.last_mut().unwrap().1[56] ^= 1;
     assert!(decode(&m).is_err());
 }
+fn timing_fixture(shift: u32, retry: i8, minimum: i8) -> Memory {
+    let table = shift + 0x30000;
+    let mut memory = Vec::new();
+    for (slot, init_va, value) in [(0x470, 0x4015c0u32, retry), (0x474, 0x401460, minimum)] {
+        let getter_va = shift + 0x40000 + slot * 0x20;
+        let global_va = shift + 0x50000 + slot;
+        memory.push((table + slot, getter_va.to_le_bytes().to_vec(), false));
+        memory.push((
+            getter_va,
+            [
+                &[0x55, 0x8b, 0xec, 0x8b, 0x45, 0x08, 0x8b, 0x0d][..],
+                &global_va.to_le_bytes(),
+                &[0x89, 0x08, 0x5d, 0xc2, 0x04, 0x00],
+            ]
+            .concat(),
+            true,
+        ));
+        memory.push((
+            init_va,
+            [
+                &[0x6a, value as u8, 0x68][..],
+                &global_va.to_le_bytes(),
+                &[0xe8],
+                &0x9a1620u32.wrapping_sub(init_va + 12).to_le_bytes(),
+                &[0x83, 0xc4, 0x08, 0xc3],
+            ]
+            .concat(),
+            true,
+        ));
+    }
+    memory
+}
+
+fn read_timing(memory: &Memory, shift: u32) -> Result<TickTiming, String> {
+    TickTiming::read(shift + 0x30000, &mut |va, n, code| {
+        memory
+            .iter()
+            .find(|(at, b, executable)| {
+                va >= *at && va - *at < b.len() as u32 && code == *executable
+            })
+            .and_then(|(at, b, _)| b.get((va - *at) as usize..(va - *at) as usize + n))
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| "synthetic timing window missing".into())
+    })
+}
+
+#[test]
+fn tick_delays_follow_relocated_getters_and_nonstock_bootstrap_operands() {
+    for shift in [0, 0x100000] {
+        let timing = read_timing(&timing_fixture(shift, 11, 7), shift).unwrap();
+        assert_eq!(timing.retry, 11.);
+        assert_eq!(timing.minimum_after_cast, 7.);
+        assert_eq!(
+            read_timing(&timing_fixture(shift, 17, 9), shift)
+                .unwrap()
+                .retry,
+            17.
+        );
+    }
+}
+
+#[test]
+fn class_tick_timing_preserves_independent_on_and_off_admission() {
+    let mut memory = fixture(0, 0x40);
+    let mut timing = timing_fixture(0, 11, 7);
+    timing[0].0 = 0x350000 + 0x470;
+    timing[3].0 = 0x350000 + 0x474;
+    memory.extend(timing);
+    let rules = decode(&memory).unwrap();
+    assert_eq!(
+        rules.classes[0].tick,
+        Some(TickTiming {
+            retry: 11.,
+            minimum_after_cast: 7.
+        })
+    );
+    assert!(rules.classes[0].enable.is_some());
+    assert!(rules.classes[1..].iter().all(|c| c.tick.is_none()));
+    let initializer = memory.iter_mut().find(|r| r.0 == 0x4015c0).unwrap();
+    initializer.1[3] ^= 1;
+    let rules = decode(&memory).unwrap();
+    assert!(rules.classes[0].tick.is_none());
+    assert!(rules.classes[0].enable.is_some());
+    assert_ne!(rules.classes[0].on, rules.classes[0].off);
+}
+
+#[test]
+fn tick_delay_drift_or_invalid_initialization_refuses_without_stock_fallback() {
+    for mutate in [
+        (|m: &mut Memory| m[1].1[6] = 0x90) as fn(&mut Memory),
+        |m| m[2].1[3] ^= 1,
+        |m| m[2].1[8] ^= 1,
+        |m| m[2].1[1] = 0,
+        |m| m[2].1[1] = 0xff,
+        |m| {
+            m[0].1.truncate(2);
+        },
+    ] {
+        let mut memory = timing_fixture(0, 11, 7);
+        mutate(&mut memory);
+        assert!(read_timing(&memory, 0).is_err());
+    }
+}
+
 #[test]
 #[ignore = "requires PCX_WAR3_EXE pointing to the reviewed local client"]
 fn selected_original_autocast_classes_bind() {
@@ -327,6 +431,12 @@ fn selected_original_autocast_classes_bind() {
     assert_eq!(class(b"ANba").enable.unwrap().group, 2);
     assert_eq!(class(b"Ainf").enable.unwrap().first_tick, 0.02);
     assert_eq!(class(b"Anhe").enable, class(b"Ahea").enable);
+    let timing = class(b"Ahea").tick.expect("selected Heal tick timing");
+    assert!(timing.retry > timing.minimum_after_cast);
+    assert!(timing.minimum_after_cast > 0.);
+    for code in [b"Aslo", b"Anhe"] {
+        assert_eq!(class(code).tick, Some(timing));
+    }
     assert_ne!(class(b"Anhe").on, class(b"Ahea").on);
     assert_ne!(class(b"Anhe").off, class(b"Ahea").off);
     for pair in [(*b"Ahea", 1), (*b"Aslo", 1), (*b"AHfa", 2), (*b"ANba", 2)] {

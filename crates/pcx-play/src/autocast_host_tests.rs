@@ -141,6 +141,7 @@ fn open_setup_vm_with_code(
         on: registry.id(on).unwrap(),
         off: registry.id(off).unwrap(),
         enable,
+        tick: None,
     };
     let autocast = crate::autocast_rules::Rules {
         origin: registry.binding().origin.clone(),

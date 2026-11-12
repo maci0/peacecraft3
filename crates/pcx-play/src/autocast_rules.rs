@@ -14,6 +14,13 @@ pub struct Enable {
     /// Game seconds from the ON until the first automatic-cast evaluation.
     pub first_tick: f32,
 }
+/// Delays returned by the common tick's retry and minimum-after-cast virtuals.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TickTiming {
+    pub retry: f32,
+    pub minimum_after_cast: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Class {
     pub code: [u8; 4],
@@ -21,6 +28,8 @@ pub struct Class {
     pub off: i32,
     /// `None` when the class's ON handler, update hook or activation differs from the decoded shape.
     pub enable: Option<Enable>,
+    /// `None` when either getter or its initialization is outside the decoded shape.
+    pub tick: Option<TickTiming>,
 }
 #[derive(Clone, Debug)]
 pub struct Rules {
@@ -196,6 +205,7 @@ impl Rules {
                 on: constant(0x310)? as i32,
                 off: constant(0x320)? as i32,
                 enable: None,
+                tick: None,
             };
             if !class.code.iter().all(u8::is_ascii_alphanumeric)
                 || class.on == 0
@@ -241,6 +251,7 @@ impl Rules {
             let enable = Self::decode_enable(&vtable, table, field, mask, &mut read).ok();
             classes.push(Class {
                 enable: enable.map(|e| e.enable),
+                tick: TickTiming::read(table, &mut read).ok(),
                 ..class
             });
             if let Some(e) = enable
@@ -378,6 +389,52 @@ impl Rules {
         Ok(Some((code, group_of(&group)?)))
     }
 }
+impl TickTiming {
+    fn read(
+        table: u32,
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            retry: Self::delay(table, 0x470, 0x4015c0, read)?,
+            minimum_after_cast: Self::delay(table, 0x474, 0x401460, read)?,
+        })
+    }
+
+    fn delay(
+        table: u32,
+        slot: u32,
+        initializer: u32,
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<f32, String> {
+        let getter =
+            slot_function(read, table, slot, 18).ok_or("autocast tick delay getter unreadable")?;
+        shape(
+            &getter,
+            0,
+            &[0x55, 0x8b, 0xec, 0x8b, 0x45, 0x08, 0x8b, 0x0d],
+        )?;
+        shape(&getter, 12, &[0x89, 0x08, 0x5d, 0xc2, 0x04, 0x00])?;
+        // The bootstrap converts its integer operand into the getter's mutable real global.
+        let init = read(initializer, 16, true)?;
+        shape(&init, 0, &[0x6a])?;
+        shape(&init, 2, &[0x68])?;
+        shape(&init, 7, &[0xe8])?;
+        shape(&init, 12, &[0x83, 0xc4, 0x08, 0xc3])?;
+        if word(&getter, 8)? != word(&init, 3)?
+            || initializer.wrapping_add(12).wrapping_add(word(&init, 8)?) != 0x9a1620
+        {
+            return Err("autocast tick delay initialization differs".into());
+        }
+        let bits = crate::script_random::real::from_i32(i32::from(init[1] as i8))
+            .map_err(|e| format!("autocast tick delay conversion: {e}"))?;
+        let delay = f32::from_bits(bits);
+        if !delay.is_finite() || delay <= 0. {
+            return Err("autocast tick delay must be finite and positive".into());
+        }
+        Ok(delay)
+    }
+}
+
 /// The first `len` code bytes of the function a class table's `slot` points to.
 fn slot_function(
     read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
