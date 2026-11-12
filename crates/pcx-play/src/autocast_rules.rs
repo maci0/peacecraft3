@@ -6,6 +6,17 @@ use crate::{
     scripts::AssetIdentity,
 };
 
+#[path = "autocast_clock.rs"]
+pub mod clock;
+#[path = "autocast_slow_rules.rs"]
+pub mod slow;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Outcome {
+    Retry,
+    Accepted { rearm_after: f32 },
+}
+
 /// What the shared ON handler does beyond the state bit, decoded from the class.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Enable {
@@ -14,6 +25,13 @@ pub struct Enable {
     /// Game seconds from the ON until the first automatic-cast evaluation.
     pub first_tick: f32,
 }
+/// Delays returned by the common tick's retry and minimum-after-cast virtuals.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TickTiming {
+    pub retry: f32,
+    pub minimum_after_cast: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Class {
     pub code: [u8; 4],
@@ -21,6 +39,8 @@ pub struct Class {
     pub off: i32,
     /// `None` when the class's ON handler, update hook or activation differs from the decoded shape.
     pub enable: Option<Enable>,
+    /// `None` when either getter or its initialization is outside the decoded shape.
+    pub tick: Option<TickTiming>,
 }
 #[derive(Clone, Debug)]
 pub struct Rules {
@@ -32,6 +52,10 @@ pub struct Rules {
     /// Class code of the ability `UnitIgnoreAlarm` looks up. `None` when the source was not read
     /// from the image, so the natives refuse.
     pub alarm_code: Option<[u8; 4]>,
+    /// Lower bound passed by CUnit's mana initialization; `None` when not admitted.
+    pub mana_minimum: Option<f32>,
+    pub clock: Option<clock::Rules>,
+    pub slow: Option<slow::Rules>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
 const CLASS_NAMES: [&str; 18] = [
@@ -99,6 +123,9 @@ impl Rules {
                 .ok_or_else(|| "autocast mapped window truncated".into())
         };
         let alarm_code = Self::alarm_code(&mut read)?;
+        let slow = slow::Rules::read(&mut read)?;
+        let mana_minimum = Self::mana_minimum(&mut read)?;
+        let clock = clock::Rules::read(&mut read)?;
         let mut rules = Self::decode(
             origin,
             sha256(image),
@@ -109,8 +136,72 @@ impl Rules {
             read,
         )?;
         rules.alarm_code = Some(alarm_code);
+        rules.slow = Some(slow);
+        rules.mana_minimum = Some(mana_minimum);
+        rules.clock = Some(clock);
         Ok(rules)
     }
+    fn mana_minimum(
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<f32, String> {
+        // CUnit binds its +1c0 mana proxy to Float::Init, whose fifth argument is the minimum.
+        let ctor = read(0x675835, 10, true)?;
+        shape(&ctor, 0, &[0xc7, 0x86, 0xc0, 0x01, 0, 0])?;
+        let init_slot = word(&ctor, 6)?
+            .checked_add(0x18)
+            .ok_or("mana vtable overflow")?;
+        let helper = word(&read(init_slot, 4, false)?, 0)?;
+        let config = read(
+            helper.checked_add(0x30).ok_or("mana helper overflow")?,
+            0x61,
+            true,
+        )?;
+        shape(&config, 0, &[0x8b, 0x45, 0x18, 0xff, 0x75, 0x20])?;
+        shape(
+            &config,
+            0x14,
+            &[0x8b, 0x10, 0x8b, 0x45, 0x1c, 0x89, 0x55, 0xe0],
+        )?;
+        shape(
+            &config,
+            0x4d,
+            &[0x8d, 0x45, 0xd0, 0x50, 0x56, 0xff, 0x75, 0x08],
+        )?;
+        shape(&config, 0x5c, &[0xe8])?;
+        if helper.wrapping_add(0x91).wrapping_add(word(&config, 0x5d)?) != 0x801c50 {
+            return Err("mana descriptor forwarding changed".into());
+        }
+        let init = read(0x670a10, 40, true)?;
+        shape(
+            &init,
+            0,
+            &[0x8b, 0x86, 0xc0, 0x01, 0, 0, 0x8d, 0x8e, 0xc0, 0x01, 0, 0],
+        )?;
+        shape(&init, 12, &[0x6a, 0, 0x68])?;
+        shape(&init, 19, &[0x68])?;
+        shape(&init, 24, &[0x68])?;
+        shape(&init, 37, &[0xff, 0x50, 0x18])?;
+        // The descriptor's +10 lower bound becomes the resource's +80 clamp operand.
+        let bounds = read(0x8c3ee9, 28, true)?;
+        shape(
+            &bounds,
+            0,
+            &[
+                0x8b, 0x46, 0x10, 0x89, 0x45, 0xf8, 0x8b, 0x46, 0x14, 0x89, 0x45, 0xfc, 0x8d, 0x97,
+                0x80, 0, 0, 0, 0x8b, 0x01, 0x8b, 0x49, 0x04, 0x89, 0x02, 0x89, 0x4a, 0x04,
+            ],
+        )?;
+        shape(
+            &read(0x8c47d0, 14, true)?,
+            0,
+            &[
+                0xf3, 0x0f, 0x10, 0x83, 0x80, 0, 0, 0, 0x8d, 0xb3, 0x80, 0, 0, 0,
+            ],
+        )?;
+        shape(&read(0x8c4817, 4, true)?, 0, &[0xf3, 0x0f, 0x10, 0x06])?;
+        bootstrap_real(0x401300, word(&init, 20)?, read)
+    }
+
     /// The class code `UnitIgnoreAlarm` (`0x4af2d0`) and `UnitIgnoreAlarmToggled` (`0x4af330`)
     /// pass to the unit's ability lookup (`0x6d6570`), read from the getter both call
     /// (`0xb167f0`), after checking that each sets, clears or reads state bit `0x80`.
@@ -196,6 +287,7 @@ impl Rules {
                 on: constant(0x310)? as i32,
                 off: constant(0x320)? as i32,
                 enable: None,
+                tick: None,
             };
             if !class.code.iter().all(u8::is_ascii_alphanumeric)
                 || class.on == 0
@@ -241,6 +333,7 @@ impl Rules {
             let enable = Self::decode_enable(&vtable, table, field, mask, &mut read).ok();
             classes.push(Class {
                 enable: enable.map(|e| e.enable),
+                tick: TickTiming::read(table, &mut read).ok(),
                 ..class
             });
             if let Some(e) = enable
@@ -286,6 +379,9 @@ impl Rules {
             classes,
             groups,
             alarm_code: None,
+            mana_minimum: None,
+            clock: None,
+            slow: None,
         })
     }
     /// Decodes the shared ON handler, its update hook and the timer the activation arms.
@@ -378,6 +474,72 @@ impl Rules {
         Ok(Some((code, group_of(&group)?)))
     }
 }
+impl TickTiming {
+    fn read(
+        table: u32,
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            retry: Self::delay(table, 0x470, 0x4015c0, read)?,
+            minimum_after_cast: Self::delay(table, 0x474, 0x401460, read)?,
+        })
+    }
+
+    fn delay(
+        table: u32,
+        slot: u32,
+        initializer: u32,
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+    ) -> Result<f32, String> {
+        let getter =
+            slot_function(read, table, slot, 18).ok_or("autocast tick delay getter unreadable")?;
+        shape(
+            &getter,
+            0,
+            &[0x55, 0x8b, 0xec, 0x8b, 0x45, 0x08, 0x8b, 0x0d],
+        )?;
+        shape(&getter, 12, &[0x89, 0x08, 0x5d, 0xc2, 0x04, 0x00])?;
+        let delay = bootstrap_real(initializer, word(&getter, 8)?, read)?;
+        if !delay.is_finite() || delay <= 0. {
+            return Err("autocast tick delay must be finite and positive".into());
+        }
+        Ok(delay)
+    }
+}
+
+fn bootstrap_real(
+    initializer: u32,
+    global: u32,
+    read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+) -> Result<f32, String> {
+    let prefix = read(initializer, 2, true)?;
+    let immediate_bytes = match prefix.first() {
+        Some(0x6a) => 2,
+        Some(0x68) => 5,
+        _ => return Err("autocast real initializer operand changed".into()),
+    };
+    let init = read(initializer, immediate_bytes + 14, true)?;
+    shape(&init, immediate_bytes, &[0x68])?;
+    shape(&init, immediate_bytes + 5, &[0xe8])?;
+    shape(&init, immediate_bytes + 10, &[0x83, 0xc4, 0x08, 0xc3])?;
+    if global != word(&init, immediate_bytes + 1)?
+        || initializer
+            .wrapping_add(immediate_bytes as u32 + 10)
+            .wrapping_add(word(&init, immediate_bytes + 6)?)
+            != 0x9a1620
+    {
+        return Err("autocast real initialization differs".into());
+    }
+    let operand = if immediate_bytes == 2 {
+        i32::from(init[1] as i8)
+    } else {
+        word(&init, 1)? as i32
+    };
+    crate::script_random::real::from_i32(operand)
+        .map(f32::from_bits)
+        .map_err(|e| format!("autocast real initialization conversion: {e}"))
+}
+
 /// The first `len` code bytes of the function a class table's `slot` points to.
 fn slot_function(
     read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,

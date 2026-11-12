@@ -807,6 +807,7 @@ pub(crate) fn rules(exponent: u32, initial: f32) -> Rules {
     let (bytes, binding, budget) = fixture(exponent, initial);
     let mut rules = Rules::read(&bytes, binding, budget).unwrap();
     rules.group_range = Ok(group_range::tests::rules(exponent));
+    rules.group_count = Ok(group_count::tests::rules());
     rules
 }
 

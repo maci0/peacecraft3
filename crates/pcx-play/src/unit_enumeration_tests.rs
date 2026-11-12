@@ -909,3 +909,370 @@ fn range_accepted_positions_are_canonical_and_missing_positions_refuse_atomicall
         Value::Null
     );
 }
+
+const TYPE_COUNT_DECLARATIONS: &str = r#"
+native GroupEnumUnitsOfType takes group g, string name, boolexpr filter returns nothing
+native GroupEnumUnitsOfTypeCounted takes group g, string name, boolexpr filter, integer limit returns nothing
+native GroupEnumUnitsInRectCounted takes group g, rect r, boolexpr filter, integer limit returns nothing
+native GroupEnumUnitsInRangeCounted takes group g, real x, real y, real radius, boolexpr filter, integer limit returns nothing
+native GroupEnumUnitsInRangeOfLocCounted takes group g, location l, real radius, boolexpr filter, integer limit returns nothing
+"#;
+
+fn type_count_vm(script: &str, members: usize) -> Vm {
+    use pcx_objects::editor::defaults::{DefaultTables, Identity};
+    let ui = b"ID;PWXL;N;E\r\nC;X1;Y1;K\"unitUIID\"\r\nC;X2;K\"name\"\r\nC;X1;Y2;K\"U001\"\r\nC;X2;K\"Quill\"\r\nC;X1;Y3;K\"U002\"\r\nC;X2;K\"TRIGSTR_24\"\r\nC;X1;Y4;K\"U003\"\r\nC;X2;K\"Twin\"\r\nC;X1;Y5;K\"U004\"\r\nC;X2;K\"twin\"\r\nE\r\n";
+    let tables = Arc::new(
+        DefaultTables::from_bytes(
+            Identity {
+                install: "synthetic".into(),
+                edition_version: "fixture".into(),
+            },
+            &[(SlkId::UnitUi.path(), ui.as_slice())],
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 1,
+                max_asset_bytes: 4096,
+                max_aggregate_input_bytes: 4096,
+            },
+        )
+        .unwrap(),
+    );
+    let host = position_host_program(
+        100,
+        members,
+        &format!("{SCENE}\n{script}"),
+        &format!("{RANGE_DECLARATIONS}\n{TYPE_COUNT_DECLARATIONS}"),
+    )
+    .with_locations()
+    .unwrap()
+    .with_unit_id_lookup(tables)
+    .unwrap();
+    let ctx = Arc::clone(host.player_context().unwrap());
+    let mut v = Arc::clone(&ctx.scripts).owned_vm(host);
+    v.init_globals().unwrap();
+    v.call("setup", &[]).unwrap();
+    v
+}
+
+fn membership(v: &mut Vm, group: &str) -> Vec<Value> {
+    let group = v.global(group);
+    ["A", "B", "C"]
+        .into_iter()
+        .filter_map(|name| {
+            let unit = v.global(name);
+            (v.host()
+                .inner
+                .native("IsUnitInGroup", &[unit.clone(), group.clone()])
+                .unwrap()
+                == Value::Bool(true))
+            .then_some(unit)
+        })
+        .collect()
+}
+
+#[test]
+fn type_enumeration_uses_raw_names_and_current_type_including_hidden_not_removed() {
+    let mut v = type_count_vm(
+        r#"
+function replace_b takes nothing returns nothing
+call RemoveUnit(B)
+set B = CreateUnit(Player(5), 'U002', 48.0, 16.0, 0.0)
+endfunction
+function raw_argument takes string name returns nothing
+call GroupEnumUnitsOfType(TARGET, name, null)
+endfunction
+function computed_name takes nothing returns nothing
+call GroupEnumUnitsOfType(TARGET, "TRIG" + "STR_24", null)
+endfunction
+function literal_name takes nothing returns nothing
+call GroupEnumUnitsOfType(TARGET, "TRIGSTR_24", null)
+endfunction
+"#,
+        12,
+    );
+    let a = v.global("A");
+    v.host()
+        .inner
+        .native("ShowUnit", &[a, Value::Bool(false)])
+        .unwrap();
+    v.call("replace_b", &[]).unwrap();
+    v.call("raw_argument", &[Value::Str("qUiLl".into())])
+        .unwrap();
+    assert_eq!(
+        membership(&mut v, "TARGET"),
+        vec![v.global("A"), v.global("C")]
+    );
+    v.call("computed_name", &[]).unwrap();
+    assert_eq!(membership(&mut v, "TARGET"), vec![v.global("B")]);
+    v.call("literal_name", &[]).unwrap();
+    assert_eq!(membership(&mut v, "TARGET"), vec![v.global("B")]);
+    v.call("raw_argument", &[Value::Str("TRIGSTR_24".into())])
+        .unwrap();
+    assert_eq!(membership(&mut v, "TARGET"), vec![v.global("B")]);
+    let b = v.global("B");
+    v.host().inner.native("RemoveUnit", &[b]).unwrap();
+    v.call("raw_argument", &[Value::Str("TRIGSTR_24".into())])
+        .unwrap();
+    assert!(membership(&mut v, "TARGET").is_empty());
+    assert!(
+        v.host()
+            .inner
+            .native("UnitId", &[Value::Str("Quill".into())])
+            .is_err(),
+        "OfType admission must not admit undeclared UnitId"
+    );
+}
+
+#[test]
+fn unknown_type_and_null_subject_short_circuit_before_group_filter_and_count() {
+    let mut v = type_count_vm("", 12);
+    let group = v.global("TARGET");
+    let a = v.global("A");
+    v.host()
+        .inner
+        .native("GroupAddUnit", &[group.clone(), a.clone()])
+        .unwrap();
+    for text in [
+        Value::Null,
+        Value::Str("unknown".into()),
+        Value::Str(" Quill".into()),
+        Value::Str("U001".into()),
+    ] {
+        for destination in [group.clone(), Value::Int(77)] {
+            v.host()
+                .inner
+                .native(
+                    "GroupEnumUnitsOfTypeCounted",
+                    &[destination, text.clone(), Value::Int(9), Value::Null],
+                )
+                .unwrap();
+        }
+        assert_eq!(membership(&mut v, "TARGET"), vec![a.clone()]);
+    }
+    v.host()
+        .inner
+        .native(
+            "GroupEnumUnitsInRangeOfLocCounted",
+            &[
+                Value::Int(77),
+                Value::Null,
+                Value::Null,
+                Value::Int(9),
+                Value::Null,
+            ],
+        )
+        .unwrap();
+    v.host()
+        .inner
+        .native(
+            "GroupEnumUnitsInRectCounted",
+            &[group.clone(), Value::Null, Value::Int(9), Value::Null],
+        )
+        .unwrap();
+    let error = v
+        .host()
+        .inner
+        .native(
+            "GroupEnumUnitsOfTypeCounted",
+            &[group, Value::Str("Quill".into()), Value::Null, Value::Null],
+        )
+        .unwrap_err();
+    assert!(error.contains("GroupEnumUnitsOfTypeCounted"), "{error}");
+    assert_eq!(membership(&mut v, "TARGET"), vec![a]);
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn all_counted_queries_treat_zero_as_unlimited_and_negative_as_unsigned() {
+    let mut v = type_count_vm("", 16);
+    let group = v.global("TARGET");
+    let bounds = v.global("BOUNDS");
+    let loc = v
+        .host()
+        .inner
+        .native("Location", &[Value::Real(48.), Value::Real(16.)])
+        .unwrap();
+    let queries = [
+        (
+            "GroupEnumUnitsOfTypeCounted",
+            vec![group.clone(), Value::Str("Quill".into()), Value::Null],
+        ),
+        (
+            "GroupEnumUnitsInRectCounted",
+            vec![group.clone(), bounds, Value::Null],
+        ),
+        (
+            "GroupEnumUnitsInRangeCounted",
+            vec![
+                group.clone(),
+                Value::Real(48.),
+                Value::Real(16.),
+                Value::Real(64.),
+                Value::Null,
+            ],
+        ),
+        (
+            "GroupEnumUnitsInRangeOfLocCounted",
+            vec![group, loc, Value::Real(64.), Value::Null],
+        ),
+    ];
+    for (name, args) in queries {
+        for (count, expected) in [(1, 1), (2, 2), (0, 3), (-1, 3), (i32::MIN, 3)] {
+            let mut args = args.clone();
+            args.push(Value::Int(count));
+            v.host().inner.native(name, &args).unwrap();
+            assert_eq!(
+                membership(&mut v, "TARGET").len(),
+                expected,
+                "{name}: {count}"
+            );
+        }
+    }
+}
+
+#[test]
+fn counted_predicate_counts_only_new_insertions_and_restores_nested_filter_context() {
+    let mut v = type_count_vm(
+        r#"
+function nested takes nothing returns boolean
+set INNER_HITS = INNER_HITS + 1
+return true
+endfunction
+function outer takes nothing returns boolean
+local unit before = GetFilterUnit()
+set HITS = HITS + 1
+call GroupEnumUnitsInRectCounted(INNER, BOUNDS, Condition(function nested), 1)
+if GetFilterUnit() != before then
+set OK = false
+endif
+if before == A then
+return false
+endif
+if before == B then
+call GroupAddUnit(TARGET, B)
+endif
+return true
+endfunction
+function run takes nothing returns nothing
+call GroupEnumUnitsOfTypeCounted(TARGET, "Quill", Filter(function outer), 1)
+endfunction
+"#,
+        16,
+    );
+    v.call("run", &[]).unwrap();
+    assert_eq!(v.global("HITS"), Value::Int(3));
+    assert_eq!(v.global("INNER_HITS"), Value::Int(3));
+    assert_eq!(v.global("OK"), Value::Bool(true));
+    assert_eq!(
+        membership(&mut v, "TARGET"),
+        vec![v.global("B"), v.global("C")]
+    );
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+}
+
+#[test]
+fn counted_early_exit_stops_predicate_effects_and_preflight_uses_capped_membership() {
+    let mut v = type_count_vm(
+        r#"
+function run takes nothing returns nothing
+call GroupEnumUnitsInRangeCounted(TARGET, 48.0, 16.0, 64.0, Condition(function TruePredicate), 1)
+endfunction
+"#,
+        1,
+    );
+    v.call("run", &[]).unwrap();
+    assert_eq!(v.global("HITS"), Value::Int(1));
+    let group = v.global("TARGET");
+    v.host()
+        .inner
+        .native(
+            "GroupEnumUnitsOfTypeCounted",
+            &[
+                group.clone(),
+                Value::Str("Quill".into()),
+                Value::Null,
+                Value::Int(1),
+            ],
+        )
+        .unwrap();
+    assert_eq!(membership(&mut v, "TARGET"), vec![v.global("A")]);
+    let error = v
+        .host()
+        .inner
+        .native(
+            "GroupEnumUnitsOfTypeCounted",
+            &[
+                group,
+                Value::Str("Quill".into()),
+                Value::Null,
+                Value::Int(0),
+            ],
+        )
+        .unwrap_err();
+    assert!(error.contains("group membership"), "{error}");
+    assert_eq!(membership(&mut v, "TARGET"), vec![v.global("A")]);
+}
+
+#[test]
+fn counted_callback_failures_unwind_and_ambiguous_names_preserve_destination() {
+    let mut v = type_count_vm(
+        r#"
+function bad takes nothing returns boolean
+return 7
+endfunction
+function invalid_return takes nothing returns nothing
+call GroupEnumUnitsOfTypeCounted(TARGET, "Quill", Filter(function bad), 1)
+endfunction
+function destroy takes nothing returns boolean
+call DestroyGroup(TARGET)
+return true
+endfunction
+function destroyed takes nothing returns nothing
+call GroupEnumUnitsInRectCounted(TARGET, BOUNDS, Filter(function destroy), 1)
+endfunction
+"#,
+        8,
+    );
+    let group = v.global("TARGET");
+    let a = v.global("A");
+    v.host()
+        .inner
+        .native("GroupAddUnit", &[group.clone(), a.clone()])
+        .unwrap();
+    let error = v
+        .host()
+        .inner
+        .native(
+            "GroupEnumUnitsOfType",
+            &[group, Value::Str("Twin".into()), Value::Null],
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("GroupEnumUnitsOfType") && error.contains("shared by several"),
+        "{error}"
+    );
+    assert_eq!(membership(&mut v, "TARGET"), vec![a]);
+    assert!(
+        v.call("invalid_return", &[])
+            .unwrap_err()
+            .to_string()
+            .contains("predicate did not return boolean")
+    );
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+    v.call("clear_filtered", &[]).unwrap();
+    assert!(v.call("destroyed", &[]).is_err());
+    assert_eq!(
+        v.host().inner.native("GetFilterUnit", &[]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(v.host().inner.memberships(), 0);
+}
