@@ -18,6 +18,7 @@ pub struct Rules {
     pub undead_build_ability: [u8; 4],
     pub repair_ability: [u8; 4],
     pub assistant_debit: i32,
+    pub assistant_reconfigure_horizon: i32,
     pub refund_rate: f32,
     pub damage_refund_penalty: bool,
     /// Retained source setting; the qualified Human stop observation does not apply it.
@@ -196,7 +197,9 @@ impl Rules {
             }
             let (fraction, progress_table) =
                 initial_fraction(&mut read, common, multiplication.va)?;
-            let assistant_debit = assistant_debit(&read, progress_table)?;
+            let (assistant_debit, debit_handler) = assistant_debit(&read, progress_table)?;
+            let assistant_reconfigure_horizon =
+                assistant_reconfigure_horizon(&mut read, progress_table, debit_handler)?;
             let human_build_ability = build_class(&mut read, b"CAbilityHumanBuild\0")
                 .map_err(|error| format!("Human build class: {error}"))?;
             let undead_build_ability = build_class(&mut read, b"CAbilityUndeadBuild\0")
@@ -238,6 +241,7 @@ impl Rules {
                 undead_build_ability,
                 repair_ability,
                 assistant_debit,
+                assistant_reconfigure_horizon,
                 refund_rate,
                 damage_refund_penalty,
                 life_drain_rate,
@@ -413,7 +417,7 @@ fn initial_fraction(
     Ok((fraction, vtable))
 }
 
-fn assistant_debit(read: &Reader<'_>, table: u32) -> Result<i32, String> {
+fn assistant_debit(read: &Reader<'_>, table: u32) -> Result<(i32, u32), String> {
     let event = read.word(
         table
             .checked_add(0xc)
@@ -446,7 +450,92 @@ fn assistant_debit(read: &Reader<'_>, table: u32) -> Result<i32, String> {
     if debit <= 0 || debits.next() != Some(debit) || debits.next().is_some() {
         return Err("construction gold/lumber debit operands differ".into());
     }
-    Ok(debit)
+    Ok((debit, handlers[0]))
+}
+
+fn assistant_reconfigure_horizon(
+    read: &mut Reader<'_>,
+    table: u32,
+    debit: u32,
+) -> Result<i32, String> {
+    let rate = read.word(table.checked_add(0x300).ok_or("rate slot overflow")?, false)?;
+    let at = one_position(
+        read.bytes(rate, 160, true)?,
+        &[0x83, 0xc4, 0x0c, 0x8b, 0xce, 0xe8],
+    )?;
+    let recalculate = read.call(
+        rate.checked_add(at as u32 + 5)
+            .ok_or("rate call overflow")?,
+    )?;
+    let body = read.bytes(recalculate, 0x3a0, true)?;
+    let mut horizon = None;
+    for flags in [[0, 1], [1, 0]] {
+        let at = one_window(body, &[0xff, 0x50, 0x18], 27, |w| {
+            w[3..10] == [0xf3, 0x0f, 0x10, 0, 0x0f, 0x2f, 5]
+                && w[14] == 0x76
+                && w[16..23] == [0x6a, flags[0], 0x6a, flags[1], 0x8b, 0xce, 0xe8]
+        })?;
+        let offset = one_position(body, at)?;
+        if read.call(
+            recalculate
+                .checked_add(offset as u32 + 22)
+                .ok_or("debit call overflow")?,
+        )? != debit
+        {
+            return Err("construction reconfiguration debit handler differs".into());
+        }
+        let operand = u32::from_le_bytes(at[10..14].try_into().map_err(|_| "horizon operand")?);
+        if horizon
+            .replace(operand)
+            .is_some_and(|previous| previous != operand)
+        {
+            return Err("construction resource reconfiguration horizons differ".into());
+        }
+    }
+    let horizon = horizon.ok_or("missing construction reconfiguration horizon")?;
+    let i2r = read.native(b"I2R\0", &[0x55, 0x8b, 0xec, 0x51])?;
+    let wrapper = read.bytes(i2r, 25, true)?;
+    if wrapper[..11]
+        != [
+            0x55, 0x8b, 0xec, 0x51, 0xff, 0x75, 8, 0x8d, 0x45, 0xfc, 0x50,
+        ]
+        || wrapper[16..] != [0x83, 0xc4, 8, 0x8b, 0, 0x8b, 0xe5, 0x5d, 0xc3]
+    {
+        return Err("construction horizon integer conversion wrapper differs".into());
+    }
+    let conversion = read.call(i2r + 11)?;
+    let push = [vec![0x68], horizon.to_le_bytes().to_vec()].concat();
+    let mut value = None;
+    for va in read.find(&push, true)? {
+        let tail = read.bytes(va, 14, true)?;
+        if tail[5] != 0xe8
+            || tail[10..] != [0x83, 0xc4, 8, 0xc3]
+            || read.call(va + 5)? != conversion
+        {
+            continue;
+        }
+        let short = read.bytes(
+            va.checked_sub(2).ok_or("horizon initializer underflow")?,
+            2,
+            true,
+        )?;
+        let long = read.bytes(
+            va.checked_sub(5).ok_or("horizon initializer underflow")?,
+            5,
+            true,
+        )?;
+        let integer = match (short[0] == 0x6a, long[0] == 0x68) {
+            (true, false) => i32::from(short[1] as i8),
+            (false, true) => {
+                i32::from_le_bytes(long[1..].try_into().map_err(|_| "horizon integer width")?)
+            }
+            _ => return Err("missing or ambiguous construction horizon integer push".into()),
+        };
+        if integer <= 0 || value.replace(integer).is_some() {
+            return Err("invalid or ambiguous construction horizon initializer".into());
+        }
+    }
+    value.ok_or_else(|| "missing construction horizon initializer".into())
 }
 
 fn one_position(bytes: &[u8], needle: &[u8]) -> Result<usize, String> {

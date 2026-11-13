@@ -76,6 +76,9 @@ struct UpgradeReplacement {
 }
 
 impl TrainingDeath {
+    pub(super) fn credit(&self) -> Option<&super::players::TrainingDebit> {
+        self.credit.as_ref()
+    }
     pub(super) fn upgraded_decay(&self) -> Option<Option<crate::unit_decay::State>> {
         self.upgrade.as_ref().map(|upgrade| upgrade.decay.clone())
     }

@@ -184,3 +184,7 @@ or timing against the original.
 - Music and unit voices were checked on Human01 (Reign of Chaos mode) only.
 - Browser (`wasm32`) builds compile and pass Clippy; no browser playback of these
   categories was run.
+
+The bounded regular-volume source/consumer work and its pending validation are
+recorded in [regular music volume](script-regular-music-volume.md). Its optional
+backend module must be pinned to the selected main-image source generation.

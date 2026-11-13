@@ -325,6 +325,22 @@ pub fn decode_and_enqueue(
     text: &str,
     max_metadata_bytes: usize,
     inbox: &ConfigurationInbox,
+    factory: impl FnMut(
+        usize,
+        u32,
+        SourceInfo,
+        Vec<NamedMember>,
+        ExtractionBudget,
+    )
+        -> Result<crate::browser_archive_source::CommittedArchiveSource, SourceError>,
+) -> Result<u32, Error> {
+    inbox
+        .enqueue(decode_configuration(text, max_metadata_bytes, factory)?)
+        .map_err(Error::Queue)
+}
+pub fn decode_configuration(
+    text: &str,
+    max_metadata_bytes: usize,
     mut factory: impl FnMut(
         usize,
         u32,
@@ -335,7 +351,7 @@ pub fn decode_and_enqueue(
         crate::browser_archive_source::CommittedArchiveSource,
         SourceError,
     >,
-) -> Result<u32, Error> {
+) -> Result<Configuration, Error> {
     if text.len() > max_metadata_bytes {
         return Err(Error::Budget {
             actual: text.len(),
@@ -479,20 +495,19 @@ pub fn decode_and_enqueue(
         });
     }
     let resolver = Resolver::new(mode, None, layers).map_err(Error::Resolver)?;
-    inbox
-        .enqueue(Configuration {
-            resolver,
-            campaign: None,
-            map,
-            common,
-            blizzard,
-            catalog_identity: raw.catalog.identity.owned(),
-            catalog_label: raw.catalog.label,
-            catalog_sources,
-            required_catalog_tables: tables,
-            required_fields: raw.catalog.required_fields,
-            revision,
-            limits: raw.limits.owned(),
-        })
-        .map_err(Error::Queue)
+    Ok(Configuration {
+        resolver,
+        campaign: None,
+        client_sources: None,
+        map,
+        common,
+        blizzard,
+        catalog_identity: raw.catalog.identity.owned(),
+        catalog_label: raw.catalog.label,
+        catalog_sources,
+        required_catalog_tables: tables,
+        required_fields: raw.catalog.required_fields,
+        revision,
+        limits: raw.limits.owned(),
+    })
 }

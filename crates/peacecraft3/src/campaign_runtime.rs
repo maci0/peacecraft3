@@ -513,6 +513,7 @@ pub fn transition_to_next_level(
         .for_receipts(&bindings.receipts)
         .ok_or(CampaignTransitionError::MissingReader)?;
     let recipe = sources.campaign_for_receipts(&bindings.receipts);
+    let client_sources = sources.client_sources_for_receipts(&bindings.receipts);
     let (resolver, catalog_identity, catalog_sources) = if let Some(recipe) = &recipe {
         let prepare = || -> Result<_, String> {
             let base = recipe.base_resolver().map_err(|error| error.to_string())?;
@@ -641,7 +642,14 @@ pub fn transition_to_next_level(
         required_fields: &required_fields,
         revision,
     };
-    let outcome = requests.replace_selected_with_campaign(sources, resolver, recipe, input, limits);
+    let outcome = requests.replace_selected_with_campaign(
+        sources,
+        resolver,
+        recipe,
+        client_sources,
+        input,
+        limits,
+    );
     match &outcome.result {
         Ok(()) => Ok(()),
         Err(error) => Err(CampaignTransitionError::Binding {

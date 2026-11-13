@@ -27,6 +27,7 @@ impl Member {
 pub struct Configuration {
     pub resolver: Resolver,
     pub campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
+    pub client_sources: Option<Arc<pcx_play::client_module::ClientSources>>,
     pub map: Member,
     pub common: Member,
     pub blizzard: Member,
@@ -48,6 +49,7 @@ pub(crate) struct PublishedSources {
     receipts: Arc<BindingReceipts>,
     resolver: Arc<Resolver>,
     campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
+    client_sources: Option<Arc<pcx_play::client_module::ClientSources>>,
 }
 impl SelectedMapSources {
     /// Only the receipts from this publication can select its reader.
@@ -66,6 +68,16 @@ impl SelectedMapSources {
             .flatten()
     }
 
+    pub fn client_sources_for_receipts(
+        &self,
+        receipts: &Arc<BindingReceipts>,
+    ) -> Option<Arc<pcx_play::client_module::ClientSources>> {
+        let published = self.published.as_ref()?;
+        Arc::ptr_eq(&published.receipts, receipts)
+            .then(|| published.client_sources.clone())
+            .flatten()
+    }
+
     /// Publish one receipt arc with the resolver that produced it.
     /// A later success replaces the pair; callers drop the returned pair
     /// themselves so retired source `Drop` does not run under a lock.
@@ -74,11 +86,13 @@ impl SelectedMapSources {
         receipts: Arc<BindingReceipts>,
         resolver: Arc<Resolver>,
         campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
+        client_sources: Option<Arc<pcx_play::client_module::ClientSources>>,
     ) -> Option<PublishedSources> {
         self.published.replace(PublishedSources {
             receipts,
             resolver,
             campaign,
+            client_sources,
         })
     }
 
@@ -173,6 +187,7 @@ fn consume(
     let crate::browser_configuration::Configuration {
         resolver,
         campaign,
+        client_sources,
         map,
         common,
         blizzard,
@@ -196,7 +211,14 @@ fn consume(
         required_fields: &required_fields,
         revision,
     };
-    candidate.replace_selected_with_campaign(&mut staged, resolver, campaign, input, limits);
+    candidate.replace_selected_with_campaign(
+        &mut staged,
+        resolver,
+        campaign,
+        client_sources,
+        input,
+        limits,
+    );
     let outcome = candidate
         .last_outcome
         .take()

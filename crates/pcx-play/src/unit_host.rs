@@ -1821,17 +1821,18 @@ impl ObjectHost {
         }
         self.prepare_structure_upgrade_transfer(*unit, *player)?;
         let upgrades = self.prepare_upgrade_transfer(*unit, previous, *player)?;
-        // Ordinary queues refund on transfer; a structure upgrade continues
-        // with its paid price and deadline under the new owner.
-        // Errors propagate directly so the `fail` borrow ends at the color
-        // block above and does not span these mutable calls.
-        if self.producer_has_training(*unit) && !self.producer_is_upgrading(*unit) {
-            let cleanup = self.prepare_training_removal(*unit)?;
-            if let Some(cleanup) = cleanup {
-                self.commit_training_death(cleanup);
-            }
+        // Ordinary queues refund on transfer; an upgrade keeps its paid deadline.
+        let training = if self.producer_has_training(*unit) && !self.producer_is_upgrading(*unit) {
+            self.prepare_training_removal(*unit)?
+        } else {
+            None
+        };
+        let construction = self
+            .prepare_construction_loss(*unit, training.as_ref().and_then(|plan| plan.credit()))?;
+        if let Some(training) = training {
+            self.commit_training_death(training);
         }
-        self.interrupt_unit_construction(*unit)?;
+        self.interrupt_prepared_construction(*unit, construction)?;
         let guard = if self.guard_managed_owner(*player)? {
             let record = self.executed_unit(*unit)?;
             let eligible =
@@ -2221,6 +2222,12 @@ impl ObjectHost {
             }
             (*unit, *state, value, enumerand)
         };
+        let loss = if self.unit_vital_assignment_is_lethal(unit, enumerand, value) {
+            self.require_construction_loss_frontier(unit)?;
+            Some(self.prepare_unit_loss_finances(unit)?)
+        } else {
+            None
+        };
         let inserted = match self.inner.entry_mut(unit)? {
             Entry::Unit { record } => {
                 if let Some(found) = record
@@ -2253,8 +2260,10 @@ impl ObjectHost {
                 })?;
             limits.records += 1;
         }
-        if self.assign_unit_vital(unit, enumerand, value) {
-            self.kill_unit(unit, None)?;
+        if let Some(loss) = loss {
+            self.kill_unit_prepared(unit, None, loss)?;
+        } else {
+            self.assign_unit_vital(unit, enumerand, value);
         }
         Ok(Value::Null)
     }

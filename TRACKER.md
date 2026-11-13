@@ -7466,3 +7466,94 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   `/tmp/pc3-byte-strings-main-validation/acceptance.json` and
   `/tmp/pc3-byte-ui-corrected-validation/result.json`. Rendered invalid-byte glyph
   behavior and full-root save/load remain unverified.
+
+
+- 2026-11-13: Assistant membership changes use the selected image's integer-to-
+  real reconfiguration horizon. Near pending resource deadlines remain; absent
+  or distant requests can debit immediately. Bounded work/cost projection keeps
+  overdue phases, funding stops and prior producer refunds/food/event snapshots.
+  Combat, script life assignment and timed expiration prepare finances before
+  lethal mutation; failed expiration remains available for retry. Public partial
+  hosts retain the explicit paid-frontier requirement. No new saved state or
+  clock mode is introduced. Four original-client controls qualify the membership
+  debit distinction; finer automatic cost/work and reclamation cadence remains
+  open. See [construction](docs/re-notes/unit-construction.md).
+
+  Combined validation passes 3,596 package tests, zero failures, 173 explicit
+  ignores; twenty-one explicit source/witness gates and 352 application test
+  executions pass. Strict native/WASM checks and library builds pass with frozen
+  working/index hashes. The added source gate initially lacked an explicit
+  common source setting; the retained failed attempt is excluded and its
+  corrected selected common/Melee_V0 input gate executes one pass. Receipt:
+  `/tmp/pc3-assistant-debit-main-validation/acceptance.json`.
+
+  The unchanged HumanX03Secret replay remains blocked at Aslo acquisition. A
+  bounded diagnostic now records all-unit relation counts: all 96 observed units
+  have combat/position state and none has an attack target at that refusal. This
+  is recreation-state evidence, not native acquisition or a passing horizon.
+  `/tmp/pc3-slow-frontier-global-context-horizon/acceptance.json`.
+
+
+- 2026-11-13: `StringCase` and safe `SubString` now execute through real VM
+  signatures, readonly host hooks, selected campaign assembly and all eight
+  decorators. The selected image supplies the initial C locale tables, case
+  capacity and signed-word substring branches. Null/allocated empty, one-level
+  Case WTS demand, reversed safe suffixes and raw byte results remain distinct.
+  Unsafe effective offsets and unqualified non-C contexts refuse explicitly.
+  See [string natives](docs/re-notes/script-string-natives.md).
+
+  Combined validation passes 3,607 package tests, zero failures, 174 explicit
+  ignores; twenty-two explicit source/witness gates and 352 application test
+  executions pass. The Case/SubString gate executes thirty-nine retained
+  original-client observations, excluding four unknown large producer lengths.
+  Hash38, formatter194 and timer216 comparisons remain passing. Strict
+  native/WASM checks and library builds pass with frozen working/index hashes.
+  Receipt: `/tmp/pc3-case-substring-main-validation/acceptance.json`.
+  Full native locale/rendered-string parity, S2I/S2R and full save/root source
+  admission remain unfinished.
+
+
+- 2026-11-13: Optional auxiliary client modules are pinned to their selected
+  engine image through the bounded owner of a PE import thunk. Desktop reads
+  only the unique same-install sibling; browser local/ISO/installer imports use
+  separate checked staging and generation receipts. Main-engine selection and
+  MPQ lookup roles remain separate. Source-derived regular music volume now
+  applies the user/channel gain before the selected nonlinear curve and backend
+  scaling, including pending/live/future tracks and thematic retirement.
+  Missing or unsupported module policy remains explicit. See
+  [module sources](docs/re-notes/auxiliary-client-modules.md) and
+  [regular volume](docs/re-notes/script-regular-music-volume.md).
+
+  Combined main validation passes 3,615 package tests, zero failures, 178
+  explicit ignores, twenty-six selected source/witness gates, 368 application
+  executions and all 102 JavaScript tests. Strict native/WASM checks, core
+  library builds, actual main WASM generation with the pinned 0.2.129 CLI and
+  three local import/worker runs pass. The selected-byte container admits its
+  module; the supplied older installer retains unsupported policy explicitly.
+  The native byte-string probe conversion and generated codec-loader omission
+  were corrected with failed receipts retained. A final wrapping-only formatter
+  delta has separate native/WASM checks; scoped reuse and final index hashes are
+  explicit in `/tmp/pc3-module-volume-main-validation/acceptance.json`.
+  Audible/native-amplitude parity, full music play/stop/fades, complete source
+  registry restore, normal native clock adoption and full tick parity remain open.
+
+- 2026-11-13: Source-qualified pending structure upgrades now retain their
+  original form for cancellation, publish the selected pending form, and finish
+  the admitted positive-life/zero-mana class without a second form reset.
+  Research, handicap, ability, inventory and recipient-pool changes preflight
+  before they can strand a paid job. Canonical pending technology counts and
+  retained removal categories preserve incomplete providers without unlocking
+  their own target requirement. Food queries use the target's used amount and
+  original capacity; start/cancel enrollment and unsupported toggle/transfer
+  classes remain explicit. Construction refund/debit ordering is preserved.
+
+  Combined main validation passes 3,637 package tests, zero failures, 179
+  explicit ignores, twenty-seven selected source/witness gates and 368
+  application executions. Strict native/WASM checks, library builds, scoped
+  formatting and staged-source identity checks pass. The validation harness's
+  obsolete refusal-test name was corrected against its retained successful
+  package log; the original failed receipt remains intact. Receipt:
+  `/tmp/pc3-upgrade-mode1-main-validation/acceptance.json`.
+  Damage refunds, negative-life/mana/bonus/inventory classes, changed-food
+  transfers, generic same-callback food-removal timing, normal native clock
+  adoption, complete Save/root restore and full tick parity remain unfinished.

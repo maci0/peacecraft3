@@ -1,5 +1,5 @@
 // Dedicated decoder instance per selected ISO; data crosses only local worker messages.
-import { CLIENT_IMAGE_BYTES } from './engine-member.js';
+import { CLIENT_IMAGE_BYTES, beginClientImport, stageClientSources, checkedMemberPath } from './engine-member.js';
 
 function declaredClientImageLength(clientImage) {
   if (clientImage.bytes instanceof Uint8Array) return clientImage.bytes.byteLength;
@@ -41,6 +41,7 @@ export function createInstallerDecoder({ onProgress, WorkerClass = globalThis.Wo
   return {
     inspect: (iso, discovery, signal) => call('inspect', { iso, discovery }, signal),
     extract: (ids, signal) => call('extract', { ids }, signal),
+    extractClientModule: (extractionId, demand, signal) => call('extractClientModule', { extractionId, demand }, signal),
     cleanup: () => call('cleanup'),
     close() { closed = true; worker.terminate(); rejectAll(new Error('Local installer decoder closed')); },
   };
@@ -48,16 +49,16 @@ export function createInstallerDecoder({ onProgress, WorkerClass = globalThis.Wo
 
 // Caller-side transaction for files already extracted by this decoder.
 // Abort is checked before begin so a retired request cannot open a revision.
-export async function stageStoredInstallerFiles(files, sourceName, api, { signal, onProgress, clientImage = null } = {}) {
+export async function stageStoredInstallerFiles(files, sourceName, api, { signal, onProgress, clientImage = null, clientModule = null } = {}) {
   signal?.throwIfAborted();
-  api.begin_archive_import();
+  const tx = beginClientImport(api);
   try {
     for (const entry of files) {
       signal?.throwIfAborted();
       onProgress?.({ phase: 'archive', path: entry.path });
       const bytes = new Uint8Array(await entry.file.arrayBuffer());
       signal?.throwIfAborted();
-      api.stage_archive(`${sourceName} (stored, unpatched):${entry.path}`, bytes);
+      tx.stage_archive(`${sourceName} (stored, unpatched):${entry.path}`, bytes);
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     if (clientImage) {
@@ -72,16 +73,29 @@ export async function stageStoredInstallerFiles(files, sourceName, api, { signal
       signal?.throwIfAborted();
       if (bytes.byteLength !== declared)
         throw new Error('Installer client image length does not match its declared size');
-      api.stage_client_image(source, bytes);
+      let moduleBytes = null;
+      if (clientModule) {
+        if (clientModule.mainSource !== source) throw new Error('Installer auxiliary belongs to another main');
+        const size = clientModule.file?.size;
+        if (!Number.isSafeInteger(size) || size < 1 || size > CLIENT_IMAGE_BYTES) throw new Error('Installer auxiliary budget');
+        moduleBytes = new Uint8Array(await clientModule.file.arrayBuffer());
+        signal?.throwIfAborted();
+        if (moduleBytes.byteLength !== size) throw new Error('Installer auxiliary length changed');
+      }
+      const mainMember = clientImage.member ?? source.split('::').at(-1);
+      stageClientSources(tx, source, bytes, { kind: 'installer', container: sourceName,
+        main_member: checkedMemberPath(mainMember), module_member: clientModule ? checkedMemberPath(clientModule.member) : null,
+        module_source: clientModule?.source ?? null,
+      }, moduleBytes);
     }
     signal?.throwIfAborted();
     onProgress?.({ phase: 'hydrate' });
     await new Promise(resolve => setTimeout(resolve, 0));
     signal?.throwIfAborted();
-    const diagnostics = api.commit_archive_import();
+    const diagnostics = tx.commit();
     return { diagnostics, canonicalPaths: api.stored_assets(), revision: api.asset_revision() };
   } catch (error) {
-    api.cancel_archive_import();
+    tx.cancel();
     throw error;
   }
 }

@@ -1258,6 +1258,7 @@ mod construction_admission_tests {
             undead_build_ability: *b"ZYX8",
             repair_ability: *b"ZYX7",
             assistant_debit: 3,
+            assistant_reconfigure_horizon: 7,
             refund_rate: 0.37,
             damage_refund_penalty: false,
             life_drain_rate: 4.25,

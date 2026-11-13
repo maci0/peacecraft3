@@ -305,6 +305,8 @@ pub mod sound_playback;
 
 pub struct MapStartupInputs {
     pub thematic_music_rules: Option<crate::playercolor_host::ThematicMusicRules>,
+    pub regular_music_volume_rules:
+        Option<Result<crate::playercolor_host::RegularMusicVolumeRules, String>>,
     /// Map members from the receiving chapter's selected source archive generation.
     pub cached_unit_source_maps: Vec<pcx_assets::AssetPath>,
     pub unit_decay: Option<crate::unit_decay::Rules>,
@@ -374,6 +376,7 @@ pub struct MapStartupInputs {
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
     pub script_hash: Option<crate::playercolor_host::ScriptHashPolicy>,
+    pub script_strings: Option<crate::playercolor_host::ScriptStringPolicy>,
     pub destructable_restore: Option<crate::playercolor_host::RestoreLifePolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
@@ -686,6 +689,7 @@ fn assemble_inner(
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
         thematic_music_rules,
+        regular_music_volume_rules,
         cached_unit_source_maps,
         unit_decay,
         unit_blend,
@@ -736,6 +740,7 @@ fn assemble_inner(
         terrain_pathing,
         numeric,
         script_hash,
+        script_strings,
         destructable_restore,
         experience_handicap,
         health_handicap,
@@ -819,6 +824,9 @@ fn assemble_inner(
     }
     if let Some(rules) = thematic_music_rules {
         object = object.with_thematic_music_rules(rules)?;
+    }
+    if let Some(rules) = regular_music_volume_rules {
+        object = object.with_regular_music_volume_rules(rules)?;
     }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
@@ -989,6 +997,9 @@ fn assemble_inner(
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
+    }
+    if let Some(policy) = script_strings {
+        object = object.with_script_strings(policy);
     }
     if let Some(policy) = script_hash {
         object = object.with_script_hash(policy);
@@ -1199,6 +1210,23 @@ fn assemble_inner(
 }
 
 impl Host for MapStartupHost {
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .substring(bytes, start, end)
+    }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner
             .as_ref()

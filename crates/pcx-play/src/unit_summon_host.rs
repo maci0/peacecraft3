@@ -379,8 +379,8 @@ impl ObjectHost {
             .map(|(unit, _)| *unit)
             .collect();
         for unit in expired {
-            self.unit_expirations.remove(&unit);
             self.kill_unit(unit, None)?;
+            self.unit_expirations.remove(&unit);
         }
         Ok(())
     }
