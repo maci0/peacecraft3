@@ -594,13 +594,45 @@ native GetBJPlayerNeutralVictim takes nothing returns integer
 native GetBJPlayerNeutralExtra takes nothing returns integer
 native SetUnitPosition takes unit u, real x, real y returns nothing
 constant native GetUnitFacing takes unit u returns real
+native PauseTimer takes timer t returns nothing
+native ResumeTimer takes timer t returns nothing
 globals
 integer HeadingEvents=0
 real HeadingChannelFace=-1.0
 real HeadingEffectMana=-1.0
 integer HeadingEffectBuff=-1
 boolean HeadingFail=false
+timer HeadingPaused=null
+timer HeadingOneShot=null
+integer HeadingPausedCalls=0
+integer HeadingOneShotCalls=0
+integer HeadingTimedCalls=0
 endglobals
+function HeadingPausedFire takes nothing returns nothing
+set HeadingPausedCalls=HeadingPausedCalls+1
+endfunction
+function HeadingOneShotFire takes nothing returns nothing
+set HeadingOneShotCalls=HeadingOneShotCalls+1
+endfunction
+function HeadingTimedFire takes nothing returns nothing
+set HeadingTimedCalls=HeadingTimedCalls+1
+endfunction
+function HeadingTimersStart takes nothing returns nothing
+local trigger t=CreateTrigger()
+set HeadingPaused=CreateTimer()
+call TimerStart(HeadingPaused,0.5,false,function HeadingPausedFire)
+call PauseTimer(HeadingPaused)
+set HeadingOneShot=CreateTimer()
+call TimerStart(HeadingOneShot,0.1875,false,function HeadingOneShotFire)
+call TriggerRegisterTimerEvent(t,0.25,false)
+call TriggerAddAction(t,function HeadingTimedFire)
+endfunction
+function HeadingTimersResume takes nothing returns nothing
+call ResumeTimer(HeadingPaused)
+endfunction
+function HeadingKillTarget takes nothing returns nothing
+call KillUnit(E)
+endfunction
 function HeadingChannel takes nothing returns nothing
 set HeadingEvents=HeadingEvents*10+1
 set HeadingChannelFace=GetUnitFacing(H)
@@ -903,6 +935,134 @@ fn published_native_physics_wrap_rebases_retained_request_without_duplicate_spel
     assert_eq!(objects.native_game_point(), Some(next));
     assert_eq!(objects.next_native_physics_boundary(next).unwrap(), None);
     assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic timers and physics cadence"]
+fn published_native_physics_skips_paused_and_consumed_timer_requests_across_resume_rearm() {
+    let (mut session, caster, _) = heading_session();
+    let script = session.context().unwrap().scripts.program();
+    let start = script.function_id("HeadingTimersStart").unwrap();
+    let resume = script.function_id("HeadingTimersResume").unwrap();
+    let issue = script.function_id("HeadingIssue").unwrap();
+    session.call_function(start, &[]).unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(375),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingOneShotCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingTimedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(0)));
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    session.call_function(resume, &[]).unwrap();
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(123)));
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingOneShotCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingTimedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(2)));
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(2)));
+    assert_eq!(session.global("HeadingOneShotCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingTimedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(12345)));
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(
+        objects.native_game_point().unwrap().local,
+        1.875_f32.to_bits()
+    );
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 150.);
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic unit properties and physics cadence"]
+fn published_native_slow_target_death_during_turn_clears_retained_heading_relation() {
+    let (mut session, caster, target) = heading_session();
+    let script = session.context().unwrap().scripts.program();
+    let issue = script.function_id("HeadingIssue").unwrap();
+    let kill = script.function_id("HeadingKillTarget").unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(125),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_heading_waiting(caster)
+    );
+    session.call_function(kill, &[]).unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .executed_unit(target)
+            .unwrap()
+            .position
+            .is_some()
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(125),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert!(
+        !session
+            .host()
+            .unwrap()
+            .objects()
+            .native_heading_waiting(caster)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_secs(1),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    let objects = session.host().unwrap().objects_mut();
+    assert!(!objects.native_heading_waiting(caster));
+    assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
 }
 
 fn order(vm: &mut Vm, caster: HandleId, name: &str, target: HandleId) -> bool {

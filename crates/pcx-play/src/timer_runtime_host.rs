@@ -97,6 +97,9 @@ impl ObjectHost {
                 }
                 _ => continue,
             };
+            if run.paused.is_some() || run.deadline.is_none() {
+                continue;
+            }
             let point = run.native.ok_or_else(|| {
                 self.inner.error(
                     "native timer boundary",
