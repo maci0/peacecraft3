@@ -380,6 +380,7 @@ pub(crate) fn with_committed_client_image<T>(read: impl FnOnce(&str, &[u8]) -> T
 
 /// Clone the attested source generation for this process revision without retaining a lock.
 /// Absence and source errors remain observable even when the revision did not change.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn committed_client_sources()
 -> Option<Result<(u32, Arc<pcx_play::client_module::ClientSources>), String>> {
     let current = *revision();

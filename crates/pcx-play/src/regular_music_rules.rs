@@ -285,8 +285,6 @@ impl Rules {
         a.len() == b.len() && a.bytes().zip(b.bytes()).all(|(a, b)| fold(a) == fold(b))
     }
 
-    pub fn random_index(&self) -> i32 { self.random_index }
-
     pub fn edition_key(&self, name: &str, edition: i32) -> Result<String, String> {
         let [prefix, middle, suffix] = &self.edition_format;
         let key = format!("{prefix}{name}{middle}{edition}{suffix}");

@@ -15,13 +15,12 @@ pub struct ThematicMusicRequest {
 }
 
 /// Exact executed selection arguments, not an expanded playlist or playback state.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MapMusicSelection {
     pub name: String,
     pub random: bool,
     pub index: i32,
 }
-#[derive(Clone)]
 pub(super) struct State {
     max_name_bytes: usize,
     selection: Option<MapMusicSelection>,
@@ -142,10 +141,10 @@ impl ObjectHost {
             "PlayThematicMusic"
         };
         let fail = |reason| self.inner.error(name, reason);
-        let mut state = self
+        let state = self
             .map_music
-            .as_ref()
-            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?.clone();
+            .as_mut()
+            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?;
         let path = path.as_ref();
         if path.len() > state.max_name_bytes || path.contains(&0) {
             return Err(fail(Failure::MusicState("invalid thematic music path")));
@@ -179,23 +178,14 @@ impl ObjectHost {
             position_revision: revision,
         });
         state.revision = revision;
-        if let Some(position) = position {
-            self.append_music(name, super::play_music::controller::Operation::Theme {
-                path: state.thematic.as_ref().unwrap().path.clone(),
-                position_ms: u32::try_from(position.as_millis()).map_err(|_| fail(Failure::MusicState("thematic offset exceeds source range")))?,
-            })?;
-        } else if self.regular_music_ready() {
-            return Err(fail(Failure::MusicState("thematic start with preserved offset is unsupported")));
-        }
-        self.map_music = Some(state);
         Ok(())
     }
     pub(super) fn seek_thematic(&mut self, millis: i32) -> Result<(), Error> {
         let fail = |reason| self.inner.error("SetThematicMusicPlayPosition", reason);
-        let mut state = self
+        let state = self
             .map_music
-            .as_ref()
-            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?.clone();
+            .as_mut()
+            .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?;
         let rules = state
             .thematic_rules
             .as_ref()
@@ -216,10 +206,6 @@ impl ObjectHost {
         request.position = Some(position);
         request.position_revision = revision;
         state.revision = revision;
-        self.append_music("SetThematicMusicPlayPosition", super::play_music::controller::Operation::ThemeSeek(
-            u32::try_from(position.as_millis()).map_err(|_| fail(Failure::MusicState("thematic offset exceeds source range")))?
-        ))?;
-        self.map_music = Some(state);
         Ok(())
     }
     pub(super) fn map_music_native(
@@ -231,21 +217,22 @@ impl ObjectHost {
         if let ("PlayThematicMusic", [Value::Str(path)]) = (name, args) {
             return Some(self.start_thematic(path, None).map(|()| Value::Null));
         }
-        use super::play_music::controller::Operation;
+        let state = self.map_music.as_mut().expect("checked music admission");
         if OPTIONAL.iter().any(|&(n, _)| n == name) {
-            return Some((|| {
-                let operation = match (name, args) {
-                    ("ClearMapMusic", []) => Operation::Clear,
-                    ("EndThematicMusic", []) => Operation::EndTheme,
-                    _ => return Err(self.inner.error(name, Failure::MusicState("invalid music arguments"))),
-                };
-                self.append_music(name, operation)?;
-                let state = self.map_music.as_mut().unwrap();
-                if name == "ClearMapMusic" { state.selection = None; } else { state.thematic = None; }
-                Ok(Value::Null)
-            })());
+            return Some(match (name, args) {
+                ("ClearMapMusic", []) => {
+                    state.selection = None;
+                    Ok(Value::Null)
+                }
+                ("EndThematicMusic", []) => {
+                    state.thematic = None;
+                    Ok(Value::Null)
+                }
+                _ => Err(self
+                    .inner
+                    .error(name, Failure::MusicState("invalid music arguments"))),
+            });
         }
-        let state = self.map_music.as_ref().expect("checked music admission");
         if name != "SetMapMusic" {
             return None;
         }
@@ -269,11 +256,11 @@ impl ObjectHost {
             name.try_reserve_exact(text.len())
                 .map_err(|_| fail(Failure::Capacity))?;
             name.push_str(text);
-            let selected_index = if *random {
-                self.regular_music_rules().and_then(Result::ok).map_or(*index, |r| r.random_index())
-            } else { *index };
-            self.append_music("SetMapMusic", Operation::Select { name: name.clone(), index: selected_index })?;
-            self.map_music.as_mut().unwrap().selection = Some(MapMusicSelection { name, random: *random, index: *index });
+            state.selection = Some(MapMusicSelection {
+                name,
+                random: *random,
+                index: *index,
+            });
             Ok(Value::Null)
         })())
     }
