@@ -304,7 +304,7 @@ pub(crate) fn app_with_plugins(
     let mut app = App::new();
     (configure)(&mut app);
     peacecraft3::map_requests::install(&mut app);
-    peacecraft3::campaign_startup::install(&mut app);
+    peacecraft3::campaign_startup::install_native_counter(&mut app);
     crate::campaign_prepare::install(&mut app);
     crate::map_source_controls::install(&mut app);
     app.add_plugins(plugins)
