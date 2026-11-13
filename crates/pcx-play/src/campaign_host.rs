@@ -379,6 +379,7 @@ pub fn advance_paced_tick(
     max_expiries: usize,
 ) -> Result<usize, crate::map_script_session::TimerSessionError> {
     use crate::map_script_session::ScriptSessionError;
+    session.check_pending_projection()?;
     let host = session.host().ok_or(ScriptSessionError::NoSession)?;
     let paused = host.objects().game_paused() == Some(true);
     let mut work = 65536;

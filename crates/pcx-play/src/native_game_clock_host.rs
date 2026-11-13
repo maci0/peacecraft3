@@ -6,6 +6,11 @@ use crate::native_game_clock::{
 use std::time::Duration;
 
 impl ObjectHost {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn test_native_clock_state(&self) -> Option<State> {
+        self.native_game_clock.clone()
+    }
+
     pub(crate) fn admit_native_game_clock(&mut self) -> Result<(), Error> {
         let Some(rules) = self.numeric.as_ref().and_then(|p| p.native_game_clock()) else {
             return Ok(());

@@ -128,6 +128,112 @@ fn publish(app: &mut App, script: &str, revision: u64, nonstock: bool) {
     );
 }
 
+#[cfg(feature = "test-fixtures")]
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_producer_retries_preserve_projection_fault_and_entire_clock_state() {
+    use pcx_script::Host;
+    use peacecraft3::map_script_session::TimerSessionError;
+    const SCRIPT: &str = r#"
+globals
+unit A=null
+timer T=CreateTimer()
+integer fired=0
+endglobals
+function fire takes nothing returns nothing
+set fired=fired+1
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+set A=CreateUnit(Player(0),'UNIT',16.0,16.0,0.0)
+call IssuePointOrder(A,"gamma",72.0,16.0)
+call TimerStart(T,0.25,false,function fire)
+endfunction
+"#;
+    for paired in [false, true] {
+        for periodic in [false, true] {
+            let script = SCRIPT.replace("0.25,false", &format!("0.25,{periodic}"));
+            let mut session =
+                super::super::unit_range_cases::session_with_inputs(&script, true, |inputs| {
+                    inputs.timer_time = Some(0.);
+                    inputs.numeric = Some(numeric(true));
+                });
+            let input = clock::FrameInput {
+                game_elapsed: Duration::from_millis(250),
+                real_elapsed_ms: 250,
+            };
+            let selection = if paired {
+                session.advance_native_frame(Some(input), 0)
+            } else {
+                pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    input.game_elapsed,
+                    0.25,
+                    0,
+                )
+            };
+            assert!(matches!(selection, Err(TimerSessionError::Timer(_))));
+            // The paired selector visits our one timer before world projection.
+            let error = session
+                .test_advance_timers_with_projection_work(0.25, 8, usize::from(paired))
+                .unwrap_err();
+            let TimerSessionError::MandatoryProjection(fault) = error else {
+                panic!("expected retained projection fault: {error}")
+            };
+            let state = format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            );
+            let expired = session
+                .host()
+                .unwrap()
+                .native("GetExpiredTimer", &[])
+                .unwrap();
+            assert_eq!(expired, session.global("T").unwrap());
+            for _ in 0..2 {
+                let retry = pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    Duration::from_millis(333),
+                    1.,
+                    8,
+                );
+                let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                    panic!("pacing hid the original projection fault: {retry:?}")
+                };
+                assert!(Arc::ptr_eq(&fault, &retry_fault));
+                for input in [Some(input), None] {
+                    let retry = session.advance_native_frame(input, 8);
+                    let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                        panic!("frame input hid the original projection fault: {retry:?}")
+                    };
+                    assert!(Arc::ptr_eq(&fault, &retry_fault));
+                }
+                assert_eq!(
+                    format!(
+                        "{:?}",
+                        session.host().unwrap().objects().test_native_clock_state()
+                    ),
+                    state
+                );
+                assert_eq!(
+                    session.host().unwrap().objects().timer_game_time(),
+                    Some(0.25)
+                );
+                assert_eq!(session.global("fired"), Some(Value::Int(0)));
+                assert_eq!(
+                    session
+                        .host()
+                        .unwrap()
+                        .native("GetExpiredTimer", &[])
+                        .unwrap(),
+                    expired
+                );
+            }
+        }
+    }
+}
+
 const LONG: &str = "\
 globals
 timer t=CreateTimer()
