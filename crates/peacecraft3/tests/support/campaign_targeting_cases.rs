@@ -14,6 +14,11 @@ impl ObjectCatalog for Fighters {
         let mut definition = unit_range_cases::Geometry.resolve(*b"UNIT")?;
         definition.rawcode = rawcode;
         definition.base_rawcode = String::from_utf8(rawcode.to_vec()).unwrap();
+        definition.fields.retain(|_, field| {
+            !field.metadata.as_ref().is_some_and(|meta| {
+                matches!(&meta.source, FieldSource::Column { slk: SlkId::UnitBalance, column } if column == "isbldg")
+            })
+        });
         for (index, (slk, column, kind, value)) in [
             (SlkId::UnitBalance, "HP", FieldKind::Int, "20"),
             (
