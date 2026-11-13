@@ -332,9 +332,9 @@ impl ObjectHost {
                 (Kind::Real, Value::Real(v)) => Stored::Real(v.to_bits()),
                 (Kind::Boolean, Value::Bool(v)) => Stored::Boolean(*v),
                 (Kind::String, Value::Str(v))
-                    if v.len() <= state.budget.text_bytes && !v.contains('\0') =>
+                    if v.len() <= state.budget.text_bytes && !v.as_bytes().contains(&0) =>
                 {
-                    Stored::String(v.to_string())
+                    Stored::String(v.clone())
                 }
                 _ => {
                     return Err("stored value does not match the native type or text policy".into());

@@ -55,9 +55,16 @@ fn settings_require_admission_and_unassigned_reads_never_invent_defaults() {
         assert!(h.native(name, &[]).unwrap_err().contains("unset"));
     }
     assert!(h.native("GetStartLocationX", &[Value::Int(2)]).is_err());
-    h.native("SetMapName", &[Value::Str(String::new())])
+    h.native("SetMapName", &[Value::Str(String::new().into())])
         .unwrap();
-    assert_eq!(h.map_config().unwrap().name.as_deref(), Some(""));
+    assert_eq!(
+        h.map_config()
+            .unwrap()
+            .name
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("")
+    );
     assert!(
         h.with_map_config(MapConfigBudget {
             text_bytes: 1,
@@ -77,19 +84,41 @@ fn combined_utf8_text_budget_replacement_is_checked_before_mutation() {
             .unwrap_err()
             .contains("map config text")
     );
-    assert_eq!(h.map_config().unwrap().name.as_deref(), Some("éé"));
-    assert_eq!(h.map_config().unwrap().description.as_deref(), Some("ok"));
-    h.native("SetMapName", &[Value::Str(String::new())])
+    assert_eq!(
+        h.map_config()
+            .unwrap()
+            .name
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("éé")
+    );
+    assert_eq!(
+        h.map_config()
+            .unwrap()
+            .description
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("ok")
+    );
+    h.native("SetMapName", &[Value::Str(String::new().into())])
         .unwrap();
     h.native("SetMapDescription", &[Value::Str("abcdef".into())])
         .unwrap();
     assert_eq!(
-        h.map_config().unwrap().description.as_deref(),
+        h.map_config()
+            .unwrap()
+            .description
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
         Some("abcdef")
     );
     assert!(h.native("SetMapDescription", &[Value::Null]).is_err());
     assert_eq!(
-        h.map_config().unwrap().description.as_deref(),
+        h.map_config()
+            .unwrap()
+            .description
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
         Some("abcdef")
     );
 }
@@ -258,8 +287,14 @@ fn owned_same_program_config_consumes_retained_localization_and_preserves_other_
     vm.init_globals().unwrap();
     vm.call("config", &[]).unwrap();
     let config = vm.host().inner.map_config().unwrap();
-    assert_eq!(config.name.as_deref(), Some("Localized name"));
-    assert_eq!(config.description.as_deref(), Some("Localized description"));
+    assert_eq!(
+        config.name.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("Localized name")
+    );
+    assert_eq!(
+        config.description.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("Localized description")
+    );
     assert_eq!(config.players, Some(3));
     assert_eq!(config.teams, Some(2));
     assert_eq!(config.start_locations[0].index, 5);
@@ -291,7 +326,10 @@ fn malformed_present_wts_is_a_contextual_failure_without_fabricated_description(
             && diagnostic.contains("UTF-8")
     );
     let config = vm.host().inner.map_config().unwrap();
-    assert_eq!(config.name.as_deref(), Some("Good"));
+    assert_eq!(
+        config.name.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("Good")
+    );
     assert!(config.description.is_none());
 }
 
@@ -353,7 +391,13 @@ fn native_string_config_borrowed_and_owned_preserve_nested_tokens_and_tags() {
         borrowed.host().inner.map_config().unwrap(),
         owned.host().inner.map_config().unwrap(),
     ] {
-        assert_eq!(config.name.as_deref(), Some("TRIGSTR_9"));
-        assert_eq!(config.description.as_deref(), Some("^^kept^^"));
+        assert_eq!(
+            config.name.as_ref().map(|s| s.as_utf8().unwrap()),
+            Some("TRIGSTR_9")
+        );
+        assert_eq!(
+            config.description.as_ref().map(|s| s.as_utf8().unwrap()),
+            Some("^^kept^^")
+        );
     }
 }

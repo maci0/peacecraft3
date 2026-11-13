@@ -120,6 +120,14 @@ fn identifiers_are_decoded_and_identical_duplicate_registration_is_allowed() {
 }
 
 #[test]
+fn byte_order_names_match_the_raw_c_prefix_and_do_not_resolve_map_tokens() {
+    let registry = registry();
+    assert_eq!(registry.id(b"ALPHA\0\xff"), Some(431));
+    assert_eq!(registry.id([0xff]), None);
+    assert_eq!(registry.id(b"TRIGSTR_7"), None);
+}
+
+#[test]
 fn malformed_records_strings_and_conflicting_names_refuse_after_rebinding() {
     for (offset, value) in [
         (0x220, 0x90),

@@ -75,6 +75,15 @@ impl ObjectHost {
                 .inner
                 .error(name, Failure::DayNightState("expected two model strings"))));
         };
+        let (terrain, unit) = match (terrain.as_utf8(), unit.as_utf8()) {
+            (Ok(terrain), Ok(unit)) => (terrain, unit),
+            (Err(why), _) | (_, Err(why)) => {
+                return Some(Err(self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("day/night model UTF8: {why}")),
+                )));
+            }
+        };
         let pair = match select(&state.assets, [terrain, unit]) {
             Ok(pair) => pair,
             Err(failure) => return Some(Err(self.inner.error(name, failure))),

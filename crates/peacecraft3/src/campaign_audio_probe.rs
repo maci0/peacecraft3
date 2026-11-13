@@ -399,7 +399,7 @@ fn human01_thematic_ex_seek_restart_and_retirement_reach_audio_entities() {
     call(
         &mut app,
         "PlayThematicMusicEx",
-        &[Value::Str(path.clone()), Value::Int(9580)],
+        &[Value::Str(path.clone().into()), Value::Int(9580)],
     );
     app.update();
     app.update();
@@ -425,7 +425,7 @@ fn human01_thematic_ex_seek_restart_and_retirement_reach_audio_entities() {
             .start_position,
         Some(Duration::from_millis(2401))
     );
-    call(&mut app, "PlayThematicMusic", &[Value::Str(path)]);
+    call(&mut app, "PlayThematicMusic", &[Value::Str(path.into())]);
     let initial = app
         .world_mut()
         .resource_mut::<MapScriptSession<MapStartupHost>>()

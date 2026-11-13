@@ -140,7 +140,7 @@ fn malformed_profile_and_limits_refuse_without_inventing_empty_data() {
     extra.push(0);
     assert!(Profile::decode(&extra, b).is_err());
     let mut changed = bytes.clone();
-    changed[8] = 3;
+    changed[8] = 4;
     assert!(Profile::decode(&changed, b).is_err());
     changed = bytes.clone();
     changed[9..13].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -164,7 +164,7 @@ fn malformed_profile_and_limits_refuse_without_inventing_empty_data() {
             "cache",
             "m".into(),
             "other".into(),
-            Stored::String("x".repeat(256)),
+            Stored::String("x".repeat(256).into()),
             b
         )
         .is_err()
@@ -248,4 +248,48 @@ fn saved_profile_rejects_invalid_typed_values_and_duplicate_cache_names() {
     let at = bytes.windows(3).position(|w| w == b"two").unwrap();
     bytes[at..at + 3].copy_from_slice(b"one");
     assert!(Profile::decode(&bytes, b).is_err());
+}
+
+#[test]
+fn byte_string_profile_version_preserves_payload_and_refuses_legacy_encoding() {
+    let b = budget();
+    let mut profile = Profile::default();
+    let raw = vec![0xc3, 0xff, b'x'];
+    profile
+        .put(
+            "cache",
+            "m".into(),
+            "k".into(),
+            Stored::String(raw.clone().into()),
+            b,
+        )
+        .unwrap();
+    let bytes = profile.encode(b).unwrap();
+    assert_eq!(&bytes[..9], b"PC3CACHE\x03");
+    assert_eq!(Profile::decode(&bytes, b).unwrap(), profile);
+    for version in [1, 2] {
+        let mut legacy = bytes.clone();
+        legacy[8] = version;
+        assert!(Profile::decode(&legacy, b).unwrap_err().contains("UTF-8"));
+    }
+    for end in 0..bytes.len() {
+        assert!(Profile::decode(&bytes[..end], b).is_err());
+    }
+    let before = profile.encode(b).unwrap();
+    assert!(
+        profile
+            .put(
+                "cache",
+                "m".into(),
+                "k".into(),
+                Stored::String(vec![0xff; b.text_bytes].into()),
+                b
+            )
+            .is_err()
+    );
+    assert_eq!(profile.encode(b).unwrap(), before);
+    assert_eq!(
+        profile.get("cache", "m", "k", Kind::String),
+        Some(&Stored::String(raw.into()))
+    );
 }

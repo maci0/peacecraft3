@@ -281,7 +281,8 @@ fn each_request_keeps_its_own_target_and_ambient_next_level_is_separate() {
             },
         ]
     );
-    h.native(NEXT_LEVEL, &[Value::Str(String::new())]).unwrap();
+    h.native(NEXT_LEVEL, &[Value::Str(String::new().into())])
+        .unwrap();
     assert_eq!(h.next_level(), None);
     assert_eq!(h.game_exit_requests().len(), 3);
 }
@@ -318,8 +319,11 @@ fn change_level_argument_byte_and_queue_failures_are_atomic() {
     );
     let oversized = "x".repeat(crate::campaign_progress::MAX_BYTES + 1);
     assert!(
-        h.native(CHANGE_LEVEL, &[Value::Str(oversized), Value::Bool(false)])
-            .is_err()
+        h.native(
+            CHANGE_LEVEL,
+            &[Value::Str(oversized.into()), Value::Bool(false)]
+        )
+        .is_err()
     );
     assert_eq!(h.game_exit_requests(), kept.as_slice());
 

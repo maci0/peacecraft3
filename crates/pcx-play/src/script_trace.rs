@@ -8,9 +8,11 @@ impl ChapterTrace {
         let text =
             std::str::from_utf8(bytes).map_err(|e| format!("script trace is not UTF-8: {e}"))?;
         let mut lines = text.lines();
-        if lines.next() != Some("pcx-script-trace 1") {
-            return Err("expected pcx-script-trace 1".into());
-        }
+        let wire_version = match lines.next() {
+            Some("pcx-script-trace 1") => 1,
+            Some("pcx-script-trace 2") => 2,
+            _ => return Err("expected pcx-script-trace 1 or 2".into()),
+        };
         let mut field = |name: &str| -> Result<String, String> {
             let line = lines.next().ok_or_else(|| format!("missing {name}"))?;
             let words: Vec<_> = line.split_whitespace().collect();
@@ -74,7 +76,7 @@ impl ChapterTrace {
                             tick,
                             phase: unhex(call_phase)?,
                             function: unhex(function)?,
-                            result: parse_value(result)?,
+                            result: parse_value(result, wire_version)?,
                         });
                         sequence += 1;
                     }
@@ -94,14 +96,14 @@ impl ChapterTrace {
                         }
                         let args = rest[..count]
                             .iter()
-                            .map(|v| parse_value(v))
+                            .map(|v| parse_value(v, wire_version))
                             .collect::<Result<_, _>>()?;
                         trace.natives.push(NativeRecord {
                             sequence,
                             tick,
                             name: unhex(name)?,
                             args,
-                            result: parse_value(rest[count + 1])?,
+                            result: parse_value(rest[count + 1], wire_version)?,
                         });
                         sequence += 1;
                     }
@@ -136,19 +138,25 @@ fn number<T: std::str::FromStr>(text: &str) -> Result<T, String> {
     text.parse()
         .map_err(|_| format!("invalid integer {text:?}"))
 }
-fn unhex(text: &str) -> Result<String, String> {
+fn unhex_bytes(text: &str) -> Result<Vec<u8>, String> {
     if text == "-" {
-        return Ok(String::new());
+        return Ok(Vec::new());
     }
     if !text.len().is_multiple_of(2) || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!("invalid hex text {text:?}"));
     }
     let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(text.len() / 2)
+        .map_err(|_| "trace value allocation failed")?;
     for chunk in text.as_bytes().as_chunks::<2>().0 {
         let value = std::str::from_utf8(chunk).map_err(|_| "invalid hex byte")?;
         bytes.push(u8::from_str_radix(value, 16).map_err(|_| "invalid hex byte")?);
     }
-    String::from_utf8(bytes).map_err(|_| "hex text is not UTF-8".into())
+    Ok(bytes)
+}
+fn unhex(text: &str) -> Result<String, String> {
+    String::from_utf8(unhex_bytes(text)?).map_err(|_| "hex text is not UTF-8".into())
 }
 fn parse_tick(text: &str, ticks: u64) -> Result<Option<u64>, String> {
     if text == "init" {
@@ -160,7 +168,7 @@ fn parse_tick(text: &str, ticks: u64) -> Result<Option<u64>, String> {
     }
     Ok(Some(tick))
 }
-fn parse_value(text: &str) -> Result<Value, String> {
+fn parse_value(text: &str, version: u8) -> Result<Value, String> {
     if text == "null" {
         return Ok(Value::Null);
     }
@@ -177,7 +185,11 @@ fn parse_value(text: &str) -> Result<Value, String> {
         "real" => Ok(Value::Real(f32::from_bits(
             u32::from_str_radix(value, 16).map_err(|_| "invalid real bits")?,
         ))),
-        "string" => Ok(Value::Str(unhex(value)?)),
+        "string" => Ok(Value::Str(if version == 1 {
+            unhex(value)?.into()
+        } else {
+            unhex_bytes(value)?.into()
+        })),
         "code" => Ok(Value::Code(FunctionId(number(value)?))),
         "host-handle" => Ok(Value::Handle(HandleId::new(
             std::num::NonZeroU64::new(number(value)?)
@@ -307,6 +319,30 @@ mod tests {
         let divergence = first_script_divergence(&trace, &different).unwrap();
         assert_eq!(divergence.tick, Some(0));
         assert_eq!(divergence.field, "script.event[0].native:Native");
+    }
+    #[test]
+    fn byte_trace_version_preserves_full_values_and_checks_metadata() {
+        let mut trace = fixture();
+        let value = Value::Str(vec![0xc3, 0, 0xff].into());
+        trace.natives[0].args[0] = value.clone();
+        trace.calls[0].result = value.clone();
+        trace.natives[0].result = value;
+        let bytes = trace.encode();
+        assert!(bytes.starts_with(b"pcx-script-trace 2\n"));
+        let decoded = ChapterTrace::decode(&bytes).unwrap();
+        assert_eq!(decoded.encode(), bytes);
+        assert!(first_script_divergence(&trace, &decoded).is_none());
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(ChapterTrace::decode(text.replacen("trace 2", "trace 1", 1).as_bytes()).is_err());
+        assert!(
+            ChapterTrace::decode(
+                text.replacen("73796e746865746963207472616365", "ff", 1)
+                    .as_bytes()
+            )
+            .is_err()
+        );
+        let valid = String::from_utf8(fixture().encode()).unwrap();
+        assert!(ChapterTrace::decode(valid.replacen("trace 1", "trace 2", 1).as_bytes()).is_err());
     }
     #[test]
     fn corrupt_noncanonical_and_reordered_traces_are_refused() {

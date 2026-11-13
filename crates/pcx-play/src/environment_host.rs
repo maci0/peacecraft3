@@ -83,10 +83,16 @@ impl ObjectHost {
         let real = |v: &Value| v.as_real().filter(|r| r.is_finite());
         let state = self.scene.as_mut().expect("admitted");
         Some(match (name, args) {
-            ("SetSkyModel", [Value::Str(path)]) => {
-                state.sky_model = Some(Some(path.clone()));
-                Ok(Value::Null)
-            }
+            ("SetSkyModel", [Value::Str(path)]) => match path.as_utf8() {
+                Ok(path) => {
+                    state.sky_model = Some(Some(path.to_owned()));
+                    Ok(Value::Null)
+                }
+                Err(e) => Err(self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("sky model is not UTF-8: {e}")),
+                )),
+            },
             ("SetSkyModel", [Value::Null]) => {
                 state.sky_model = Some(None);
                 Ok(Value::Null)

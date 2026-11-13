@@ -8,7 +8,7 @@ use std::sync::{
 struct Capture {
     inits: usize,
     callbacks: Vec<FunctionId>,
-    text: Vec<String>,
+    text: Vec<pcx_script::ScriptString>,
     drops: Arc<AtomicUsize>,
     refuse_init: bool,
 }

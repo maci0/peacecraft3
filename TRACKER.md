@@ -7447,3 +7447,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   executions. Strict native/WASM checks and library builds pass; frozen Rust
   hashes match both working files and index. Receipts:
   `/tmp/pc3-checkpoint-control-main-validation/acceptance.json`.
+
+
+- 2026-11-13: Script strings retain arbitrary bytes through globals, arrays,
+  concatenation, callbacks, parked execution, native C-prefix/WTS demand and
+  retained message/dialog/leaderboard data. Text and asset-name consumers decode
+  explicitly after existing admission checks. Private traces/cache profiles use
+  new versions only when byte payloads require them; older encodings keep their
+  UTF-8 admission. Case/SubString and non-C locale behavior remain unfinished.
+
+  Combined validation passes 3,578 package tests, zero failures, 173 explicit
+  ignores; twenty explicit source/witness gates and 352 application executions
+  pass. An additional 22 message/history/log/dialog UI executions pass, including
+  invalid-byte refusal and recovery. These application filters overlap. The
+  first extra UI filename filter matched zero tests and is excluded; corrected
+  compiled-module filters execute. Strict native/WASM checks and library builds
+  pass; working/index hashes match the frozen source. Receipts:
+  `/tmp/pc3-byte-strings-main-validation/acceptance.json` and
+  `/tmp/pc3-byte-ui-corrected-validation/result.json`. Rendered invalid-byte glyph
+  behavior and full-root save/load remain unverified.

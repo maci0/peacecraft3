@@ -2559,7 +2559,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
         // A trigger string spelled as an identifier.
         if trigstr_id(name.as_str()).is_some() {
-            return Ok(Value::Str(name.as_str().to_string()));
+            return Ok(Value::Str(name.as_str().into()));
         }
         if self.program.function(name.as_str()).is_some()
             || self.program.natives().get(name.as_str()).is_some()
@@ -2657,7 +2657,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             },
             NativeImpl::IntToString => match args[0] {
                 // The original formats with `%d`: signed decimal, no padding.
-                Value::Int(i) => Ok(Value::Str(i.to_string())),
+                Value::Int(i) => Ok(Value::Str(i.to_string().into())),
                 ref v => Err(crate::Error::run(
                     span,
                     format!("I2S takes an integer, got {}", v.type_name()),
@@ -2679,7 +2679,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                         crate::Error::run(span, "real formatting requires a selected runtime")
                     })?
                     .real_to_string(value, width_precision)
-                    .map(Value::Str)
+                    .map(|text| Value::Str(text.into()))
                     .map_err(|why| crate::Error::run(span, why))
             }
             NativeImpl::StringHash => {
@@ -2713,13 +2713,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     }
                 };
                 let source = |id| self.host.native_table_string(id);
-                let text = crate::text::native_map_string(text, Some(&source))
+                let text = crate::text::native_map_bytes(text.as_bytes(), Some(&source))
                     .map_err(|why| crate::Error::run(span, why))?;
-                let length = text
-                    .bytes()
-                    .position(|byte| byte == 0)
-                    .unwrap_or(text.len());
-                Ok(Value::Int(length as i32))
+                Ok(Value::Int(text.len() as i32))
             }
         }
     }
@@ -2744,7 +2740,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// Evaluation preserves text; only the consuming native may localize it.
     fn string(&mut self, s: &StrLit, span: Span) -> Result<Value, crate::Error> {
         s.literal_text()
-            .map(Value::Str)
+            .map(|text| Value::Str(text.into()))
             .map_err(|why| crate::Error::run(span, why))
     }
 

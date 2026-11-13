@@ -116,7 +116,7 @@ pub(crate) fn id(context: &ParsedMapContext, name: &str) -> FunctionId {
 pub(crate) struct StatefulHost {
     pub(crate) context: Arc<ParsedMapContext>,
     pub(crate) callbacks: Vec<FunctionId>,
-    pub(crate) text: Vec<String>,
+    pub(crate) text: Vec<pcx_script::ScriptString>,
     pub(crate) inits: usize,
     pub(crate) drops: Arc<AtomicUsize>,
     pub(crate) external_effect: Option<Arc<AtomicUsize>>,
