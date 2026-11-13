@@ -8,8 +8,8 @@ use pcx_script::{HandleId, Value};
 pub struct CinematicScene {
     pub portrait: i32,
     pub color: HandleId,
-    pub speaker: String,
-    pub text: String,
+    pub speaker: pcx_script::ScriptString,
+    pub text: pcx_script::ScriptString,
     pub scene_duration: f32,
     pub voiceover_duration: f32,
     pub started: f64,
@@ -122,13 +122,14 @@ impl ObjectHost {
                 else {
                     return Some(Err(self.inner.error(name, Failure::Signature)));
                 };
-                let speaker = match pcx_script::text::native_map_string(speaker, strings) {
+                let speaker = match pcx_script::text::native_map_bytes(speaker.as_bytes(), strings)
+                {
                     Ok(text) => text.into_owned(),
                     Err(why) => {
                         return Some(Err(self.inner.error(name, Failure::ScriptString(why))));
                     }
                 };
-                let text = match pcx_script::text::native_map_string(text, strings) {
+                let text = match pcx_script::text::native_map_bytes(text.as_bytes(), strings) {
                     Ok(text) => text.into_owned(),
                     Err(why) => {
                         return Some(Err(self.inner.error(name, Failure::ScriptString(why))));
@@ -137,8 +138,8 @@ impl ObjectHost {
                 Some(CinematicScene {
                     portrait: *portrait,
                     color: *color,
-                    speaker,
-                    text,
+                    speaker: speaker.into(),
+                    text: text.into(),
                     scene_duration,
                     voiceover_duration,
                     started: self.timer_game_time().unwrap_or(0.0),

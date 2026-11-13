@@ -39,14 +39,20 @@ pub(crate) struct MessageHistory {
     session: Option<Weak<()>>,
     /// Highest `TimedMessage::sequence` already recorded.
     recorded: u64,
-    lines: std::collections::VecDeque<String>,
+    lines: std::collections::VecDeque<pcx_script::ScriptString>,
     /// Entry cap, bound by the log dialog from its `TextAreaMaxLines`.
     limit: Option<usize>,
     revision: u64,
 }
 impl MessageHistory {
-    pub(crate) fn lines(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.lines.iter().map(String::as_str)
+    pub(crate) fn lines(&self) -> Result<Vec<&str>, String> {
+        self.lines
+            .iter()
+            .map(|line| {
+                line.as_utf8()
+                    .map_err(|e| format!("message history is not UTF-8: {e}"))
+            })
+            .collect()
     }
     /// Changes whenever `lines` does.
     pub(crate) fn revision(&self) -> u64 {
@@ -394,7 +400,11 @@ pub(crate) fn paint(
         .iter()
         .map(|entry| {
             // Map string tables store line breaks as CR LF; one break, not two.
-            crate::rich_text::parse(&entry.text.replace("\r\n", "\n")).map_err(|e| e.to_string())
+            let text = entry
+                .text
+                .as_utf8()
+                .map_err(|e| format!("message text is not UTF-8: {e}"))?;
+            crate::rich_text::parse(&text.replace("\r\n", "\n")).map_err(|e| e.to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
     if parsed.iter().any(|text| !text.unsupported.is_empty()) {
@@ -782,21 +792,33 @@ mod tests {
         }
     }
     #[test]
+    fn history_keeps_invalid_bytes_until_checked_projection_and_recovers_after_trim() {
+        let mut history = MessageHistory::default();
+        history.limit_to(1);
+        let mut entry = timed(1, "");
+        entry.text = vec![0xc3, 0xff].into();
+        history.absorb([&entry]);
+        assert_eq!(history.lines[0].as_bytes(), &[0xc3, 0xff]);
+        assert!(history.lines().unwrap_err().contains("UTF-8"));
+        history.absorb([&timed(2, "recovered")]);
+        assert_eq!(history.lines().unwrap(), ["recovered"]);
+    }
+    #[test]
     fn history_records_each_live_message_once_in_order_within_its_limit() {
         let mut history = MessageHistory::default();
         history.limit_to(3);
         let revision = history.revision();
         history.absorb([&timed(2, "a"), &timed(3, "b")]);
         history.absorb([&timed(3, "b"), &timed(5, "c")]);
-        assert_eq!(history.lines().collect::<Vec<_>>(), ["a", "b", "c"]);
+        assert_eq!(history.lines().unwrap(), ["a", "b", "c"]);
         let revision_after_three = history.revision();
         assert!(revision_after_three > revision);
         history.absorb([&timed(5, "c")]);
         assert_eq!(history.revision(), revision_after_three);
         history.absorb([&timed(6, "d")]);
-        assert_eq!(history.lines().collect::<Vec<_>>(), ["b", "c", "d"]);
+        assert_eq!(history.lines().unwrap(), ["b", "c", "d"]);
         history.limit_to(1);
-        assert_eq!(history.lines().collect::<Vec<_>>(), ["d"]);
+        assert_eq!(history.lines().unwrap(), ["d"]);
     }
 }
 

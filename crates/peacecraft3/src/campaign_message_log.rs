@@ -160,8 +160,10 @@ pub(super) fn sync(
     }
     // The bar shows one dialog at a time, so these are the previous dialog's.
     let previous = std::mem::take(&mut source.materials);
-    let lines: Vec<&str> = history.lines().collect();
-    match dialog(commands, source, &lines, images, materials) {
+    match history
+        .lines()
+        .and_then(|lines| dialog(commands, source, &lines, images, materials))
+    {
         Ok(root) => {
             for handle in previous {
                 materials.remove(handle.id());

@@ -1967,6 +1967,7 @@ struct SpawnProbe {
     fail_leave: bool,
     fail_followup: bool,
     reuse_ticket: bool,
+    checkpoint_markers: Vec<i32>,
     park_capacity: Option<usize>,
     sleepers: std::collections::BTreeSet<u64>,
 }
@@ -1999,6 +2000,16 @@ impl crate::Host for SpawnProbe {
             })
             .collect();
         Ok(Some(crate::ScriptCall::Spawn(functions)))
+    }
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        if name != "Checkpoint" {
+            return Ok(false);
+        }
+        let [Value::Int(marker)] = args else {
+            return Err("checkpoint marker required".into());
+        };
+        self.checkpoint_markers.push(*marker);
+        Ok(true)
     }
     fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
         name == "Sleep"
@@ -2044,6 +2055,7 @@ impl crate::Host for SpawnProbe {
 
 const SPAWN_PROBE: &str = "\
 native Spawn takes code first, code tail returns integer
+native Checkpoint takes integer marker returns integer
 native Sleep takes real seconds returns nothing
 native Observe takes integer value returns nothing
 native Boom takes nothing returns nothing
@@ -2399,6 +2411,151 @@ fn root_repark_failure_clears_only_the_aborted_resumed_execution() {
 }
 
 #[test]
+fn checkpoint_keeps_nested_spawn_live_without_a_sleep_ticket() {
+    let source = format!(
+        "{SPAWN_PROBE}globals\ninteger result=0\nendglobals\nfunction child takes nothing returns nothing\nlocal integer retained=477\nset result=11+Checkpoint(7)*3\ncall Observe(retained)\ncall Sleep(1.0)\ncall Observe(retained+1)\nendfunction\nfunction main takes nothing returns integer\nlocal integer retained=701\ncall Spawn(function child,function tail)\ncall Observe(retained)\nreturn 123\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    assert_eq!(vm.invoke("main", &[]).unwrap(), crate::Exec::Checkpoint);
+    assert_eq!(vm.global("result"), Value::Int(0));
+    assert_eq!(vm.host().checkpoint_markers, [7]);
+    assert!(vm.host().observed.is_empty());
+    assert_eq!(vm.parked_threads().count(), 0);
+    assert_eq!(
+        (
+            vm.host().next,
+            vm.host().leaves,
+            vm.host().followups,
+            vm.host().aborts
+        ),
+        (0, 0, 0, 0)
+    );
+    assert!(
+        vm.resume(Value::Int(5))
+            .unwrap_err()
+            .message
+            .contains("checkpoint")
+    );
+    assert!(vm.call("safe", &[]).is_err());
+    assert_eq!(
+        vm.resume_checkpoint(Ok(Value::Int(5))).unwrap(),
+        crate::Exec::Finished(Value::Int(123))
+    );
+    assert_eq!(vm.global("result"), Value::Int(26));
+    assert_eq!(vm.host().observed, [477, 701]);
+    assert_eq!(vm.host().checkpoint_markers, [7]);
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (1, 1));
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.host().observed, [477, 701, 478, 4]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (2, 1));
+    assert!(vm.resume_checkpoint(Ok(Value::Null)).is_err());
+}
+
+#[test]
+fn checkpoint_retains_resumed_root_entry_across_repeated_captures_and_repark() {
+    let source = format!(
+        "{SPAWN_PROBE}function first takes nothing returns nothing\ncall Sleep(1.0)\ncall Checkpoint(9)\ncall Checkpoint(10)\ncall Observe(7)\ncall Sleep(2.0)\ncall Observe(8)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    assert_eq!(
+        vm.run_thread_until_checkpoint(&[
+            program.function_id("first").unwrap(),
+            program.function_id("tail").unwrap()
+        ])
+        .unwrap(),
+        crate::Exec::Finished(Value::Null)
+    );
+    assert_eq!(
+        vm.resume_thread_until_checkpoint(1).unwrap(),
+        crate::Exec::Checkpoint
+    );
+    assert_eq!((vm.host().leaves, vm.host().followups), (0, 0));
+    assert_eq!(
+        vm.resume_checkpoint(Ok(Value::Null)).unwrap(),
+        crate::Exec::Checkpoint
+    );
+    assert_eq!(vm.host().checkpoint_markers, [9, 10]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (0, 0));
+    assert_eq!(
+        vm.resume_checkpoint(Ok(Value::Null)).unwrap(),
+        crate::Exec::Finished(Value::Null)
+    );
+    assert_eq!(vm.host().observed, [7]);
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [2]);
+    assert_eq!((vm.host().leaves, vm.host().followups), (1, 0));
+    vm.resume_thread(2).unwrap();
+    assert_eq!(vm.host().observed, [7, 8, 4]);
+    assert_eq!(
+        (vm.host().leaves, vm.host().followups, vm.host().aborts),
+        (2, 0, 0)
+    );
+}
+
+#[test]
+fn checkpoint_failure_aborts_active_root_and_preserves_old_parked_thread() {
+    let source = format!(
+        "{SPAWN_PROBE}function old takes nothing returns nothing\ncall Sleep(1.0)\ncall Observe(4)\nendfunction\nfunction failing takes nothing returns nothing\ncall Observe(1)\ncall Checkpoint(2)\ncall Observe(9)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    vm.run_thread(&[program.function_id("old").unwrap()])
+        .unwrap();
+    assert_eq!(
+        vm.run_thread_until_checkpoint(&[program.function_id("failing").unwrap()])
+            .unwrap(),
+        crate::Exec::Checkpoint
+    );
+    let error = vm
+        .resume_checkpoint(Err("synthetic storage failure".into()))
+        .unwrap_err();
+    let at = source.find("call Checkpoint(2)").unwrap();
+    assert_eq!(
+        error.span,
+        crate::Span::new(at, at + "call Checkpoint(2)".len())
+    );
+    assert_eq!(vm.error_source(), Some("the map script"));
+    assert_eq!(vm.host().observed, [1]);
+    assert_eq!((vm.host().aborts, vm.host().leaves), (1, 0));
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert!(vm.resume(Value::Null).is_err());
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.host().observed, [1, 4]);
+    assert_eq!((vm.host().aborts, vm.host().leaves), (1, 1));
+}
+
+#[test]
+fn checkpoint_refuses_global_initialization_and_caches_its_error() {
+    let source = format!("{SPAWN_PROBE}globals\ninteger value=Checkpoint(3)\nendglobals\n");
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    assert!(vm.init_globals().is_err());
+    assert!(vm.init_globals().is_err());
+    assert_eq!(vm.host().checkpoint_markers, [3]);
+    assert_eq!(vm.host().aborts, 1);
+    assert!(vm.resume_checkpoint(Ok(Value::Null)).is_err());
+}
+
+#[test]
+fn checkpoint_resume_preserves_execution_fuel() {
+    let source = format!(
+        "{SPAWN_PROBE}function main takes nothing returns nothing\ncall Checkpoint(1)\ncall Observe(9)\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut vm = Vm::new(&program, SpawnProbe::default());
+    assert_eq!(vm.invoke("main", &[]).unwrap(), crate::Exec::Checkpoint);
+    vm.set_steps_for_test(MAX_STEPS);
+    let error = vm.resume_checkpoint(Ok(Value::Null)).unwrap_err();
+    assert!(error.message.contains("steps"));
+    assert!(vm.host().observed.is_empty());
+    assert_eq!(vm.host().aborts, 1);
+    assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
+}
+
+#[test]
 fn empty_spawn_boundary_returns_through_parent_expression_once() {
     let source = format!(
         "{SPAWN_PROBE}function main takes nothing returns integer\nreturn 11+Spawn(null,null)*3\nendfunction\n"
@@ -2433,7 +2590,7 @@ fn string_length_counts_bytes_and_stops_at_nul_through_vm_calls() {
     let src = "native StringLength takes string s returns integer\nfunction f takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
     for (input, expected) in [
         (Value::Null, 0),
-        (Value::Str(String::new()), 0),
+        (Value::Str(String::new().into()), 0),
         (Value::Str("é界".into()), 5),
         (Value::Str("é\0ignored".into()), 2),
         (Value::Str("\0TRIGSTR_12".into()), 0),
@@ -2776,4 +2933,104 @@ fn string_hash_rejects_wrong_declared_signatures() {
             Some(crate::natives::NativeCall::SignatureMismatch(..))
         ));
     }
+}
+
+#[test]
+fn byte_strings_survive_globals_arrays_concat_registered_callback_and_park() {
+    use crate::Host;
+    use crate::value::FunctionId;
+    #[derive(Default)]
+    struct Bytes {
+        callback: Option<FunctionId>,
+    }
+    impl Host for Bytes {
+        fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+            match (name, args) {
+                ("Register", [Value::Code(id)]) => {
+                    self.callback = Some(*id);
+                    Ok(Value::Null)
+                }
+                _ => Err(format!("unexpected {name}")),
+            }
+        }
+        fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
+            name == "Pause"
+        }
+        fn park_thread(&mut self) -> Result<u64, String> {
+            Ok(1)
+        }
+        fn resume_thread(&mut self, _: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn leave_thread(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let source = "native Register takes code callback returns nothing\nnative Pause takes nothing returns nothing\nglobals\nstring value=null\nstring array copied\nendglobals\nfunction callback takes nothing returns nothing\nset copied[1]=value+\"Z\"\ncall Pause()\nset value=copied[1]+value\nendfunction\nfunction seed takes string input returns nothing\nset value=input\ncall Register(function callback)\nendfunction\nfunction read takes nothing returns string\nreturn value\nendfunction\nfunction array_value takes nothing returns string\nreturn copied[1]\nendfunction\n";
+    let program = program_of(source);
+    let mut vm = Vm::new(&program, Bytes::default());
+    let raw = vec![0xc3, 0, 0xff];
+    vm.call("seed", &[Value::Str(raw.clone().into())]).unwrap();
+    let callback = vm.host().callback.unwrap();
+    vm.run_thread(&[callback]).unwrap();
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!(
+        vm.call("array_value", &[]).unwrap(),
+        Value::Str([raw.as_slice(), b"Z"].concat().into())
+    );
+    assert_eq!(
+        vm.call("read", &[]).unwrap(),
+        Value::Str(raw.clone().into())
+    );
+    vm.resume_thread(1).unwrap();
+    assert_eq!(
+        vm.call("read", &[]).unwrap(),
+        Value::Str([raw.as_slice(), b"Z", raw.as_slice()].concat().into())
+    );
+    assert_eq!(vm.parked_threads().count(), 0);
+}
+
+#[test]
+fn byte_strings_use_raw_equality_and_native_c_prefix_without_utf8_fallback() {
+    use crate::Host;
+    struct Raw;
+    impl Host for Raw {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            Err(name.into())
+        }
+        fn native_table_string(&self, _: u32) -> Result<Option<String>, String> {
+            panic!("raw bytes must not demand WTS")
+        }
+        fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+            assert_eq!(bytes, &[0xc3]);
+            Ok(-83)
+        }
+    }
+    let program = program_of(
+        "native StringLength takes string s returns integer\nnative StringHash takes string s returns integer\nfunction length takes string s returns integer\nreturn StringLength(s)\nendfunction\nfunction hash takes string s returns integer\nreturn StringHash(s)\nendfunction\nfunction same takes string a,string b returns boolean\nreturn a==b\nendfunction\n",
+    );
+    let mut vm = Vm::new(&program, Raw);
+    let raw = Value::Str(vec![0xc3, 0, 0xff].into());
+    assert_eq!(
+        vm.call("length", std::slice::from_ref(&raw)).unwrap(),
+        Value::Int(1)
+    );
+    assert_eq!(
+        vm.call("hash", std::slice::from_ref(&raw)).unwrap(),
+        Value::Int(-83)
+    );
+    assert_eq!(
+        vm.call("same", &[raw.clone(), raw.clone()]).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        vm.call("same", &[raw, Value::Str(vec![0xc3].into())])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        vm.call("same", &[Value::Null, Value::Str(Vec::new().into())])
+            .unwrap(),
+        Value::Bool(false)
+    );
 }

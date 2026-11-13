@@ -190,13 +190,16 @@ impl State {
             gen_lines: Vec::new(),
         }
     }
-    pub(crate) fn queue(&mut self, path: &str) -> Result<(), String> {
+    pub(crate) fn queue(&mut self, path: impl AsRef<[u8]>) -> Result<(), String> {
+        let path = path.as_ref();
         if path.is_empty() {
             return Ok(());
         }
         if path.len() > 16 << 10 || self.report.queued >= 4096 {
             return Err("Preload: path/count budget".into());
         }
+        let path = std::str::from_utf8(path)
+            .map_err(|why| format!("Preload: unsupported path UTF8: {why}"))?;
         AssetPath::new(path).map_err(|e| format!("Preload: {e}"))?;
         self.pending
             .try_reserve(1)
@@ -273,7 +276,8 @@ impl State {
         self.generating = true;
         Ok(())
     }
-    pub(crate) fn gen_end(&mut self, path: &str) -> Result<(), String> {
+    pub(crate) fn gen_end(&mut self, path: impl AsRef<[u8]>) -> Result<(), String> {
+        let path = path.as_ref();
         if !self.generating {
             return Err("PreloadGenEnd: generation was not started".into());
         }
@@ -283,9 +287,16 @@ impl State {
         if path.len() > self.rules.path_bytes {
             return Err("PreloadGenEnd: path ceiling".into());
         }
-        if !self.rules.extensions.iter().any(|ext| path.ends_with(ext)) {
+        if !self
+            .rules
+            .extensions
+            .iter()
+            .any(|ext| path.ends_with(ext.as_bytes()))
+        {
             return Err("PreloadGenEnd: unsupported extension".into());
         }
+        let path = std::str::from_utf8(path)
+            .map_err(|why| format!("PreloadGenEnd: unsupported path UTF8: {why}"))?;
         AssetPath::new(path).map_err(|e| format!("PreloadGenEnd: {e}"))?;
         if self.report.generated.len() >= 128 {
             return Err("PreloadGenEnd: file budget".into());
@@ -318,16 +329,24 @@ impl State {
         self.poll(limit)?;
         Ok(())
     }
-    pub(crate) fn filename(&self, path: &str) -> Result<bool, String> {
+    pub(crate) fn filename(&self, path: impl AsRef<[u8]>) -> Result<bool, String> {
+        let path = path.as_ref();
         if path.is_empty() {
             return Ok(false);
         }
         if path.len() > self.rules.path_bytes {
             return Err("Preloader: path ceiling".into());
         }
-        if !self.rules.extensions.iter().any(|ext| path.ends_with(ext)) {
+        if !self
+            .rules
+            .extensions
+            .iter()
+            .any(|ext| path.ends_with(ext.as_bytes()))
+        {
             return Ok(false);
         }
+        let path = std::str::from_utf8(path)
+            .map_err(|why| format!("Preloader: unsupported path UTF8: {why}"))?;
         AssetPath::new(path).map_err(|e| format!("Preloader: {e}"))?;
         Ok(true)
     }

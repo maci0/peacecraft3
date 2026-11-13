@@ -156,7 +156,10 @@ fn executed_dialog_lifecycle_shares_identity_and_releases_text_and_button_budget
     )
     .unwrap();
     let snapshot = h.dialog_state().unwrap().get(id(&d)).unwrap().clone();
-    assert_eq!(snapshot.message.as_deref(), Some("caption"));
+    assert_eq!(
+        snapshot.message.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("caption")
+    );
     assert_eq!(snapshot.buttons[0].text, "choice");
     assert_eq!(snapshot.buttons[0].hotkey, 77);
     assert!(
@@ -248,7 +251,8 @@ fn dialog_budget_refusals_preserve_state_and_quit_requests_retain_executed_flag(
             .get(id(&d))
             .unwrap()
             .message
-            .as_deref(),
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
         Some("éé")
     );
     let b = h
@@ -304,7 +308,10 @@ endfunction
     let state = vm.host().dialog_state().unwrap();
     let dialogs: Vec<_> = state.dialogs().collect();
     assert_eq!(dialogs.len(), 1);
-    assert_eq!(dialogs[0].message.as_deref(), Some("choose from script"));
+    assert_eq!(
+        dialogs[0].message.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("choose from script")
+    );
     assert_eq!(dialogs[0].buttons[0].text, "script choice");
     assert_eq!(dialogs[0].buttons[0].hotkey, 82);
     assert!(dialogs[0].visible_to(2));
@@ -381,6 +388,9 @@ fn native_string_dialog_text_waits_for_dialog_identity_and_keeps_tag_data() {
     .unwrap();
     assert_eq!(calls.get(), 2);
     let record = h.dialog_state().unwrap().get(did).unwrap();
-    assert_eq!(record.message.as_deref(), Some("^^x^^"));
+    assert_eq!(
+        record.message.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("^^x^^")
+    );
     assert_eq!(record.buttons[0].text, "^^x^^");
 }

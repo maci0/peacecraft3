@@ -262,7 +262,8 @@ fn quest_opt_out_budgets_and_bad_declarations_preserve_the_published_session() {
                 .quest_session()
                 .unwrap()
                 .quest_title(q)
-                .unwrap(),
+                .unwrap()
+                .map(|text| text.as_utf8().unwrap()),
             Some("Alpha")
         );
         assert_eq!(host.objects().live_timers(), 2);

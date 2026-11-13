@@ -37,7 +37,7 @@ pub struct PlayerSettings {
     pub controller: Option<HandleId>,
     /// Caller-qualified current slot state; absence is unset, not empty.
     pub slot_state: Option<HandleId>,
-    pub name: Option<String>,
+    pub name: Option<pcx_script::ScriptString>,
     pub on_score_screen: Option<bool>,
     /// Executed `SetPlayerTechMaxAllowed` pairs. Absence is unset, not a default limit.
     pub tech_max: Vec<(i32, i32)>,
@@ -1707,7 +1707,7 @@ impl ObjectHost {
                 Ok(Value::Null)
             }
             ("SetPlayerName", [Value::Str(text)]) => {
-                let text = pcx_script::text::native_map_string(text, strings)
+                let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
                     .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
                 players
                     .rows
@@ -1715,15 +1715,15 @@ impl ObjectHost {
                     .enumerate()
                     .filter(|(i, _)| *i != at)
                     .try_fold(text.len(), |sum, (_, row)| {
-                        sum.checked_add(row.name.as_ref().map_or(0, String::len))
+                        sum.checked_add(row.name.as_ref().map_or(0, pcx_script::ScriptString::len))
                     })
                     .filter(|&bytes| bytes <= players.budget.name_bytes)
                     .ok_or_else(|| fail(Failure::Budget("player names")))?;
-                let mut copy = String::new();
+                let mut copy = Vec::new();
                 copy.try_reserve_exact(text.len())
                     .map_err(|_| fail(Failure::Capacity))?;
-                copy.push_str(&text);
-                players.rows[at].name = Some(copy);
+                copy.extend_from_slice(&text);
+                players.rows[at].name = Some(copy.into());
                 Ok(Value::Null)
             }
             ("GetPlayerTeam", []) => players.rows[at]

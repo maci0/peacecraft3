@@ -130,7 +130,11 @@ impl ObjectHost {
         state.thematic_rules = Some(rules);
         Ok(self)
     }
-    pub(super) fn start_thematic(&mut self, path: &str, from: Option<i32>) -> Result<(), Error> {
+    pub(super) fn start_thematic(
+        &mut self,
+        path: impl AsRef<[u8]>,
+        from: Option<i32>,
+    ) -> Result<(), Error> {
         let name = if from.is_some() {
             "PlayThematicMusicEx"
         } else {
@@ -141,7 +145,8 @@ impl ObjectHost {
             .map_music
             .as_mut()
             .ok_or_else(|| fail(Failure::MusicState("map music is not admitted")))?;
-        if path.len() > state.max_name_bytes || path.contains('\0') {
+        let path = path.as_ref();
+        if path.len() > state.max_name_bytes || path.contains(&0) {
             return Err(fail(Failure::MusicState("invalid thematic music path")));
         }
         let position = match (&state.thematic_rules, from) {
@@ -159,6 +164,8 @@ impl ObjectHost {
             .revision
             .checked_add(1)
             .ok_or_else(|| fail(Failure::Budget("thematic music revisions")))?;
+        let path = std::str::from_utf8(path)
+            .map_err(|why| fail(Failure::ScriptString(format!("thematic path UTF8: {why}"))))?;
         let mut owned = String::new();
         owned
             .try_reserve_exact(path.len())
@@ -239,9 +246,12 @@ impl ObjectHost {
             if text.len() > state.max_name_bytes {
                 return Err(fail(Failure::Budget("map music selection bytes")));
             }
-            if text.contains('\0') {
+            if text.as_bytes().contains(&0) {
                 return Err(fail(Failure::MusicState("embedded NUL is unsupported")));
             }
+            let text = text.as_utf8().map_err(|why| {
+                fail(Failure::ScriptString(format!("map music name UTF8: {why}")))
+            })?;
             let mut name = String::new();
             name.try_reserve_exact(text.len())
                 .map_err(|_| fail(Failure::Capacity))?;

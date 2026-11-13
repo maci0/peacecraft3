@@ -143,9 +143,9 @@ pub struct QuestAdmitError {
 
 #[derive(Debug)]
 struct QuestPayload {
-    title: Option<String>,
-    description: Option<String>,
-    icon_path: Option<String>,
+    title: Option<pcx_script::ScriptString>,
+    description: Option<pcx_script::ScriptString>,
+    icon_path: Option<pcx_script::ScriptString>,
     required: bool,
     completed: bool,
     discovered: bool,
@@ -157,7 +157,7 @@ struct QuestPayload {
 #[derive(Debug)]
 struct ItemPayload {
     quest: HandleId,
-    description: Option<String>,
+    description: Option<pcx_script::ScriptString>,
     completed: bool,
 }
 
@@ -275,16 +275,25 @@ impl QuestSession {
         self.quests.iter().map(|(id, _)| *id)
     }
 
-    pub fn quest_title(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
-        Ok(self.quest_ref(id)?.title.as_deref())
+    pub fn quest_title(
+        &self,
+        id: HandleId,
+    ) -> Result<Option<&pcx_script::ScriptString>, QuestFailure> {
+        Ok(self.quest_ref(id)?.title.as_ref())
     }
 
-    pub fn quest_description(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
-        Ok(self.quest_ref(id)?.description.as_deref())
+    pub fn quest_description(
+        &self,
+        id: HandleId,
+    ) -> Result<Option<&pcx_script::ScriptString>, QuestFailure> {
+        Ok(self.quest_ref(id)?.description.as_ref())
     }
 
-    pub fn quest_icon_path(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
-        Ok(self.quest_ref(id)?.icon_path.as_deref())
+    pub fn quest_icon_path(
+        &self,
+        id: HandleId,
+    ) -> Result<Option<&pcx_script::ScriptString>, QuestFailure> {
+        Ok(self.quest_ref(id)?.icon_path.as_ref())
     }
 
     pub fn quest_flag(&self, id: HandleId, flag: QuestFlag) -> Result<bool, QuestFailure> {
@@ -299,8 +308,11 @@ impl QuestSession {
         Ok(self.item_ref(id)?.quest)
     }
 
-    pub fn item_description(&self, id: HandleId) -> Result<Option<&str>, QuestFailure> {
-        Ok(self.item_ref(id)?.description.as_deref())
+    pub fn item_description(
+        &self,
+        id: HandleId,
+    ) -> Result<Option<&pcx_script::ScriptString>, QuestFailure> {
+        Ok(self.item_ref(id)?.description.as_ref())
     }
 
     pub fn item_completed(&self, id: HandleId) -> Result<bool, QuestFailure> {
@@ -415,8 +427,8 @@ impl QuestSession {
         let (id, text) = handle_and_string(args)?;
         self.require_live_quest(arena, id)?;
         let text = match field {
-            TextField::Icon => std::borrow::Cow::Borrowed(text),
-            _ => pcx_script::text::native_map_string(text, strings)
+            TextField::Icon => std::borrow::Cow::Borrowed(text.as_bytes()),
+            _ => pcx_script::text::native_map_bytes(text.as_bytes(), strings)
                 .map_err(QuestFailure::TextSource)?,
         };
         self.reserve_event()?;
@@ -515,8 +527,8 @@ impl QuestSession {
     ) -> Result<Value, QuestFailure> {
         let (id, text) = handle_and_string(args)?;
         self.require_live_item(arena, id)?;
-        let text =
-            pcx_script::text::native_map_string(text, strings).map_err(QuestFailure::TextSource)?;
+        let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
+            .map_err(QuestFailure::TextSource)?;
         self.reserve_event()?;
         let budget = self.budget.text_bytes;
         let mut used = self.text_used;
@@ -747,7 +759,9 @@ fn one_handle(args: &[Value]) -> Result<HandleId, QuestFailure> {
     }
 }
 
-fn handle_and_string(args: &[Value]) -> Result<(HandleId, &str), QuestFailure> {
+fn handle_and_string(
+    args: &[Value],
+) -> Result<(HandleId, &pcx_script::ScriptString), QuestFailure> {
     match args {
         [Value::Handle(id), Value::Str(text)] => Ok((*id, text)),
         _ => Err(QuestFailure::Arguments),
@@ -765,10 +779,10 @@ fn handle_and_bool(args: &[Value]) -> Result<(Option<HandleId>, bool), QuestFail
 fn store_text(
     used: &mut usize,
     budget: usize,
-    slot: &mut Option<String>,
-    next: &str,
+    slot: &mut Option<pcx_script::ScriptString>,
+    next: &[u8],
 ) -> Result<(), QuestFailure> {
-    let old = slot.as_ref().map_or(0, String::len);
+    let old = slot.as_ref().map_or(0, pcx_script::ScriptString::len);
     let next_used = used
         .checked_sub(old)
         .and_then(|value| value.checked_add(next.len()))
@@ -776,17 +790,17 @@ fn store_text(
     if next_used > budget {
         return Err(QuestFailure::Budget("quest text bytes"));
     }
-    let mut owned = String::new();
+    let mut owned = Vec::new();
     owned
         .try_reserve(next.len())
         .map_err(|_| QuestFailure::Capacity)?;
-    owned.push_str(next);
-    *slot = Some(owned);
+    owned.extend_from_slice(next);
+    *slot = Some(owned.into());
     *used = next_used;
     Ok(())
 }
 
-fn release_text(used: &mut usize, text: Option<&String>) {
+fn release_text(used: &mut usize, text: Option<&pcx_script::ScriptString>) {
     if let Some(text) = text {
         *used = used.saturating_sub(text.len());
     }

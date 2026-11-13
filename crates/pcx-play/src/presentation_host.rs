@@ -376,9 +376,20 @@ impl ObjectHost {
         match (name, args) {
             ("EnableUserUI", [Value::Bool(enabled)]) => state.ui_enabled = Some(*enabled),
             ("SetCineFilterTexture", [Value::Str(path)])
-                if !path.is_empty() && path.len() <= state.path_bytes && !path.contains('\0') =>
+                if !path.is_empty()
+                    && path.len() <= state.path_bytes
+                    && !path.as_bytes().contains(&0) =>
             {
-                state.texture = Some(path.clone())
+                state.texture = Some(
+                    path.as_utf8()
+                        .map_err(|why| {
+                            self.inner.error(
+                                name,
+                                Failure::ScriptString(format!("cine filter path UTF-8: {why}")),
+                            )
+                        })?
+                        .to_owned(),
+                )
             }
             ("SetCineFilterBlendMode", _) if enum_value.is_some() => state.blend = enum_value,
             ("SetCineFilterTexMapFlags", _) if enum_value.is_some() => state.flags = enum_value,

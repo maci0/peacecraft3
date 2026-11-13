@@ -20,9 +20,13 @@ impl Host for Capture {
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
         match (name, args) {
             // Fixture output encoding only; this does not admit production I2S.
-            ("I2S", [Value::Int(value)]) => Ok(Value::Str(value.to_string())),
+            ("I2S", [Value::Int(value)]) => Ok(Value::Str(value.to_string().into())),
             ("Preload", [Value::Str(line)]) => {
-                self.lines.push(line.clone());
+                self.lines.push(
+                    line.as_utf8()
+                        .map_err(|e| format!("fixture preload encoding: {e}"))?
+                        .to_owned(),
+                );
                 Ok(Value::Null)
             }
             ("PreloadGenClear" | "PreloadGenStart", []) | ("PreloadGenEnd", [Value::Str(_)]) => {

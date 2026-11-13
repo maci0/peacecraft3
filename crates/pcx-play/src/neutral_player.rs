@@ -381,6 +381,12 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        if name == self.rule.native_name {
+            return Ok(false);
+        }
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         name != self.rule.native_name && self.inner.suspend(name, args)
     }

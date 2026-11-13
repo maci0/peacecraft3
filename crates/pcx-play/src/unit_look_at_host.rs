@@ -91,6 +91,12 @@ impl ObjectHost {
                         )
                     })?
                     .model;
+                let bone = bone.as_utf8().map_err(|e| {
+                    self.inner.error(
+                        name,
+                        Failure::ScriptString(format!("look-at bone is not UTF-8: {e}")),
+                    )
+                })?;
                 if model
                     .joints
                     .iter()
@@ -107,7 +113,7 @@ impl ObjectHost {
                     ));
                 }
                 Some(UnitLookAt {
-                    bone: bone.clone(),
+                    bone: bone.to_owned(),
                     target,
                     offset,
                 })
