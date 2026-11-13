@@ -374,6 +374,7 @@ pub struct MapStartupInputs {
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
     pub script_hash: Option<crate::playercolor_host::ScriptHashPolicy>,
+    pub script_strings: Option<crate::playercolor_host::ScriptStringPolicy>,
     pub destructable_restore: Option<crate::playercolor_host::RestoreLifePolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
@@ -771,6 +772,7 @@ fn assemble_inner(
         terrain_pathing,
         numeric,
         script_hash,
+        script_strings,
         destructable_restore,
         experience_handicap,
         health_handicap,
@@ -1026,6 +1028,9 @@ fn assemble_inner(
         object = object.with_script_numeric(policy);
         object.admit_native_game_clock()?;
     }
+    if let Some(policy) = script_strings {
+        object = object.with_script_strings(policy);
+    }
     if let Some(policy) = script_hash {
         object = object.with_script_hash(policy);
     }
@@ -1235,6 +1240,23 @@ fn assemble_inner(
 }
 
 impl Host for MapStartupHost {
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .substring(bytes, start, end)
+    }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner
             .as_ref()

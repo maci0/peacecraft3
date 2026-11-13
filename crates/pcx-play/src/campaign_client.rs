@@ -21,6 +21,7 @@ pub struct Inputs {
     pub camera: CameraMargins,
     pub numeric: script_numeric::NumericPolicy,
     pub script_hash: crate::playercolor_host::ScriptHashPolicy,
+    pub script_strings: crate::playercolor_host::ScriptStringPolicy,
     pub destructable_restore: crate::playercolor_host::RestoreLifePolicy,
     pub random: profile::Policy,
     pub clock: startup_clock::StartupClock,
@@ -184,6 +185,55 @@ pub fn placement_rules(
     .map_err(|e| e.to_string())
 }
 
+pub fn string_rules(
+    image: &[u8],
+    origin: AssetIdentity,
+) -> Result<crate::playercolor_host::ScriptStringPolicy, String> {
+    if image.len() > BUDGET.image_bytes || sha256(image) != crate::menu_lighting::REVIEWED_IMAGE {
+        return Err(format!(
+            "{}: unsupported script-string client",
+            origin.source
+        ));
+    }
+    let pe = Pe::parse(image, BUDGET).map_err(|e| e.to_string())?;
+    let image_sha256 = sha256(image);
+    let window = |va, len, code| -> Result<SourceWindow, String> {
+        let bytes = pe
+            .read_from(va, code)
+            .map_err(|e| e.to_string())?
+            .get(..len as usize)
+            .ok_or("truncated script-string source window")?;
+        Ok(SourceWindow {
+            va,
+            len,
+            digest: sha256(bytes),
+        })
+    };
+    crate::playercolor_host::ScriptStringPolicy::read(
+        image,
+        crate::playercolor_host::ScriptStringBinding {
+            origin,
+            image_sha256,
+            case: window(0x4ac4c0, 0xd5, true)?,
+            copy: window(0x433500, 0x65, true)?,
+            upper_jump: window(0x434600, 5, true)?,
+            lower_jump: window(0x4339e0, 5, true)?,
+            upper: window(0xa780d6, 0x5d, true)?,
+            lower: window(0xa77452, 0x5d, true)?,
+            substring: window(0x4ac8f0, 0x85, true)?,
+            slice: window(0x4699c0, 0x125, true)?,
+            entry: window(0xa574bc, 10, true)?,
+            startup: window(0xa5732f, 0x19, true)?,
+            crt_init: window(0xa569b8, 0x39, true)?,
+            callbacks: window(0xa950f8, 0x12, true)?,
+            walker: window(0xaa4d3d, 0x83, true)?,
+            locale_init: window(0xa94fc7, 0x12, true)?,
+            locale_store: window(0xa950c7, 0x2f, true)?,
+        },
+        BUDGET,
+    )
+}
+
 pub fn read(
     image: &[u8],
     origin: AssetIdentity,
@@ -292,6 +342,7 @@ pub fn read(
     .and_then(|numeric| numeric.with_timer_queries(image, &timer_queries, BUDGET))
     .and_then(|numeric| numeric.with_native_game_clock(image, BUDGET))
     .map_err(|e| e.to_string())?;
+    let script_strings = string_rules(image, origin.clone())?;
     let script_hash = crate::playercolor_host::ScriptHashPolicy::read(
         image,
         crate::playercolor_host::ScriptHashBinding {
@@ -434,6 +485,7 @@ pub fn read(
         camera,
         numeric,
         script_hash,
+        script_strings,
         destructable_restore,
         random,
         clock,

@@ -316,6 +316,17 @@ impl<H: Host> Host for RecordingHost<H> {
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner.string_hash(bytes)
     }
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner.substring(bytes, start, end)
+    }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.inner.native_table_string(id)
     }
@@ -815,6 +826,32 @@ mod recording_tests {
 mod native_string_recording_tests {
     use super::*;
     use pcx_script::Host;
+    #[test]
+    fn string_rules_recording_preserves_raw_builtin_results_without_native_events() {
+        let world = crate::neutral_player::native_case_world_fixture(
+            Some(b"STRING 7\r\n{\r\njmx\r\n}\r\n"),
+            crate::playercolor_host::ScriptStringPolicy::synthetic_fixture(),
+        );
+        let program = world.context().scripts.shared_program();
+        let recording = RecordingHost {
+            inner: world,
+            tick: Some(9),
+            natives: Vec::new(),
+            sequence: 0,
+        };
+        let mut vm = pcx_script::Vm::new(&program, recording);
+        assert_eq!(
+            vm.call("change", &[Value::Str("jm".into())]).unwrap(),
+            Value::Str("eh".into())
+        );
+        assert_eq!(
+            vm.call("cut", &[Value::Str(vec![0xff, 0xc3].into())])
+                .unwrap(),
+            Value::Str(vec![0xff].into())
+        );
+        assert!(vm.host().natives.is_empty());
+        assert_eq!(vm.host().sequence, 0);
+    }
     #[test]
     fn string_hash_recording_forwards_policy_without_duplicate_native_events() {
         let policy = crate::playercolor_host::ScriptHashPolicy::synthetic_fixture();

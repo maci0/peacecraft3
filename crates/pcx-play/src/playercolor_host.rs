@@ -1014,3 +1014,5 @@ pub use objects::{LeaderboardBudget, LeaderboardItem, LeaderboardState, ScriptLe
 
 pub use objects::CorpseTiming;
 pub use objects::{NativeCoverage, WorldSnapshot};
+
+pub use objects::{ScriptStringBinding, ScriptStringPolicy};

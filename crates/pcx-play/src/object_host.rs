@@ -71,6 +71,7 @@ pub struct ObjectHost {
     order_queue: Option<order_queue::State>,
     order_registry: Option<std::sync::Arc<crate::order_registry::Registry>>,
     script_hash: Option<script_hash::Policy>,
+    script_strings: Option<ScriptStringPolicy>,
     unit_ids: Option<unit_id::UnitIds>,
     inner: EnumHost,
     group_limit: Option<usize>,
@@ -222,6 +223,11 @@ impl ObjectHost {
         self.placed_sources.get(&id).copied()
     }
 
+    pub fn with_script_strings(mut self, policy: ScriptStringPolicy) -> Self {
+        self.script_strings = Some(policy);
+        self
+    }
+
     pub fn with_script_hash(mut self, policy: ScriptHashPolicy) -> Self {
         self.script_hash = Some(policy);
         self
@@ -332,6 +338,7 @@ impl ObjectHost {
             units: None,
             order_registry: None,
             script_hash: None,
+            script_strings: None,
             unit_ids: None,
             unit_activity: None,
             harvest: None,
@@ -990,6 +997,33 @@ impl Host for ObjectHost {
     }
     fn leave_thread(&mut self) -> Result<(), String> {
         self.leave_thread_now().map_err(|e| e.to_string())
+    }
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.script_strings
+            .as_ref()
+            .ok_or_else(|| {
+                format!(
+                    "{}: StringCase source policy is not admitted",
+                    self.inner.source_context
+                )
+            })?
+            .case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.script_strings
+            .as_ref()
+            .ok_or_else(|| {
+                format!(
+                    "{}: SubString source policy is not admitted",
+                    self.inner.source_context
+                )
+            })?
+            .substring(bytes, start, end)
     }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.script_hash
@@ -1884,3 +1918,7 @@ pub use native_coverages::NativeCoverage;
 
 #[path = "native_game_clock_host.rs"]
 mod native_game_clock_host;
+
+#[path = "script_string_rules.rs"]
+mod script_strings;
+pub use script_strings::{Binding as ScriptStringBinding, Policy as ScriptStringPolicy};
