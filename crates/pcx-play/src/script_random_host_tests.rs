@@ -300,3 +300,128 @@ fn interleaved_secondary_real_and_die_retain_distinct_exact_state_records() {
         Some(&state::seeded(&policy, -71, 3).unwrap())
     );
 }
+
+const CHECKPOINT_BUDGET: pcx_script::checkpoint::Budget = pcx_script::checkpoint::Budget {
+    bytes: 1 << 20,
+    items: 16384,
+    depth: 16,
+};
+
+fn random_section(host: &ObjectHost) -> Vec<u8> {
+    let mut out = pcx_script::checkpoint::Writer::new(CHECKPOINT_BUDGET).unwrap();
+    host.write_random_checkpoint(&mut out).unwrap();
+    out.finish()
+}
+
+fn restore_random_section(host: &mut ObjectHost, bytes: &[u8]) -> Result<(), String> {
+    let mut input = pcx_script::checkpoint::Reader::new(bytes, CHECKPOINT_BUDGET)?;
+    host.restore_random_checkpoint(&mut input)?;
+    input.finish()
+}
+
+fn random_next(host: &mut ObjectHost, count: usize) -> Vec<Value> {
+    let mut values = Vec::new();
+    for channel in 0..count {
+        values.push(Value::Int(
+            host.draw_random_secondary_die(channel, 83, "checkpoint test")
+                .unwrap() as i32,
+        ));
+        values.push(Value::Real(
+            host.draw_random_secondary_real(channel, "checkpoint test")
+                .unwrap(),
+        ));
+    }
+    values.push(
+        host.native("GetRandomInt", &[Value::Int(-23), Value::Int(77)])
+            .unwrap(),
+    );
+    values.push(
+        host.native("GetRandomReal", &[Value::Real(-3.), Value::Real(7.)])
+            .unwrap(),
+    );
+    values
+}
+
+#[test]
+fn candidate_world_random_section_retains_all_streams_and_order_through_actual_draw_callers() {
+    let mut nonstock = profile::fixture();
+    nonstock.secondary_count = 5;
+    let policy = Arc::new(nonstock);
+    let mut live = host(RANDOM, "")
+        .with_script_random(Arc::clone(&policy), 7)
+        .unwrap();
+    // Equal unseeded bounds are recorded without manufacturing initial generator state.
+    live.native("GetRandomInt", &[Value::Int(4), Value::Int(4)])
+        .unwrap();
+    let unseeded = random_section(&live);
+    let mut loaded = host(RANDOM, "")
+        .with_script_random(Arc::clone(&policy), 9)
+        .unwrap();
+    restore_random_section(&mut loaded, &unseeded).unwrap();
+    assert!(loaded.script_random_state().is_none());
+    assert_eq!(loaded.script_random_calls(), live.script_random_calls());
+    live.native("SetRandomSeed", &[Value::Int(-917)]).unwrap();
+    for channel in 0..5 {
+        for _ in 0..channel + 1 {
+            live.draw_random_secondary_real(channel, "checkpoint test")
+                .unwrap();
+        }
+    }
+    random_next(&mut live, 5);
+    let bytes = random_section(&live);
+    restore_random_section(&mut loaded, &bytes).unwrap();
+    assert_eq!(random_section(&loaded), bytes);
+    assert_eq!(loaded.script_random_state(), live.script_random_state());
+    assert_eq!(loaded.script_random_calls(), live.script_random_calls());
+    for _ in 0..11 {
+        assert_eq!(random_next(&mut loaded, 5), random_next(&mut live, 5));
+        assert_eq!(loaded.script_random_state(), live.script_random_state());
+        assert_eq!(loaded.script_random_calls(), live.script_random_calls());
+    }
+}
+
+#[test]
+fn candidate_world_random_decode_failure_preserves_previous_streams_and_draw_history() {
+    let policy = Arc::new(profile::fixture());
+    let mut live = host(RANDOM, "")
+        .with_script_random(Arc::clone(&policy), 3)
+        .unwrap();
+    live.native("SetRandomSeed", &[Value::Int(11)]).unwrap();
+    random_next(&mut live, 3);
+    let bytes = random_section(&live);
+    let mut candidate = host(RANDOM, "")
+        .with_script_random(Arc::clone(&policy), 3)
+        .unwrap();
+    candidate
+        .native("SetRandomSeed", &[Value::Int(97)])
+        .unwrap();
+    random_next(&mut candidate, 3);
+    let before = random_section(&candidate);
+    for end in 0..bytes.len() {
+        assert!(
+            restore_random_section(&mut candidate, &bytes[..end]).is_err(),
+            "length {end}"
+        );
+        assert_eq!(random_section(&candidate), before);
+    }
+    let mut foreign = (*policy).clone();
+    foreign.key[0] ^= 1;
+    let mut other = host(RANDOM, "")
+        .with_script_random(Arc::new(foreign), 3)
+        .unwrap();
+    let old = random_section(&other);
+    assert!(
+        restore_random_section(&mut other, &bytes)
+            .unwrap_err()
+            .contains("policy")
+    );
+    assert_eq!(random_section(&other), old);
+    let mut bad = bytes.clone();
+    bad[0] = 0;
+    assert!(restore_random_section(&mut candidate, &bad).is_err());
+    assert_eq!(random_section(&candidate), before);
+    let no_random = host(RANDOM, "");
+    assert!(restore_random_section(&mut candidate, &random_section(&no_random)).is_err());
+    assert_eq!(random_section(&candidate), before);
+    assert_eq!(random_section(&live), bytes);
+}

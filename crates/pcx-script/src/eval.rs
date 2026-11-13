@@ -70,6 +70,10 @@ pub const MAX_SPAWN_DEPTH: u32 = 64;
 /// guard, not a game rule.
 pub const MAX_STEPS: u64 = 20_000_000;
 
+#[path = "checkpoint_vm.rs"]
+mod checkpoint_vm;
+pub use checkpoint_vm::{Projection as CheckpointProjection, Reference as CheckpointReference};
+
 /// Arithmetic and literal conversion qualified by the caller's selected runtime.
 pub trait RealOps {
     fn literal(&self, spelling: &str) -> Result<f32, String>;

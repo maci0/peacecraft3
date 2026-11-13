@@ -473,3 +473,45 @@ Thus the observed Resume post-handler work cannot be projected using the
 ordinary periodic-expiry fresh-replay policy. This qualifies one cold-loaded
 case over a bounded two-second interval, not permanent inactivity or every
 reentrant replacement/resume variant. Full recreation saves remain unsupported.
+
+## Recreation continuation sections under implementation
+
+The recreation now has component codecs for a program-bound VM, script and
+secondary RNG streams, the independent animation RNG, live unit ability state,
+and in-memory game caches. They are sections for an unpublished whole-world
+candidate, not a complete save format or an enabled `SaveGame`/`LoadGame` route.
+The remaining arena, world jobs, AI contexts, clocks, application presentation,
+storage and publication must join the same transaction before those routes can
+be enabled. Original save-payload interoperability remains separate.
+
+The VM section binds source identity and reconstructs parked frame continuations
+from the verified program, preserving globals, sparse arrays, return holes and
+remaining callbacks. Its native-save projection omits the active save-calling
+execution while retaining already parked threads. This does not implement the
+host's timer-family or Slow disk projections described above. The component
+checks exercise fresh VM candidates without rerunning global initializers.
+
+The RNG section stores every retained generator word and lane, caller order,
+secondary-channel records and independent animation stream. It verifies locally
+rebound source policies rather than serializing their authored tables. Both
+script and animation state validate before either is assigned to the candidate.
+The primary-only rollback helper remains a separate native-call mechanism.
+
+The world ability section preserves the exact live ability iteration order,
+including ordinary additions, removals and re-additions, hero progress and
+optional XP, cooldown bits, alarm flags, and autocast flags and revision context.
+It checks source learn-slot bindings and prepares every unit before assignment.
+This preserves current observable world state as a reconstruction choice;
+arbitrary ordinary-ability persistence in original full saves has not been
+qualified. It deliberately does not reuse `StoreUnit`'s source/learn-slot
+projection. A synthetic command-card regression verifies that a re-added
+ordinary ability keeps its live first-occupant result after this section is
+restored, while the separate campaign-cache regression still reconstructs the
+fresh-source result.
+
+The cache section preserves unsaved profile memory, allocation policy and
+accounting, and a retained storage error. It binds the candidate's existing
+storage provider without reading or replacing its external profile. A synthetic
+regression distinguishes saved disk value 37 from unsaved world value 93 and
+checks that a later native save uses the candidate provider. This is component
+reconstruction evidence, not original-client cache/full-save parity.

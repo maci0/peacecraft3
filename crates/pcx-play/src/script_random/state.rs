@@ -1,6 +1,9 @@
 //! Seeded state for the reviewed primary and retained secondary generators.
 use super::{profile::Policy, real};
 
+#[path = "state_checkpoint.rs"]
+mod checkpoint;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Primary {
     word: u32,

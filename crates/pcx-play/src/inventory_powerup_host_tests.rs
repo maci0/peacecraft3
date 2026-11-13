@@ -4733,3 +4733,128 @@ mod spell_shield_host;
 
 #[path = "inventory_aura_host_tests.rs"]
 mod aura;
+
+#[test]
+fn world_ability_root_keeps_live_button_winner_and_native_attributes_without_recreating_units() {
+    use pcx_script::checkpoint::{Budget, Reader, Writer};
+    const BUDGET: Budget = Budget {
+        bytes: 1 << 20,
+        items: 16384,
+        depth: 16,
+    };
+    let open = || {
+        open_with_regens_overlays_extra(
+            Overlay::default(),
+            Overlay::default(),
+            0.,
+            None,
+            0.,
+            "500",
+            &[
+                (*b"uabi", ability_field("abilList", "L000,AIl1,AIl4")),
+                column(
+                    b"A009",
+                    SlkId::UnitAbilities,
+                    "heroAbilList",
+                    FieldKind::Token,
+                    "AIl2,AIbm",
+                ),
+            ],
+        )
+    };
+    let snapshot = |h: &ObjectHost| {
+        let mut out = Writer::new(BUDGET).unwrap();
+        h.write_unit_abilities_checkpoint(&mut out).unwrap();
+        out.finish()
+    };
+    let Fixture {
+        mut h,
+        hero,
+        ordinary,
+    } = open();
+    let fresh_buttons = h.learned_ability_buttons(hero).unwrap();
+    assert_eq!(fresh_buttons[0].ability, *b"AIl1");
+    for native in ["UnitRemoveAbility", "UnitAddAbility"] {
+        assert_eq!(
+            h.native(
+                native,
+                &[
+                    Value::Handle(hero),
+                    Value::Int(i32::from_be_bytes(*b"AIl1"))
+                ]
+            ),
+            Ok(Value::Bool(true))
+        );
+    }
+    h.native(
+        "SelectHeroSkill",
+        &[
+            Value::Handle(hero),
+            Value::Int(i32::from_be_bytes(*b"AIl2")),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        h.native(
+            "UnitAddAbility",
+            &[
+                Value::Handle(ordinary),
+                Value::Int(i32::from_be_bytes(*b"AIl2"))
+            ]
+        ),
+        Ok(Value::Bool(true))
+    );
+    let buttons = h.learned_ability_buttons(hero).unwrap();
+    assert_eq!(buttons[0].ability, *b"AIl4");
+    let abilities = h.executed_unit(hero).unwrap().abilities.clone();
+    let bytes = snapshot(&h);
+    let Fixture {
+        h: mut candidate,
+        hero: loaded,
+        ordinary: loaded_ordinary,
+    } = open();
+    let before = snapshot(&candidate);
+    let handles = candidate.inner().handles();
+    let revision = candidate.unit_revision();
+    for end in 0..bytes.len() {
+        let mut input = Reader::new(&bytes[..end], BUDGET).unwrap();
+        assert!(
+            candidate
+                .restore_unit_abilities_checkpoint(&mut input)
+                .is_err(),
+            "length {end}"
+        );
+        assert_eq!(
+            snapshot(&candidate),
+            before,
+            "no unit publishes before every record validates"
+        );
+        assert_eq!(candidate.unit_revision(), revision);
+    }
+    let mut input = Reader::new(&bytes, BUDGET).unwrap();
+    candidate
+        .restore_unit_abilities_checkpoint(&mut input)
+        .unwrap();
+    input.finish().unwrap();
+    assert_eq!(candidate.unit_revision(), revision);
+    assert_eq!(candidate.inner().handles(), handles);
+    assert_eq!(
+        candidate.executed_unit(loaded).unwrap().abilities,
+        abilities
+    );
+    assert_eq!(candidate.learned_ability_buttons(loaded).unwrap(), buttons);
+    assert_eq!(snapshot(&candidate), bytes);
+    for (unit, other) in [(loaded, hero), (loaded_ordinary, ordinary)] {
+        for name in ["GetHeroStr", "GetHeroAgi", "GetHeroInt"] {
+            for bonuses in [false, true] {
+                assert_eq!(
+                    candidate
+                        .native(name, &[Value::Handle(unit), Value::Bool(bonuses)])
+                        .unwrap(),
+                    h.native(name, &[Value::Handle(other), Value::Bool(bonuses)])
+                        .unwrap()
+                );
+            }
+        }
+    }
+}

@@ -7,6 +7,9 @@ use pcx_objects::editor::Overlay;
 use pcx_script::value::FunctionId;
 use std::collections::BTreeSet;
 
+#[path = "unit_ability_checkpoint.rs"]
+mod checkpoint;
+
 #[path = "autocast_host.rs"]
 mod autocast;
 #[path = "ability_cooldown.rs"]

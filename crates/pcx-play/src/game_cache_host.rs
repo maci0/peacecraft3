@@ -12,6 +12,9 @@ pub(super) struct State {
     storage_error: Option<String>,
 }
 
+#[path = "game_cache_checkpoint.rs"]
+mod checkpoint;
+
 const CONTRACTS: &[(&str, &[&str], &str)] = &[
     (
         "StoreUnit",

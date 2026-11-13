@@ -105,6 +105,7 @@
 
 pub mod ast;
 pub mod canon;
+pub mod checkpoint;
 pub mod eval;
 pub mod lexer;
 pub mod natives;

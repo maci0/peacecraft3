@@ -13,6 +13,9 @@
 
 use super::state::StateError;
 
+#[path = "order_checkpoint.rs"]
+mod checkpoint;
+
 /// Where one admitted RNG call came from.
 ///
 /// Variants name reviewed consumer roles. They carry caller identity only:
