@@ -67,7 +67,7 @@ and the initially insufficient Counter input remain in their separate logs.
 
 ## Remaining controller path
 
-The longer branch computes the shortest arc from logical facing, divides the
+The longer branch computes the shortest arc from public visual facing, divides the
 requested duration by a source string-derived period, and derives an absolute
 per-frame rate. `0x800140` constructs a static target point from projected
 position plus source-scaled sine/cosine components, records a rate override and
@@ -80,3 +80,61 @@ order-resume interactions still need their canonical join before this branch is
 enabled. This checkpoint adds only an immutable source-profile field and no new
 resident turn or save state. An unchanged-map Counter rerun must report its exact
 next frontier; this branch alone does not establish normal startup completion.
+
+## Negative-angle admission
+
+An actual Human01 Counter rerun after the short-branch checkpoint reached the
+setter's separate negative-angle guard. Its failure is retained in
+`/tmp/pc3-sol09-normal-counter-human01-short-timed.log`. Undead02 instead reaches
+the still-unsupported longer-duration branch after publishing its initial units;
+that separate failure is in
+`/tmp/pc3-sol09-normal-counter-undead02-short-timed.log`.
+
+The existing canonical normalizer already implements the source negative branch.
+The selected setter calls `0x8b14b0` then `0x8bc3d0`, which stores the result of
+`0x8aead0` into logical facing. That normalizer first applies the source remainder
+for magnitudes at least a full turn, then adds the source full-turn operand when
+the signed result is below the initialized numerical zero. The decoder now joins
+those setter calls, remainder and addition calls, full-turn operands, and zero
+initializer. The redundant negative-angle refusal is removed; the shared prepare
+boundary explicitly requires a finite angle. No arithmetic, resident state or
+Legacy turn behavior changes. Selected-window hashes are retained in
+`/tmp/pc3-sol04-negative-facing-source-receipt.json`.
+
+The nonstock normalization regression checks negative and signed-zero results
+with the fixture's deliberately different reciprocal table. The new
+`negative_normalization_binds_relocated_operands_setter_and_arithmetic_calls`
+rejects changed branch, field, relocated operand, initializer and arithmetic
+relationships. The public Counter boundary regression now includes negative and
+multiple-revolution angles and both zero signs, with full unit/clock preservation
+on nonfinite input and unsupported longer duration. The globals/config/main test
+uses negative angles in all three startup phases. Frozen-source validation in
+`/tmp/pc3-sol04-negative-facing-validation-1794560271249514917/report.json`
+passes three timed checks, 17 heading checks including the retained native math
+witnesses, 47 Curse checks, 164 activity checks, strict native/WASM Clippy and both
+library builds. This is source and recreation-caller evidence; it is not a new
+original-client negative-angle capture or a completed Human01 startup.
+
+## Bounded long-controller runtime controls
+
+Four private original-client controls retain 1,024 short-clock observations in
+`/tmp/pc3-sol04-timed-controller-runtime-receipt.json`. Source-map, script, CRC,
+roundtrip and syntax receipts are in its referenced manifest. Each capture checks
+the nonce, ordered complete sample sequence, edition, fixed position and current
+order. All four clients independently report stopped/PID zero/no OOM; the fresh
+ancestor queue is empty in
+`/tmp/pc3-sol04-timed-controller-independent-stop-receipt.json`.
+
+The stationary origin and translated controls preserve position and current
+order. A replacement timed request changes the turn direction. A direct facing
+setter leaves the timed relation active; a later Stop cancels the relation while
+the visual orientation settles afterward. These controls cover a stationary
+worker only. The symmetric requested direction does not discriminate every
+position-quantization case. Moving/paused units and complete order-resume behavior
+remain open, and no long controller is enabled by this receipt alone.
+
+The replacement also corrected the earlier logical-facing rate interpretation:
+the handler reads virtual slot `+0x1c` on the unit's `+0x26c` wrapper. The selected
+constructor installs its table at `0x6759e6`; that slot resolves `0x7fe970`, which
+reads public orientation `+0xc8`. Logical physics still advances `+0x8c`. The rate
+read point must preserve that distinction when the controller is implemented.
