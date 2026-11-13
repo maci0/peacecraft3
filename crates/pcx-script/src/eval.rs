@@ -138,6 +138,20 @@ pub trait Host {
         Err("StringHash source policy is not admitted".into())
     }
 
+    /// Initial-C case conversion after this native's one map lookup.
+    fn string_case(&self, _bytes: &[u8], _upper: bool) -> Result<crate::ScriptString, String> {
+        Err("StringCase source policy is not admitted".into())
+    }
+    /// Raw byte slicing; null is distinct from an allocated empty result.
+    fn substring(
+        &self,
+        _bytes: &[u8],
+        _start: i32,
+        _end: i32,
+    ) -> Result<Option<crate::ScriptString>, String> {
+        Err("SubString source policy is not admitted".into())
+    }
+
     /// Optional callback dispatch. `None` uses ordinary native dispatch.
     /// A callback takes no arguments; its return reaches `continue_script_call`.
     fn begin_script_call(
@@ -2699,6 +2713,46 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 self.host
                     .string_hash(bytes)
                     .map(Value::Int)
+                    .map_err(|why| crate::Error::run(span, why))
+            }
+            NativeImpl::StringCase => {
+                let [text, Value::Bool(upper)] = args else {
+                    return Err(crate::Error::run(span, "invalid StringCase arguments"));
+                };
+                let bytes = match text {
+                    Value::Null => return Ok(Value::Null),
+                    Value::Str(text) => crate::text::native_c_bytes(text.as_bytes()),
+                    _ => return Err(crate::Error::run(span, "StringCase requires a string")),
+                };
+                if bytes.is_empty() {
+                    return Ok(Value::Null);
+                }
+                let source = |id| self.host.native_table_string(id);
+                let bytes = crate::text::native_map_bytes(bytes, Some(&source))
+                    .map_err(|why| crate::Error::run(span, why))?;
+                if bytes.is_empty() {
+                    return Ok(Value::Null);
+                }
+                self.host
+                    .string_case(&bytes, *upper)
+                    .map(Value::Str)
+                    .map_err(|why| crate::Error::run(span, why))
+            }
+            NativeImpl::SubString => {
+                let [text, Value::Int(start), Value::Int(end)] = args else {
+                    return Err(crate::Error::run(span, "invalid SubString arguments"));
+                };
+                let bytes = match text {
+                    Value::Null => return Ok(Value::Null),
+                    Value::Str(text) => crate::text::native_c_bytes(text.as_bytes()),
+                    _ => return Err(crate::Error::run(span, "SubString requires a string")),
+                };
+                if bytes.is_empty() {
+                    return Ok(Value::Null);
+                }
+                self.host
+                    .substring(bytes, *start, *end)
+                    .map(|result| result.map_or(Value::Null, Value::Str))
                     .map_err(|why| crate::Error::run(span, why))
             }
             NativeImpl::StringLength => {

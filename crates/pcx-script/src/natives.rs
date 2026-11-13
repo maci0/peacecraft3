@@ -36,8 +36,9 @@
 //! - `StringHash` hashes raw C-string bytes through the selected runtime policy.
 //!   It never performs trigger-table lookup or tag expansion.
 //!
-//! Other string natives (`SubString`, `StringCase`) remain refused
-//! with the call's name and span until their exact behavior is derived.
+//! - `StringCase` performs one map lookup and uses the selected initial-C byte policy.
+//! - `SubString` uses the selected signed-word byte policy without map lookup.
+//!   Unsupported locales and unsafe effective pointer offsets remain explicit errors.
 
 use crate::ast::{NativeDecl, Param, TypeKind, TypeRef};
 use crate::span::Span;
@@ -79,6 +80,10 @@ pub enum NativeImpl {
     StringLength,
     /// `StringHash`, raw byte hashing through a source-qualified policy.
     StringHash,
+    /// Selected byte case conversion.
+    StringCase,
+    /// Selected signed-word byte substring.
+    SubString,
 }
 
 impl NativeImpl {
@@ -94,6 +99,11 @@ impl NativeImpl {
             ),
             Self::StringLength => (&[TypeKind::String], TypeKind::Integer),
             Self::StringHash => (&[TypeKind::String], TypeKind::Integer),
+            Self::StringCase => (&[TypeKind::String, TypeKind::Boolean], TypeKind::String),
+            Self::SubString => (
+                &[TypeKind::String, TypeKind::Integer, TypeKind::Integer],
+                TypeKind::String,
+            ),
         };
         !declaration.ret.array
             && declaration.ret.kind == output
@@ -264,6 +274,8 @@ pub fn implemented(name: &str) -> Option<NativeImpl> {
         "R2SW" => Some(NativeImpl::RealToStringWidth),
         "StringLength" => Some(NativeImpl::StringLength),
         "StringHash" => Some(NativeImpl::StringHash),
+        "StringCase" => Some(NativeImpl::StringCase),
+        "SubString" => Some(NativeImpl::SubString),
         _ => None,
     }
 }

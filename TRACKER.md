@@ -7492,3 +7492,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   have combat/position state and none has an attack target at that refusal. This
   is recreation-state evidence, not native acquisition or a passing horizon.
   `/tmp/pc3-slow-frontier-global-context-horizon/acceptance.json`.
+
+
+- 2026-11-13: `StringCase` and safe `SubString` now execute through real VM
+  signatures, readonly host hooks, selected campaign assembly and all eight
+  decorators. The selected image supplies the initial C locale tables, case
+  capacity and signed-word substring branches. Null/allocated empty, one-level
+  Case WTS demand, reversed safe suffixes and raw byte results remain distinct.
+  Unsafe effective offsets and unqualified non-C contexts refuse explicitly.
+  See [string natives](docs/re-notes/script-string-natives.md).
+
+  Combined validation passes 3,607 package tests, zero failures, 174 explicit
+  ignores; twenty-two explicit source/witness gates and 352 application test
+  executions pass. The Case/SubString gate executes thirty-nine retained
+  original-client observations, excluding four unknown large producer lengths.
+  Hash38, formatter194 and timer216 comparisons remain passing. Strict
+  native/WASM checks and library builds pass with frozen working/index hashes.
+  Receipt: `/tmp/pc3-case-substring-main-validation/acceptance.json`.
+  Full native locale/rendered-string parity, S2I/S2R and full save/root source
+  admission remain unfinished.
