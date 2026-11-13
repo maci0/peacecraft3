@@ -395,3 +395,55 @@ It reproduced `WakeBudget` before the fix; afterward it reaches both requested
 times under budget eight, delivers one finish event, clears both worker orders
 and preserves both banks. This does not qualify the remaining native pooled
 cost-event phase or reclamation cadence.
+
+### Membership debit phase qualification
+
+Fresh bounded static analysis of the same selected image joins the resource
+timer's virtual slot `+0x18` through table `0xe6e238` to `0x7fc070`. That getter
+subtracts queue-clock time from the pending deadline; it returns zero without a
+retained timer record. Membership addition/removal reaches `0xb91630` through
+the build-in-progress virtual slot `+0x300`, then recomputes resource periods at
+`0xb925c0`. For each nonzero pooled resource contribution, this path calls the
+shared debit routine immediately when the timer is absent or its remaining time
+exceeds the comparison operand at `0x112d810`. An active nearer deadline skips
+that immediate call. The operand resides in uninitialized image storage;
+initializer `0x401460` writes it through the native integer-to-real helper.
+Its value must be derived from that initializer, not read as file-backed data or
+copied into a construction constant. The retained static receipt is
+`/tmp/pc3-sol06-phase4-qualification-receipt.json`.
+
+Four new private Wine reference runs preserve the supplied map terrain/main and
+authored Human workers, target and abilities. They add immediate pre/post-command
+bank reads, an independent 32-second reference timer and a bounded two-second
+sampling window. The diagnostic sampling interval is not a game scheduler rule.
+Two assistants receive the same enrollment requests before the compared command.
+
+| Controlled command | Immediate gold change | Immediate lumber change |
+| --- | --- | --- |
+| No STOP at reference time 12.0 | 0 | 0 |
+| First assistant STOP at 12.0 | 0 | -1 |
+| First assistant STOP at 12.25 | 0 | -1 |
+| Exact repeat of STOP at 12.0 | 0 | -1 |
+
+The no-STOP control and STOP-at-12 run have identical 121-record prefixes before
+the command. A pending lumber debit is already visible in the observation at
+11.984375; the STOP command then synchronously debits one more lumber. This
+resolves the earlier quarter-second sample's two-lumber difference without
+claiming two synchronous STOP charges. The next gold debit is observed at
+12.390625 in both control and STOP runs, supporting retention of the nearer
+pending event. These are observation bounds, not exact native callback deadlines.
+
+Each arm produced 199 records, and the repeated STOP arm matches all normalized
+records exactly. All four containers independently verified stopped, PID zero
+and no out-of-memory termination. Private Xvfb and a single Pulse null sink were
+verified; no host display/audio devices or network were exposed. Map/executable
+identities, stable raw-trace hashes and stopped-container receipts are retained
+in `/tmp/pc3-sol06-costphase-probes-1794527592197775816/runtime-evidence-receipt.json`.
+No original or generated map content is committed.
+
+The current recreation still preserves every pending assistant debit across
+membership changes. The source/runtime matrix above qualifies replacing that
+unconditional retention with the source-derived per-resource condition, through
+the existing enrollment/interruption/death/transfer callers. It does not yet
+implement that change or qualify simultaneous reclamation order, all funding
+failure phases, zero/tiny-rate native guards or finer work/event cadence.
