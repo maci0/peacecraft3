@@ -2709,7 +2709,7 @@ impl ObjectHost {
             self.restore_cached_abilities(abilities, saved)?;
             record.permanent_strength = saved.permanent_strength;
         }
-        record.activity = self.prepare_unit_activity(&record.definition)?;
+        record.activity = self.prepare_unit_activity(&record.definition, record.face)?;
         if let Some(saved) = saved
             && let Some(point) = saved.rally
         {
@@ -3481,7 +3481,8 @@ impl ObjectHost {
                 ));
             }
         }
-        let activity = self.prepare_unit_activity(&definition)?;
+        let activity = self.prepare_unit_activity(&definition, source.face)?;
+        self.validate_form_activity(unit, activity.as_ref())?;
         let combat = self.prepare_unit_combat(&definition)?;
         let rules = self
             .admitted_units()?

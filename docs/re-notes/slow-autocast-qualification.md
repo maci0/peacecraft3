@@ -128,7 +128,8 @@ orientation. In the one-unit stationary path, `0x8aa740` records arrival before
 arrived relation cleanup afterward. The cleanup calls `0x8b15a0` and delivers
 the movement completion message before visual interpolation. Thus the delayed
 spell cannot be implemented by comparing public facing after a visual update.
-The complete canonical timer-queue cursor and order-resume bridge remain open.
+The canonical timer-queue cursor now drives a retained logical/visual request;
+equal-expiry ordering across callback families remains unqualified.
 
 The physics timer is armed by `0x4ee0c0` from the global operand initialized by
 `0x40d030` through native decimal conversion `0x9a1760`. The heading reader joins
@@ -138,12 +139,31 @@ It uses the native decimal operation order: convert the combined digits, then
 scale through the existing selected reciprocal/multiply policy. It does not
 parse the period with the host floating-point parser.
 
-The `unit_activity::heading` rules expose one pure stationary logical step with
+The `unit_activity::heading` rules expose the stationary logical step with
 check-before-turn arrival and the separate visual phase. Fresh campaign
-preparation attaches both policies to the canonical activity policy. Runtime
-unit motion, facing setters, script timed turns and Slow phase deadlines are
-not yet routed through these policies. The authoritative physics callback bridge
-remains required before claiming turning fidelity.
+preparation attaches the policies to canonical activity. The native-clock route
+retains the physics request's period and raw queue point. Logical turning resumes
+the existing Slow order, queued callbacks drain, then visual interpolation and
+periodic rearming complete the same retained phase. Public facing reads the
+visual angle. Legacy clock callers retain their existing facing behavior.
+
+The ordinary source profile follows the metadata registrations for turn speed,
+property window and orientation selector, including their selected conversion
+operands and typed marker default. Canonical creation, form changes, upgrades and
+polymorph restoration retain these properties. Form replacement preserves the
+logical angle, visual angle, angular velocity and target relation; capability
+mismatch refuses before mutation. Movement and attack writers keep logical and
+visual state coherent, but their instantaneous logical facing remains existing
+recreation debt. Script timed turns on this clock still refuse explicitly.
+
+The initial request anchor has a separate read-only native observation. The root
+chain is `[[0x113b6f4]+0x1c]+0x2a8`, joined through `0x520d30`, `0x47ab10` and
+`0x4ee0c0`. In the corrected capture, 1,838 physics records validate the timer
+vtable, request back-reference and event; the first known request is already
+armed while the game queue is zero, with deadline equal to its period. The 210
+unavailable prefix records remain unknown. An earlier capture of root `+0x2a8`
+without the game-state hop was entirely unknown and supplies no phase evidence.
+Receipt: `/tmp/pc3-sol04-physics-initial-anchor-receipt.json`.
 
 ### Orientation arithmetic controls
 
@@ -186,6 +206,45 @@ retained as unknown controller/idle work, not fitted as a constant visual goal.
 This control therefore qualifies the isolated visual step, not the complete
 idle/order-resume phase or its writers.
 
+### Direction and callback controls
+
+The source vector-heading path uses software square root, reciprocal division
+and table arccosine (`0x998640` / `0x9a05f0`), rather than script `Atan2`.
+The reader retains the regular and near-edge table relationships, interpolation
+operands, mirrored-negative branch and source pi operand. A fresh private
+original-client control records 169 arccosine cases across the range, both branch
+boundaries and values near either endpoint. The corrected witness is
+`/tmp/pc3-sol04-heading-acos-v2-witness.json`. The first encoder used JASS
+approximate equality for zero and censored two small positive results; its failed
+comparison is retained and does not justify changing the native arithmetic.
+
+Four public session regressions use source arithmetic with deliberately nonstock
+unit properties, cadence and queue cycle. They cover order resumption before the
+visual phase, canonical EFFECT-before-payment/buff settlement, Stop during the
+turn, sticky callback failure without replay, and request rebasing across two
+cycles. A separate nonstock form-profile regression verifies property restoration
+without losing dynamic heading state. These are implementation/lifecycle checks,
+not evidence for native timing with those synthetic values.
+
+Checked runtime receipt:
+`/tmp/pc3-sol04-heading-runtime-validation-1794528041563949235/report.json`.
+All 15 check groups passed against unchanged source hashes: 15 heading tests
+(including 169 native arccosine values, 65 power values and 44 stable orientation
+transitions), four public physics/Slow tests, one form-profile test, 27 morph,
+35 curse, 10 structure-upgrade, seven clock, 164 activity, 17 timer and four
+timer-query tests, plus the retained 216-value timer witness. Strict native/WASM
+Clippy and both library builds passed. Earlier fixture failures, the censored
+encoder control and the superseded Clippy failure remain in their local logs.
+
+This route depends on the candidate native-clock platform. Normal campaign
+adoption remains separate while script/AI wake domains are qualified. Native
+clock selection must occur before startup script orders when that platform is
+adopted: a later first paced tick cannot undo synchronous legacy events already
+published during startup. The public diagnostics explicitly select the native
+driver before issuing orders. Existing Slow effect/backswing deadlines also
+retain their previous clock representation; cross-family equal-expiry ordering,
+moving-turn behavior and positive automatic selection are not established here.
+
 ## Selected-code findings and remaining gates
 
 Slow candidate filter `0xbf7c20`, evidence
@@ -221,7 +280,7 @@ getter `0x46eed0`, data loader `0x6ace00`, typed numeric getter `0x95d220` and t
 comparison/default initializer. Nonnumeric table markers use the bound numeric
 default; malformed authored numeric values remain explicit errors. Automatic
 positive selection, common visibility/readiness, equal-metric enumeration,
-turning and full mission behavior remain open. Parser and synthetic tests alone
+complete moving/idle turning and full mission behavior remain open. Parser and synthetic tests alone
 do not establish native parity.
 
 ## Bounded implementation receipt

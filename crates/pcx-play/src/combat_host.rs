@@ -2304,9 +2304,11 @@ impl ObjectHost {
                             .inner
                             .error(name, Failure::UnitActivity(ABSENT_DAMAGE_POINT.into())));
                     };
+                    let heading =
+                        self.prepare_native_unit_look_at(unit, position, target_position)?;
                     self.orb_swing_start(unit, weapon.range, target)?;
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                        record.face = facing;
+                        Self::commit_native_unit_facing(record, facing, heading);
                         let combat = record.combat.as_mut().expect("combat");
                         combat.swing = Some((target, now + f64::from(damage_point / speed)));
                         combat.ready_at = now + f64::from(weapon.cooldown / speed);

@@ -98,7 +98,15 @@ impl ObjectHost {
         } else {
             Vec::new()
         };
+        let physics = if fresh {
+            self.prepare_native_physics_admission()?
+        } else {
+            None
+        };
         self.commit_native_timer_rebase(timers);
+        if fresh {
+            self.commit_native_physics_admission(physics);
+        }
         self.native_game_clock = Some(next);
         Ok(true)
     }
@@ -146,6 +154,7 @@ impl ObjectHost {
             .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
         if segment.ends_cycle {
             let timers = self.prepare_native_timer_rebase(work)?;
+            let physics = self.prepare_native_physics_rebase(work)?;
             *work = work.checked_sub(self.autocast_ticks.len()).ok_or_else(|| {
                 self.inner
                     .error("native game clock", Failure::Budget("autocast rebase"))
@@ -176,6 +185,7 @@ impl ObjectHost {
                 ));
             }
             self.commit_native_timer_rebase(timers);
+            self.commit_native_physics_admission(physics);
             self.autocast_ticks = auto;
         }
         self.native_game_clock = Some(clock);

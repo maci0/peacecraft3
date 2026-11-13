@@ -132,6 +132,7 @@ impl Rules {
         };
         let mut heading = heading::Rules::read(&mut read, numeric)?;
         heading.visual = Some(heading::visual::Rules::read(&mut read, numeric)?);
+        heading.profile = Some(heading::profile::Rules::read(&mut read, numeric)?);
         self.heading = Some(heading);
         Ok(self)
     }

@@ -1,8 +1,12 @@
 //! Logical stationary turning. The physics queue and public orientation are separate phases.
 use crate::{script_numeric::NumericPolicy, script_random::real};
 
+#[path = "unit_heading_direction.rs"]
+pub mod direction;
 #[path = "unit_heading_power.rs"]
 pub mod power;
+#[path = "unit_heading_profile.rs"]
+pub mod profile;
 #[path = "unit_heading_visual.rs"]
 pub mod visual;
 
@@ -14,6 +18,7 @@ pub struct Rules {
     pub half_turn: f32,
     pub full_turn: f32,
     pub visual: Option<visual::Rules>,
+    pub profile: Option<profile::Rules>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,7 +102,17 @@ fn decimal(text: &[u8], numeric: &NumericPolicy) -> Result<f32, String> {
 }
 
 impl Rules {
-    fn normalize(&self, numeric: &NumericPolicy, angle: f32) -> Result<f32, real::MathError> {
+    pub(crate) fn cast_ready(&self, current: f32, goal: f32) -> Result<bool, real::MathError> {
+        let delta = self.delta(current, goal)?.abs();
+        Ok(delta <= self.window
+            || f32::from_bits(real::sub(delta.to_bits(), self.window.to_bits())?).abs()
+                < self.tolerance)
+    }
+    pub(crate) fn normalize(
+        &self,
+        numeric: &NumericPolicy,
+        angle: f32,
+    ) -> Result<f32, real::MathError> {
         let angle = if angle.abs() >= self.full_turn {
             let value = f32::from_bits(
                 numeric.positive_remainder(angle.abs().to_bits(), self.full_turn.to_bits())?,
@@ -180,6 +195,7 @@ impl Rules {
             half_turn: value(read, word(&arc, 3)?)?,
             full_turn: value(read, word(&arc, 10)?)?,
             visual: None,
+            profile: None,
         };
         if !rules.period.is_finite()
             || rules.period <= 0.0
@@ -238,7 +254,7 @@ impl Rules {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     type Memory = Vec<(u32, Vec<u8>)>;
 
@@ -455,7 +471,7 @@ mod tests {
         }
     }
 
-    pub(super) fn selected_numeric_image() -> (
+    pub(crate) fn selected_numeric_image() -> (
         Vec<u8>,
         crate::scripts::AssetIdentity,
         NumericPolicy,
@@ -511,6 +527,49 @@ mod tests {
             budget,
             4096,
         )
+        .unwrap()
+        .with_math(
+            &image,
+            &crate::script_math::Binding {
+                image_sha256: sha256(&image),
+                square_root_native: window(0x4ac1a0, 94, true),
+                arctangent2_native: window(0x489fd0, 126, true),
+                square_root: window(0x9a20a0, 164, true),
+                integer_root: window(0x9a2150, 61, true),
+                arctangent2: window(0x9a0cf0, 161, true),
+                arctangent: window(0x9a0da0, 423, true),
+                zero_initializer: window(0x401300, 16, true),
+                one_initializer: window(0x401460, 16, true),
+                trig: None,
+            },
+            budget,
+        )
+        .unwrap()
+        .with_timer_queries(
+            &image,
+            &crate::script_numeric::timer_query::Binding {
+                image_sha256: sha256(&image),
+                segment_initializer: window(0x40d210, 16, true),
+                zero_initializer: window(0x401300, 16, true),
+                constructor: window(0x4fe380, 0xd1, true),
+                start: window(0x7fb820, 0x118, true),
+                schedule: window(0x7fb940, 0x5c, true),
+                remainder: window(0x9a1a90, 0x142, true),
+                remaining: window(0x7fc0b0, 0x104, true),
+                full_timeout: window(0x7fbad0, 0xbe, true),
+                active_elapsed: window(0x7fbb90, 0x34, true),
+                inactive_elapsed: window(0x4fe470, 0x6f, true),
+                pause: window(0x4fe640, 0x46, true),
+                resume: window(0x4fe6b0, 0x38, true),
+                rearm: window(0x4fe5d0, 0x6a, true),
+                stop: window(0x7fbbd0, 0x3c, true),
+                dispatch: window(0x4fdf90, 0x4a, true),
+                expiry_dispatch: window(0x7fc390, 0x16b, true),
+            },
+            budget,
+        )
+        .unwrap()
+        .with_native_game_clock(&image, budget)
         .unwrap();
         (image, origin, numeric, budget)
     }

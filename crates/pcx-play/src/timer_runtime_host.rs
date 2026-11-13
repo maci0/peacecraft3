@@ -69,6 +69,61 @@ impl TimerExpiry {
 }
 
 impl ObjectHost {
+    pub(crate) fn next_native_timer_boundary(
+        &self,
+        until: crate::native_game_clock::Point,
+        work: &mut usize,
+    ) -> Result<Option<crate::native_game_clock::Point>, Error> {
+        if !self.native_clock_driving() {
+            return Ok(None);
+        }
+        let mut next = None;
+        for &index in &self.inner.timer_slots {
+            *work = work.checked_sub(1).ok_or_else(|| {
+                self.inner.error(
+                    "native timer boundary",
+                    Failure::Budget("timer boundary scan"),
+                )
+            })?;
+            let run = match &self.inner.arena[index] {
+                Entry::Timer {
+                    live: true,
+                    run: Some(run),
+                } => *run,
+                Entry::RegisteredTimedEvent { trigger, run }
+                    if matches!(self.inner.entry(*trigger), Ok(Entry::Trigger { .. })) =>
+                {
+                    *run
+                }
+                _ => continue,
+            };
+            let point = run.native.ok_or_else(|| {
+                self.inner.error(
+                    "native timer boundary",
+                    Failure::GameClock("native timer request missing".into()),
+                )
+            })?;
+            let local = f32::from_bits(point.local);
+            if point.cycle != until.cycle
+                || !local.is_finite()
+                || local < 0.0
+                || local.is_subnormal()
+            {
+                return Err(self.inner.error(
+                    "native timer boundary",
+                    Failure::GameClock("native timer point differs".into()),
+                ));
+            }
+            if local <= f32::from_bits(until.local)
+                && next.is_none_or(|previous: crate::native_game_clock::Point| {
+                    local < f32::from_bits(previous.local)
+                })
+            {
+                next = Some(point);
+            }
+        }
+        Ok(next)
+    }
     pub(super) fn active_expired_timer(&self) -> Option<Option<HandleId>> {
         self.timers
             .as_ref()?
