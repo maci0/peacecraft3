@@ -157,6 +157,46 @@ fn fixture(shift: u32, fraction: f32) -> Vec<u8> {
         );
         call(&mut text, at + 10, text_va, text_va + 0xf00);
     }
+    word(&mut rdata, 0x700, text_va + 0x1000);
+    put(&mut text, 0x1000, &[0x83, 0xc4, 0x0c, 0x8b, 0xce]);
+    call(&mut text, 0x1005, text_va, text_va + 0x1100);
+    for (at, flags) in [(0x1130, [0, 1]), (0x1170, [1, 0])] {
+        put(
+            &mut text,
+            at,
+            &[0xff, 0x50, 0x18, 0xf3, 0x0f, 0x10, 0, 0x0f, 0x2f, 5],
+        );
+        word(&mut text, at + 10, data_va + 0x40);
+        put(
+            &mut text,
+            at + 14,
+            &[0x76, 0x20, 0x6a, flags[0], 0x6a, flags[1], 0x8b, 0xce],
+        );
+        call(&mut text, at + 22, text_va, text_va + 0xe00);
+    }
+    put(&mut rdata, 0x1c0, b"I2R\0");
+    text[0x40] = 0x68;
+    word(&mut text, 0x41, rdata_va + 0x1c0);
+    text[0x45] = 0x68;
+    word(&mut text, 0x46, text_va + 0x1600);
+    call(&mut text, 0x4a, text_va, text_va + 0x900);
+    put(
+        &mut text,
+        0x1600,
+        &[
+            0x55, 0x8b, 0xec, 0x51, 0xff, 0x75, 8, 0x8d, 0x45, 0xfc, 0x50,
+        ],
+    );
+    call(&mut text, 0x160b, text_va, text_va + 0x1640);
+    put(
+        &mut text,
+        0x1610,
+        &[0x83, 0xc4, 8, 0x8b, 0, 0x8b, 0xe5, 0x5d, 0xc3],
+    );
+    put(&mut text, 0x1700, &[0x6a, 7, 0x68]);
+    word(&mut text, 0x1703, data_va + 0x40);
+    call(&mut text, 0x1707, text_va, text_va + 0x1640);
+    put(&mut text, 0x170c, &[0x83, 0xc4, 8, 0xc3]);
     let data = fraction.to_le_bytes();
     let mut image = synthetic_image(&[
         (TEXT, 0x1000, &text),
@@ -212,11 +252,54 @@ fn relocated_nonstock_initial_life_and_ordered_profiles() {
         assert_eq!(rules.undead_build_ability, *b"ZYX8");
         assert_eq!(rules.repair_ability, *b"ZYX7");
         assert_eq!(rules.assistant_debit, 3);
+        assert_eq!(rules.assistant_reconfigure_horizon, 7);
         assert_eq!(rules.refund_rate, 0.61);
         assert_eq!(rules.life_drain_rate, 4.25);
         assert!(!rules.damage_refund_penalty);
         assert_eq!(rules.image_sha256, sha256(&image));
         assert_eq!(rules.common_sha256, sha256(COMMON));
+    }
+}
+
+#[test]
+fn reconfiguration_horizon_follows_integer_initializer_and_refuses_broken_joins() {
+    for shift in [0, 0x200000] {
+        let mut image = fixture(shift, 0.23);
+        let text = 0x400;
+        let base = 0x401000 + shift;
+        put(&mut image, text + 0x1700, &[0x68]);
+        word(&mut image, text + 0x1701, 70000);
+        image[text + 0x1705] = 0x68;
+        word(&mut image, text + 0x1706, 0x408040 + shift);
+        call(&mut image[text..], 0x170a, base, base + 0x1640);
+        put(&mut image, text + 0x170f, &[0x83, 0xc4, 8, 0xc3]);
+        assert_eq!(
+            read(&image, COMMON, &[("stock", PROFILE)], budget())
+                .unwrap()
+                .assistant_reconfigure_horizon,
+            70000
+        );
+        word(&mut image, text + 0x1701, 0x016a0000);
+        assert!(
+            read(&image, COMMON, &[("stock", PROFILE)], budget())
+                .unwrap_err()
+                .contains("ambiguous construction horizon integer push")
+        );
+    }
+    for (offset, value) in [
+        (0x1701, 0),
+        (0x1701, 0xff),
+        (0x117a, 0xff),
+        (0x117e, 0x77),
+        (0x1618, 0xcc),
+    ] {
+        let mut image = fixture(0, 0.23);
+        let text = 0x400;
+        image[text + offset] = value;
+        assert!(
+            read(&image, COMMON, &[("stock", PROFILE)], budget()).is_err(),
+            "offset {offset:x}"
+        );
     }
 }
 
