@@ -183,8 +183,8 @@ impl ObjectHost {
             .profile
             .as_ref()
             .ok_or_else(|| self.heading_error("heading profile missing"))?;
-        if face < profile.zero {
-            return Err(self.heading_error("negative script heading is not qualified"));
+        if !face.is_finite() {
+            return Err(self.heading_error("finite script heading required"));
         }
         let numeric = self
             .numeric

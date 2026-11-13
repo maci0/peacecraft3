@@ -2932,7 +2932,11 @@ endfunction
         .with_heading(&image, &numeric, budget)
         .unwrap();
     let limit = rules.heading.unwrap().profile.unwrap().timed_instant_limit;
-    for duration in [-1., 0., limit.next_down(), limit] {
+    let cases = [-1., 0., limit.next_down(), limit]
+        .into_iter()
+        .map(|duration| (90., duration))
+        .chain([-90., -450., -810., 450., 810., -0., 0.].map(|angle| (angle, limit)));
+    for (angle, duration) in cases {
         let (mut session, caster, target) = session();
         let function = session
             .context()
@@ -2957,7 +2961,7 @@ endfunction
                 function,
                 &[
                     Value::Handle(caster),
-                    Value::Real(90.),
+                    Value::Real(angle),
                     Value::Real(duration),
                 ],
             )
@@ -2996,17 +3000,19 @@ endfunction
                 )
                 .unwrap();
         }
-        assert!(
-            session
-                .host()
-                .unwrap()
-                .objects_mut()
-                .native("GetUnitFacing", &[Value::Handle(caster)])
-                .unwrap()
-                .as_real()
-                .unwrap()
-                > before.face
-        );
+        let observed = session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("GetUnitFacing", &[Value::Handle(caster)])
+            .unwrap()
+            .as_real()
+            .unwrap();
+        if angle == 0. {
+            assert_eq!(observed.to_bits(), 0_f32.to_bits());
+        } else {
+            assert!(observed > before.face, "angle={angle} facing={observed}");
+        }
         assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
         assert!(
             session
@@ -3048,6 +3054,36 @@ endfunction
             ),
             clock
         );
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let objects = session.host().unwrap().objects();
+            let before = objects.executed_unit(caster).unwrap().clone();
+            assert!(objects.prepare_native_unit_facing(caster, invalid).is_err());
+            assert_eq!(objects.executed_unit(caster).unwrap(), &before);
+            assert!(
+                session
+                    .call_function(
+                        function,
+                        &[Value::Handle(caster), Value::Real(invalid), Value::Real(0.),]
+                    )
+                    .is_err()
+            );
+            assert_eq!(
+                session
+                    .host()
+                    .unwrap()
+                    .objects()
+                    .executed_unit(caster)
+                    .unwrap(),
+                &before
+            );
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    session.host().unwrap().objects().test_native_clock_state()
+                ),
+                clock
+            );
+        }
     }
 }
 
@@ -3064,16 +3100,16 @@ boolean Ready=SpawnTimed()
 endglobals
 function SpawnTimed takes nothing returns boolean
 set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
-call SetUnitFacingTimed(H,90.0,0.0)
+call SetUnitFacingTimed(H,-90.0,0.0)
 set GlobalFace=GetUnitFacing(H)
 return true
 endfunction
 function config takes nothing returns nothing
-call SetUnitFacingTimed(H,180.0,0.0)
+call SetUnitFacingTimed(H,-450.0,0.0)
 set ConfigFace=GetUnitFacing(H)
 endfunction
 function main takes nothing returns nothing
-call SetUnitFacingTimed(H,270.0,0.0)
+call SetUnitFacingTimed(H,-810.0,0.0)
 set MainFace=GetUnitFacing(H)
 endfunction
 "#;
