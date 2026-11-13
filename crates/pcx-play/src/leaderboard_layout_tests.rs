@@ -18,6 +18,14 @@ fn fixture() -> BTreeMap<u32, u8> {
         (0x5e7ba0, 0x873a10),
         (0x5f3ddb, 0x873a10),
         (0x652c8e, 0x62aa80),
+        (0x4a1e87, 0x4822b0),
+        (0x4a1e9f, 0x482770),
+        (0x4a1eaf, 0x511080),
+        (0x4a1ec6, 0x635cf0),
+        (0x4a2096, 0x4822b0),
+        (0x4a20a4, 0x511080),
+        (0x4a20b5, 0x64f000),
+        (0x64f00f, 0x52d670),
     ] {
         put(va, &[0xe8], target.wrapping_sub(va + 5));
     }
@@ -65,7 +73,28 @@ fn fixture() -> BTreeMap<u32, u8> {
     put(0x63977d, &[0xc7, 0x45, 0xe4], (-0.4_f32).to_bits());
     put(0x6395d1, &[0x68], 0x200);
     put(0x6395fc, &[0x68], 0x220);
+    put(0x49ff27, &[0x68], 0x4a1e80);
+    put(0x49ff8e, &[0x68], 0x4a2090);
     for (va, bytes) in [
+        (0x4a1e91, &[0x85, 0xf6, 0x75, 0x06][..]),
+        (0x4a1ea9, &[0x85, 0xff, 0x74, 0x0d]),
+        (0x4a1eb6, &[0x85, 0xc9, 0x75, 0x07]),
+        (0x4a1ec1, &[0x0f, 0xb6, 0x47, 0x30, 0x50]),
+        (0x635cfa, &[0x33, 0xd2, 0x33, 0xc9]),
+        (0x635d20, &[0x39, 0x78, 0x64, 0x74, 0x06]),
+        (0x635d28, &[0x42, 0xeb, 0xe5]),
+        (0x635d2b, &[0x5f, 0x8b, 0xc2, 0x5e, 0x5d, 0xc2, 0x04, 0x00]),
+        (0x4a209e, &[0x85, 0xc0, 0x74, 0x18]),
+        (0x4a20a9, &[0x85, 0xc0, 0x74, 0x0d]),
+        (0x64f014, &[0x85, 0xc0, 0x74, 0x14]),
+        (0x64f018, &[0x8b, 0x4d, 0x0c, 0x89, 0x48, 0x54]),
+        (0x52d677, &[0x85, 0xf6, 0x78, 0x44]),
+        (0x52d67b, &[0x3b, 0xb1, 0x00, 0x02, 0x00, 0x00, 0x7d, 0x3c]),
+        (0x52d6bf, &[0x33, 0xc0, 0x5e, 0x5d, 0xc2, 0x04, 0x00]),
+        (0x4a1e95, &[0x83, 0xc8, 0xf9]),
+        (0x4a1ebb, &[0x83, 0xc8, 0xf9]),
+        (0x635d34, &[0x83, 0xc8, 0xf9]),
+        (0x4a1f19, &[0x83, 0xf8, 0xf9]),
         (0x897a82, &[0x8b, 0x86, 0x20, 0x01, 0x00, 0x00][..]),
         (0x897a88, &[0x89, 0x83, 0x48, 0x02, 0x00, 0x00]),
         (0x897aa1, &[0x8b, 0x86, 0x24, 0x01, 0x00, 0x00]),
@@ -106,6 +135,24 @@ fn decode(data: &BTreeMap<u32, u8>) -> Result<Rules, String> {
                 .collect()
         },
     )
+}
+pub(crate) fn synthetic_rules() -> Rules {
+    decode(&fixture()).unwrap()
+}
+
+#[test]
+fn missing_row_uses_nonstock_sentinel_and_rejects_changed_query_or_setter_branches() {
+    assert_eq!(synthetic_rules().missing_player_index, -7);
+    for address in [0x4a1e87, 0x635d20, 0x4a1e97, 0x64f014, 0x52d681] {
+        let mut data = fixture();
+        data.insert(address, 0x90);
+        assert!(decode(&data).is_err(), "{address:#x}");
+    }
+    let mut data = fixture();
+    for address in [0x4a1e97, 0x4a1ebd, 0x635d36, 0x4a1f1b] {
+        data.insert(address, 1);
+    }
+    assert!(decode(&data).is_err());
 }
 #[test]
 fn geometry_uses_operands_and_measured_columns() {
@@ -163,8 +210,15 @@ fn malformed_operand_and_nonfinite_source_refuse() {
 #[test]
 #[ignore = "requires PCX_WAR3_EXE pointing at the reviewed local client"]
 fn leaderboard_selected_client_rules_are_read_from_original_bytes() {
+    use std::io::Read;
     let path = std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE");
-    let bytes = std::fs::read(path).unwrap();
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .unwrap()
+        .take((32 << 20) + 1)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert!(bytes.len() <= 32 << 20);
     let rules = Rules::reviewed_legacy(
         &bytes,
         AssetIdentity {
@@ -176,5 +230,6 @@ fn leaderboard_selected_client_rules_are_read_from_original_bytes() {
     .unwrap();
     assert!(!rules.font_key.is_empty());
     assert!(rules.row_height > 0.);
+    assert!(rules.missing_player_index < 0);
     assert!(rules.backdrop_tile_size(None, 0.037).unwrap() > 0.);
 }

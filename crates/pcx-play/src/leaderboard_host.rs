@@ -58,7 +58,7 @@ impl LeaderboardState {
     }
 }
 const CREATE: &str = "CreateLeaderboard";
-const NATIVES: &[(&str, &[&str], &str)] = &[
+pub(super) const NATIVES: &[(&str, &[&str], &str)] = &[
     (CREATE, &[], "leaderboard"),
     ("DestroyLeaderboard", &["leaderboard"], "nothing"),
     ("LeaderboardDisplay", &["leaderboard", "boolean"], "nothing"),
@@ -302,6 +302,46 @@ impl ObjectHost {
             {
                 return Err(self.inner.error(name, Failure::Signature));
             }
+            if let Some(rules) = &self.leaderboard_layout
+                && matches!(
+                    name,
+                    "LeaderboardGetPlayerIndex" | "LeaderboardSetItemValue"
+                )
+            {
+                let absent = if name == "LeaderboardGetPlayerIndex" {
+                    Value::Int(rules.missing_player_index)
+                } else {
+                    Value::Null
+                };
+                match args[0] {
+                    Value::Null => return Ok(absent),
+                    Value::Handle(id) => match self
+                        .inner
+                        .entry(id)
+                        .map_err(|e| self.inner.error(name, e.failure))?
+                    {
+                        Entry::Leaderboard { live: false } => return Ok(absent),
+                        Entry::Leaderboard { live: true } => {}
+                        _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                    },
+                    _ => unreachable!("validated leaderboard signature"),
+                }
+                if name == "LeaderboardGetPlayerIndex" && args[1] == Value::Null {
+                    return Ok(absent);
+                }
+                if let ("LeaderboardSetItemValue", [Value::Handle(id), Value::Int(row), _]) =
+                    (name, args)
+                {
+                    let index = self.leaderboard_index(name, *id)?;
+                    let board = &self.leaderboards.as_ref().expect("admitted").boards[index];
+                    if usize::try_from(*row)
+                        .ok()
+                        .is_none_or(|row| row >= board.items.len())
+                    {
+                        return Ok(Value::Null);
+                    }
+                }
+            }
             // These native wrappers return before touching presentation when
             // typed resolution finds no live board. Keep unknown identities strict.
             if matches!(
@@ -468,12 +508,22 @@ impl ObjectHost {
                 if name == "LeaderboardHasPlayerItem" {
                     return Ok(Value::Bool(row.is_some()));
                 }
+                if name == "LeaderboardGetPlayerIndex" {
+                    return row
+                        .map(|row| i32::try_from(row).expect("budget"))
+                        .or_else(|| {
+                            self.leaderboard_layout
+                                .as_ref()
+                                .map(|r| r.missing_player_index)
+                        })
+                        .map(Value::Int)
+                        .ok_or_else(|| {
+                            fail(Failure::LeaderboardState("player has no leaderboard row"))
+                        });
+                }
                 let row = row.ok_or_else(|| {
                     fail(Failure::LeaderboardState("player has no leaderboard row"))
                 })?;
-                if name == "LeaderboardGetPlayerIndex" {
-                    return Ok(Value::Int(i32::try_from(row).expect("budget")));
-                }
                 let state = self.leaderboards.as_mut().expect("admitted");
                 let removed = state.boards[index].items.remove(row);
                 state.text_bytes -= removed.label.len();

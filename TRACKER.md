@@ -7390,3 +7390,37 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   frontier. These are recorded blockers, not passing mission horizons. Current
   binary identity and six isolated replay receipts:
   `/tmp/pc3-resident-lifecycle-horizons/`.
+
+
+- 2026-11-13: Source-qualified leaderboard index queries return their parsed
+  missing-row sentinel. Invalid value updates ignore absent boards/rows without
+  revision or handle changes, allowing the shipped player-value helper to
+  continue. Coverage accounting now consumes this family's actual dispatch
+  table. Synthetic nonstock rules and public VM/host cases exercise the source
+  branches; no new original-client or rendered comparison is claimed. See
+  [leaderboards](docs/re-notes/script-leaderboards.md).
+
+- 2026-11-13: `CAbilityParasite` default activation is admitted from the selected
+  native class. Both TFT map headers resolve through the actual Custom_V1
+  recipe, object tables and CampaignAbilityFunc profile to nnsw/ANpa and its
+  registered orders. Casting/acquisition remain separate. See
+  [autocast defaults](docs/re-notes/ability-autocast-on.md).
+
+- 2026-11-13: Structure upgrades support signed cheaper-target credits and
+  current-owner cancellation charges through the canonical resource lifecycle.
+  Source money bounds, overflow and prepayment checks remain explicit. The
+  pending-form mode is now source-bound; enabled behavior remains unsupported.
+  Malformed upgrade-only scalar semantics reject upgrades while preserving
+  independent training/research, including their actual admission/refund paths.
+  Global syntax and common policy errors remain strict. See
+  [production queues](docs/re-notes/player-production-queues.md).
+
+  Final combined validation passes 3,563 package tests, zero failed, 173
+  explicit ignores; twenty explicit source/native-witness gates, strict
+  native/WASM core checks and library builds pass. Application session,
+  delivery, startup, audio and leaderboard consumers pass 351 test executions.
+  The coverage omission and optional-selector isolation findings are corrected;
+  frozen Rust hashes match the staged source. Receipts:
+  `/tmp/pc3-leaderboard-parasite-upgrade-accepted-validation/`.
+  Source-wide native pacing, byte-valued strings, full save/load, enabled upgrade
+  pending forms/damage refunds and complete automatic casts remain unfinished.

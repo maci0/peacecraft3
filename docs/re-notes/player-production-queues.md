@@ -335,13 +335,101 @@ repeated cleanup and malformed target pool/placement refusal before mutation.
 These tests do not prove every native tick, rounding boundary, renderer or
 platform. The original finish event's exact subsecond scheduling remains a
 separate clock qualification; the source-duration check uses adjacent samples.
-Enabled `UpgradeDamageRefundPenalty`, negative price credits, upgrade events
-in the recreation, upgraded/researched pool bonuses and other changed death
-award/ability classes remain unfinished. The enabled penalty and negative price
-classes retain their explicit admission errors.
+Enabled `UpgradeDamageRefundPenalty`, upgrade events in the recreation,
+upgraded/researched pool bonuses and other changed death award/ability classes
+remain unfinished. The enabled penalty retains its explicit admission error.
+Signed price credits are qualified separately below.
 
 Mixed training/structure-upgrade queues also refuse before spending; their native
 admission behavior has not been qualified.
 
 Removed-handle `GetUnitTypeId` still returns a strict host error; the native
 delayed zero result is recorded above and is not claimed as implemented.
+
+
+## Signed upgrade prices and remaining damage accounting
+
+The selected 1.29.2.9231 image remains
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
+The following qualification is static native-code and shipped authoring evidence,
+not a new original-client observation or a campaign encounter. Both original
+and target costs can be valid nonnegative authored amounts while their upgrade
+difference is negative. `UnitMetaData.slk` admits that nonnegative cost domain.
+The original metadata and analysis exports stay local.
+
+The root upgrade admission method at `0xb87ce0` subtracts original gold and wood
+when the selected `RelativeUpgradeCost` requests differences, then compares each
+signed price with the corresponding bank. It has no negative-price rejection.
+The in-progress admission at `0xb63580` negates those differences and credits or
+debits the banks. Cancellation at `0xb63ad0` multiplies the signed differences by
+the selected upgrade refund rate and truncates each result toward zero. Its bank
+path, `0x4b5820` / `0x4b5860` through `0x4b58a0`, clamps an exhausted bank to zero.
+A cancellation can therefore charge back part of a previous credit even after
+that credit has been spent. It does not require enough money to cancel.
+
+The recreation retains these signed prices in the existing canonical job.
+Admission checks both resource requirements before committing either bank.
+Explicit cancellation uses the retained price and current owner; underfunded
+negative refunds clamp to zero, and positive credits use the existing selected
+resource scale and upper bound. Training and research keep their own negative
+cost refusals. Missing source policy, invalid bounds and unsupported integer or
+scaled overflow refuse before resource or queue mutation. The native arithmetic
+can wrap outside this admitted range; that wider class remains unsupported.
+Death and removal still discard the job without a refund, and completion keeps
+the admission credit. No new job state or codec fields are introduced.
+
+Synthetic public-lifecycle tests cover mixed signed gold/wood prices, independent
+affordability, a varied scale and cap, recipient cancellation after spending,
+completion, death, removal, repeat cleanup and source/overflow refusal. They do
+not establish original-client tick parity or every intermediate bank fraction.
+Static evidence is retained locally in
+`/tmp/pc3-sol61-05-upgrade-signed-damage/native-evidence-2.json`:
+`ev_41909c80a387df5ef8729a1435567b86b751345eff45e65e1218689e7af6be7b`
+(admission), `ev_8869393344c0c8603471bd1d608d578c0c1c0693d1d06ebe3b804540f2fd8f8f`
+(payment), and `ev_7263d07f11b61939b4a36616e89b1707ddcd04e477e53b49116ee55283bc2710`
+(cancellation). Ghidra pseudocode is a derived view; signed comparisons and
+arithmetic were checked against the selected image's instructions.
+
+Enabled damage penalties require a different connection from final health loss.
+The child constructor at `0xb641c0` initializes its FloatMini tracker at
+`+0xa4/+0xa8` from a source-initialized zero. The FloatMini assignment at `0x470120`
+stores directly without clamping. Handler `0xb63820` adds damage-event `+0x10`
+when the penalty is enabled. Its stage selector `0xb63810` returns the first
+phase, dispatched at `0x66796d` before armor, ethereal multipliers and later
+ability phases in `0x6677c0`. Counting the recreation's final health damage would
+therefore be incorrect. Refund method `0xb63df0` applies the selected rate times
+one minus tracker divided by the unit's maximum life, without a local factor
+clamp. Zero denominators and unusual signed/nonfinite event classes still need
+qualification; no guessed saturation or health-loss substitute is admitted.
+
+The constructor and direct write are qualified, but allocation/reuse across every
+cancel/restart path is not yet established. Methods `0xb63fa0`, `0xb64070` and
+`0xb64120` serialize, restore and visit the tracker; they are not reset evidence.
+The existing combat callers generally supply resolved damage, so enabling this
+policy needs its incoming phase connected through real callers first. See
+`ev_3e211b0c00ff42c9fcfdb96cf3300cd7c35d00e6dce9b10425765b7d765b8eb8`
+and `ev_1d940d7af3445d1869dcb0a4e2a1c796bd49d473be09674839ff7a7a708f3be4`.
+
+`UpgradeInProgressIdChange` also selects native pending-form/pool paths in
+`0xb63580`, `0xb638f0`, `0xb63ad0` and `0xb63d30`. The captured Melee_V0 control
+uses the old-form pending path; shipped Custom_V0 enables the sibling path.
+That sibling's public type query, mana, researched pool bonuses and interruptions
+remain to be qualified. The recreation now binds that selector from the selected image and ordered
+profiles. Its old-form implementation admits an explicitly disabled selector;
+enabled, missing and malformed values refuse before price, credit or queue
+mutation. This is an admission guard, not an implementation of the enabled
+pending-form path. Training and research refunds remain independent. Positive
+synthetic policies explicitly select the disabled mode. Upgrade start/cancel/finish event publication and public numeric cancel
+dispatch also remain open; the prior native capture records their contract.
+
+
+Upgrade-only scalar semantics are isolated inside the upgrade policy result.
+Textual, nonfinite and list-shaped values for the upgrade refund rate, relative
+cost mode, damage penalty or pending-form selector reject structure upgrades
+without disabling ordinary training or research admission and cancellation.
+Global profile syntax, identity, budget and common refund-rate errors remain
+strict failures. Regressions exercise each upgrade key with `bogus`, `NaN` and
+`1,0` through the shared parser and actual production callers, checking rejected
+upgrades leave the producer, queue, banks, handles and RNG unchanged. This fixes
+the outer-parser error introduced by selecting an additional upgrade-only key;
+it does not admit any malformed upgrade value or implement the enabled mode.

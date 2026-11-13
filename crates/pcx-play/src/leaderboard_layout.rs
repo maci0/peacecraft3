@@ -1,4 +1,4 @@
-//! Leaderboard geometry read from the reviewed client, alongside runtime FDF data.
+//! Leaderboard presentation and row-query rules read from the reviewed client.
 use crate::{
     inventory_layout::Rect,
     menu_lighting::REVIEWED_IMAGE,
@@ -28,6 +28,7 @@ pub struct Rules {
     pub name_right: f32,
     pub value_right: f32,
     pub creation_icons: bool,
+    pub missing_player_index: i32,
     pub backdrop_background_default: f32,
     pub row_shadow: [u8; 4],
     pub row_shadow_offset: [f32; 2],
@@ -136,9 +137,61 @@ impl Rules {
             (0x5e7ba0, 0x873a10),
             (0x5f3ddb, 0x873a10),
             (0x652c8e, 0x62aa80),
+            (0x4a1e87, 0x4822b0),
+            (0x4a1e9f, 0x482770),
+            (0x4a1eaf, 0x511080),
+            (0x4a1ec6, 0x635cf0),
+            (0x4a2096, 0x4822b0),
+            (0x4a20a4, 0x511080),
+            (0x4a20b5, 0x64f000),
+            (0x64f00f, 0x52d670),
         ] {
             if operand(&mut read, va, &[0xe8])? != target.wrapping_sub(va + 5) {
                 return Err(format!("unsupported layout call at {va:#x}"));
+            }
+        }
+        for (va, target) in [(0x49ff27, 0x4a1e80), (0x49ff8e, 0x4a2090)] {
+            if operand(&mut read, va, &[0x68])? != target {
+                return Err(format!("unsupported leaderboard registration at {va:#x}"));
+            }
+        }
+        for (va, bytes) in [
+            (0x4a1e91, &[0x85, 0xf6, 0x75, 0x06][..]),
+            (0x4a1ea9, &[0x85, 0xff, 0x74, 0x0d]),
+            (0x4a1eb6, &[0x85, 0xc9, 0x75, 0x07]),
+            (0x4a1ec1, &[0x0f, 0xb6, 0x47, 0x30, 0x50]),
+            (0x635cfa, &[0x33, 0xd2, 0x33, 0xc9]),
+            (0x635d20, &[0x39, 0x78, 0x64, 0x74, 0x06]),
+            (0x635d28, &[0x42, 0xeb, 0xe5]),
+            (0x635d2b, &[0x5f, 0x8b, 0xc2, 0x5e, 0x5d, 0xc2, 0x04, 0x00]),
+            (0x4a209e, &[0x85, 0xc0, 0x74, 0x18]),
+            (0x4a20a9, &[0x85, 0xc0, 0x74, 0x0d]),
+            (0x64f014, &[0x85, 0xc0, 0x74, 0x14]),
+            (0x64f018, &[0x8b, 0x4d, 0x0c, 0x89, 0x48, 0x54]),
+            (0x52d677, &[0x85, 0xf6, 0x78, 0x44]),
+            (0x52d67b, &[0x3b, 0xb1, 0x00, 0x02, 0x00, 0x00, 0x7d, 0x3c]),
+            (0x52d6bf, &[0x33, 0xc0, 0x5e, 0x5d, 0xc2, 0x04, 0x00]),
+        ] {
+            if read(va, bytes.len(), true)? != bytes {
+                return Err(format!("unsupported leaderboard row branch at {va:#x}"));
+            }
+        }
+        let missing = read(0x635d34, 3, true)?;
+        if missing.get(..2) != Some(&[0x83, 0xc8]) || missing.len() != 3 {
+            return Err("unsupported missing leaderboard index".into());
+        }
+        let missing_player_index = i32::from(missing[2] as i8);
+        if missing_player_index >= 0 {
+            return Err("missing leaderboard index overlaps live row indices".into());
+        }
+        for (va, prefix) in [
+            (0x4a1e95, &[0x83, 0xc8][..]),
+            (0x4a1ebb, &[0x83, 0xc8]),
+            (0x4a1f19, &[0x83, 0xf8]),
+        ] {
+            let bytes = read(va, 3, true)?;
+            if bytes.get(..2) != Some(prefix) || bytes.get(2) != Some(&missing[2]) {
+                return Err(format!("inconsistent missing leaderboard index at {va:#x}"));
             }
         }
         let world_bottom_left = [
@@ -243,6 +296,7 @@ impl Rules {
             name_right,
             value_right,
             creation_icons,
+            missing_player_index,
             backdrop_background_default,
             row_shadow,
             row_shadow_offset,
@@ -355,4 +409,4 @@ impl Rules {
 
 #[cfg(test)]
 #[path = "leaderboard_layout_tests.rs"]
-mod tests;
+pub(crate) mod tests;
