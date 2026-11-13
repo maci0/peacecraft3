@@ -192,6 +192,9 @@ pub(crate) trait AiWorld: Host {
         kind: i32,
         town: i32,
     ) -> Result<bool, String>;
+    fn ai_synchronous_depth(&self) -> Result<usize, String> {
+        Err("AI map callback owner is not admitted".into())
+    }
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_debug_text(&mut self) -> Result<(), String>;
     fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String>;
@@ -519,6 +522,16 @@ impl AiWorld for NeutralStack {
             .timer_game_time()
     }
 
+    fn ai_synchronous_depth(&self) -> Result<usize, String> {
+        Ok(self
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .synchronous_frame_depth())
+    }
     fn has_map_player_state_callbacks(&self) -> bool {
         self.inner()
             .inner()
@@ -886,6 +899,9 @@ impl AiWorld for NeutralStack {
     }
 }
 
+#[path = "campaign_ai_map_bridge.rs"]
+mod map_bridge;
+
 #[path = "campaign_ai_checkpoint.rs"]
 mod checkpoint;
 pub use checkpoint::CheckpointSource;
@@ -976,6 +992,16 @@ impl<W: AiWorld> Runtime<W> {
         player: i32,
         path: &str,
     ) -> Result<(), String> {
+        self.start_with_bridge(world, player, path, false)
+    }
+
+    pub(crate) fn start_with_bridge(
+        &mut self,
+        world: &mut Option<W>,
+        player: i32,
+        path: &str,
+        bridge_enabled: bool,
+    ) -> Result<(), String> {
         if path.len() > 16 << 10 {
             return Err("StartCampaignAI: script path exceeds 16 KiB".into());
         }
@@ -1043,7 +1069,8 @@ impl<W: AiWorld> Runtime<W> {
             .init_globals()
             .and_then(|()| {
                 let main = vm.program().function_id("main").expect("admitted AI main");
-                vm.run_thread(&[main])
+                vm.host().bridge_enabled = bridge_enabled;
+                vm.run_thread_until_checkpoint(&[main]).map(|_| ())
             })
             .map_err(|error| script_error(&mut vm, &error));
         let mut borrowed = vm.host().world.take().expect("AI world is lent");
@@ -1140,7 +1167,8 @@ impl<W: AiWorld> Runtime<W> {
         let mut vm = self.active.remove(&player).expect("checked AI player");
         vm.host().world = Some(borrowed);
         let result = vm
-            .resume_thread(ticket)
+            .resume_thread_until_checkpoint(ticket)
+            .map(|_| ())
             .map_err(|error| script_error(&mut vm, &error));
         *world = vm.host().world.take();
         if result.is_ok() {
@@ -1401,6 +1429,12 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub(crate) struct AiMapCall {
+    pub base_depth: usize,
+    pub call: ScriptCall,
+}
+
 pub(crate) struct AiHost<W: AiWorld> {
     player: i32,
     source: Option<AiSource>,
@@ -1410,6 +1444,8 @@ pub(crate) struct AiHost<W: AiWorld> {
     pause_depth: Option<i32>,
     sleepers: BTreeMap<u64, AiSleep>,
     next_ticket: u64,
+    bridge_enabled: bool,
+    pending_map: Option<AiMapCall>,
 }
 
 impl<W: AiWorld> AiHost<W> {
@@ -1423,6 +1459,8 @@ impl<W: AiWorld> AiHost<W> {
             pause_depth: None,
             sleepers: BTreeMap::new(),
             next_ticket: 0,
+            bridge_enabled: false,
+            pending_map: None,
         }
     }
 
@@ -1440,6 +1478,25 @@ impl<W: AiWorld> AiHost<W> {
 }
 
 impl<W: AiWorld> Host for AiHost<W> {
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        if name != "SetPlayerState" || !self.world()?.has_map_player_state_callbacks() {
+            return Ok(false);
+        }
+        if !self.bridge_enabled {
+            return Err("SetPlayerState: map callbacks from campaign AI initializer or direct host are not admitted".into());
+        }
+        if self.pending_map.is_some() {
+            return Err("campaign AI map callback is already pending".into());
+        }
+        let base_depth = self.world()?.ai_synchronous_depth()?;
+        let call = self
+            .world_mut()?
+            .begin_script_call(name, args)?
+            .ok_or("campaign AI callback capture was not admitted")?;
+        self.pending_map = Some(AiMapCall { base_depth, call });
+        Ok(true)
+    }
+
     fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
         self.world()?.string_case(bytes, upper)
     }

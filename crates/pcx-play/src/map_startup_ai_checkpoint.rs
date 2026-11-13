@@ -13,6 +13,9 @@ impl MapStartupHost {
         out: &mut Writer,
         vm_budget: Budget,
     ) -> Result<(), String> {
+        if self.ai_bridge.is_some() || self.ai_bridge_fault.is_some() {
+            return Err("checkpoint AI map callback owner is active or faulted".into());
+        }
         let world = self
             .inner
             .as_ref()
@@ -33,6 +36,9 @@ impl MapStartupHost {
         F: for<'a> FnMut(&ObjectHost, CheckpointReference<'a>) -> Result<(), String>,
         S: for<'a> FnMut(CheckpointSource<'a>) -> Result<Arc<MapScripts>, String>,
     {
+        if self.ai_bridge.is_some() || self.ai_bridge_fault.is_some() {
+            return Err("checkpoint AI map callback owner is active or faulted".into());
+        }
         let world = self
             .inner
             .as_ref()

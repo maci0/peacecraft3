@@ -25,6 +25,7 @@ pub(crate) enum AiWakeDelivery {
     Internal,
     RetriedPaused,
     Resumed,
+    MapBridge,
 }
 
 fn combined<T>(result: Result<T, String>, cleanup: Result<(), String>) -> Result<T, String> {
@@ -318,14 +319,21 @@ impl<W: AiWorld> Runtime<W> {
             .remove(&wake.player)
             .expect("checked AI context");
         vm.host().world = Some(borrowed);
-        let result = vm.resume_thread(wake.ticket).map_err(|error| {
-            format!(
-                "campaign AI player {}: {}",
-                wake.player,
-                super::script_error(&mut vm, &error)
-            )
-        });
+        let result = vm
+            .resume_thread_until_checkpoint(wake.ticket)
+            .map(|_| ())
+            .map_err(|error| {
+                format!(
+                    "campaign AI player {}: {}",
+                    wake.player,
+                    super::script_error(&mut vm, &error)
+                )
+            });
         *world = vm.host().world.take();
+        if result.is_ok() && vm.host().pending_map.is_some() {
+            self.active.insert(wake.player, vm);
+            return Ok(AiWakeDelivery::MapBridge);
+        }
         let returned = world.as_mut().expect("AI returns its canonical world");
         let cleanup = returned.ai_end_native_domain_callback();
         if result.is_ok() {

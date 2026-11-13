@@ -2594,3 +2594,6 @@ endfunction
         );
     }
 }
+
+#[path = "ai_map_bridge_cases.rs"]
+mod ai_map_bridge;
