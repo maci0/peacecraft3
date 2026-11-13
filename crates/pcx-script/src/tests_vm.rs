@@ -663,7 +663,14 @@ fn numeric_conversions_and_string_length_are_the_natives_the_table_runs() {
         crate::natives::implemented("R2SW"),
         Some(crate::natives::NativeImpl::RealToStringWidth)
     );
-    assert_eq!(crate::natives::implemented("SubString"), None);
+    assert_eq!(
+        crate::natives::implemented("SubString"),
+        Some(crate::natives::NativeImpl::SubString)
+    );
+    assert_eq!(
+        crate::natives::implemented("StringCase"),
+        Some(crate::natives::NativeImpl::StringCase)
+    );
 }
 
 #[test]
@@ -3033,4 +3040,53 @@ fn byte_strings_use_raw_equality_and_native_c_prefix_without_utf8_fallback() {
             .unwrap(),
         Value::Bool(false)
     );
+}
+
+#[test]
+fn case_substring_missing_policy_signatures_and_empty_recovery_are_explicit() {
+    let source = "native StringCase takes string text, boolean upper returns string\nnative SubString takes string text, integer start, integer finish returns string\nfunction change takes string text returns string\nreturn StringCase(text,true)\nendfunction\nfunction cut takes string text returns string\nreturn SubString(text,0,1)\nendfunction\n";
+    let program = crate::resolve(&crate::parse(source).unwrap()).unwrap();
+    let mut vm = crate::Vm::new(&program, crate::NullHost);
+    for (name, native) in [("change", "StringCase"), ("cut", "SubString")] {
+        assert!(
+            vm.call(name, &[Value::Str("raw".into())])
+                .unwrap_err()
+                .message
+                .contains(&format!("{native} source policy is not admitted"))
+        );
+        for value in [
+            Value::Null,
+            Value::Str("".into()),
+            Value::Str(vec![0, 0xff].into()),
+        ] {
+            assert_eq!(vm.call(name, &[value]).unwrap(), Value::Null);
+        }
+    }
+    assert!(
+        vm.call("change", &[Value::Str("TRIGSTR_7".into())])
+            .unwrap_err()
+            .message
+            .contains("source")
+    );
+    for declaration in [
+        "native StringCase takes string text returns string",
+        "native SubString takes string text, real start, integer finish returns string",
+    ] {
+        let source = format!(
+            "{declaration}\nfunction run takes nothing returns string\nreturn {}\nendfunction",
+            if declaration.contains("StringCase") {
+                "StringCase(\"x\")"
+            } else {
+                "SubString(\"x\",0,1)"
+            }
+        );
+        let program = crate::resolve(&crate::parse(&source).unwrap()).unwrap();
+        assert!(
+            crate::Vm::new(&program, crate::NullHost)
+                .call("run", &[])
+                .unwrap_err()
+                .message
+                .contains("supplied declaration")
+        );
+    }
 }

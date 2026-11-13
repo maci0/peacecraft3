@@ -776,6 +776,7 @@ pub fn prepare(
         }),
         numeric: Some(source.numeric),
         script_hash: Some(source.script_hash),
+        script_strings: Some(source.script_strings),
         destructable_restore: Some(source.destructable_restore),
         experience_handicap: Some(source.experience),
         health_handicap: Some(source.health),
