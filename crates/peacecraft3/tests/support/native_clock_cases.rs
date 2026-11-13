@@ -90,6 +90,16 @@ fn numeric(nonstock: bool) -> NumericPolicy {
                 script: clock::Domain::Real,
                 ai: clock::Domain::Game,
             },
+            turn: clock::turn::Rules {
+                quantum_ms: 25,
+                credit_cap: 4000,
+                speed_steps: Arc::from([1, 2, 3]),
+                scale: 1f32.to_bits(),
+                modifier: 1,
+                elapsed_numerator: 1,
+                elapsed_denominator: 1,
+                initial_carry: 0,
+            },
         })
     } else {
         numeric
@@ -163,7 +173,14 @@ endfunction
                     0,
                 )
             };
-            assert!(matches!(selection, Err(TimerSessionError::Timer(_))));
+            if paired {
+                assert!(matches!(
+                    selection,
+                    Err(TimerSessionError::QueueBudget("timer delivery"))
+                ));
+            } else {
+                assert!(matches!(selection, Err(TimerSessionError::Timer(_))));
+            }
             // The paired selector visits our one timer before world projection.
             let error = session
                 .test_advance_timers_with_projection_work(0.25, 8, usize::from(paired))
@@ -196,6 +213,13 @@ endfunction
                     let retry = session.advance_native_frame(input, 8);
                     let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
                         panic!("frame input hid the original projection fault: {retry:?}")
+                    };
+                    assert!(Arc::ptr_eq(&fault, &retry_fault));
+                }
+                for input in [Some(Duration::from_millis(333)), None] {
+                    let retry = session.advance_native_counter_frame(input, 8);
+                    let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                        panic!("counter input hid the original projection fault: {retry:?}")
                     };
                     assert!(Arc::ptr_eq(&fault, &retry_fault));
                 }
@@ -1721,4 +1745,412 @@ endfunction
             .native_queue_point(clock::Domain::Real),
         Some(clock::Point { cycle: 0, local: 0 })
     );
+}
+
+fn publish_counter_map(app: &mut App, script: &str) {
+    let common = format!(
+        "{}\n{}",
+        super::super::timed_trigger_cases::COMMON,
+        "\
+type gamespeed extends handle
+type mapflag extends handle
+constant native ConvertMapFlag takes integer value returns mapflag
+native SetMapFlag takes mapflag flag, boolean value returns nothing
+constant native ConvertGameSpeed takes integer value returns gamespeed
+constant native GetGameSpeed takes nothing returns gamespeed
+native SetGameSpeed takes gamespeed value returns nothing
+native IsFogEnabled takes nothing returns boolean
+native IsFogMaskEnabled takes nothing returns boolean
+native FogEnable takes boolean value returns nothing
+native FogMaskEnable takes boolean value returns nothing
+native TriggerSleepAction takes real seconds returns nothing
+globals
+constant gamespeed COUNTER_SLOW=ConvertGameSpeed(0)
+constant gamespeed COUNTER_NORMAL=ConvertGameSpeed(1)
+constant gamespeed COUNTER_FAST=ConvertGameSpeed(2)
+constant gamespeed COUNTER_UNKNOWN=ConvertGameSpeed(7)
+constant mapflag MAP_LOCK_SPEED=ConvertMapFlag(1024)
+endglobals
+"
+    );
+    deliver_timer_with(app, script, 1, &common, |inputs| {
+        inputs.timer_time = Some(0.);
+        inputs.numeric = Some(numeric(true));
+        inputs.enumeration.names.extend([
+            "ConvertGameSpeed".into(),
+            "ConvertGameEvent".into(),
+            "ConvertMapFlag".into(),
+        ]);
+        inputs.enumeration.limits.max_handles = 256;
+        inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+            initial_enabled: true,
+            timer_event_global: "TEST_TIMER_EVENT".into(),
+            max_timed_events: 16,
+            max_parked_threads: 16,
+        });
+    });
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = Arc::clone(session.context().unwrap());
+    let Some(Value::Handle(speed)) = session.global("COUNTER_NORMAL") else {
+        panic!("speed token")
+    };
+    session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .admit_startup_settings(
+            &context,
+            pcx_play::playercolor_host::StartupSettings {
+                speed,
+                fog_enabled: true,
+                fog_mask_enabled: true,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_public_session_uses_admitted_speed_and_progresses_real_sleeps() {
+    let mut app = timer_app();
+    publish_counter_map(&mut app, PAIRED_SLEEP);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(12)));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(100)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.25)));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 1.25f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_public_pause_finishes_grant_then_real_wake_unpauses() {
+    let script = "\
+globals
+trigger action=CreateTrigger()
+timer starter=CreateTimer()
+integer trace=0
+endglobals
+function wait takes nothing returns nothing
+set trace=1
+call PauseGame(true)
+call TriggerSleepAction(0.125)
+set trace=2
+call PauseGame(false)
+endfunction
+function begin takes nothing returns nothing
+call TriggerExecute(action)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(action,function wait)
+call TimerStart(starter,0.0625,false,function begin)
+endfunction
+";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(50)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    assert_eq!(session.host().unwrap().objects().game_paused(), Some(true));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(75)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(2)));
+    assert_eq!(session.host().unwrap().objects().game_paused(), Some(false));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.5f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_speed_lock_invalid_index_and_legacy_refusals_are_atomic() {
+    use pcx_script::Host;
+    let script = "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let normal = session.global("COUNTER_NORMAL").unwrap();
+    let fast = session.global("COUNTER_FAST").unwrap();
+    let unknown = session.global("COUNTER_UNKNOWN").unwrap();
+    let lock = session.global("MAP_LOCK_SPEED").unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&fast))
+            .is_err()
+    );
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        normal
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::ZERO), 16)
+        .unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&unknown))
+            .is_err()
+    );
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        normal
+    );
+    session
+        .host()
+        .unwrap()
+        .native("SetMapFlag", &[lock.clone(), Value::Bool(true)])
+        .unwrap();
+    session
+        .host()
+        .unwrap()
+        .native("SetGameSpeed", std::slice::from_ref(&fast))
+        .unwrap();
+    session
+        .host()
+        .unwrap()
+        .native("SetGameSpeed", &[unknown])
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        normal
+    );
+    session
+        .host()
+        .unwrap()
+        .native("SetMapFlag", &[lock, Value::Bool(false)])
+        .unwrap();
+    session
+        .host()
+        .unwrap()
+        .native("SetGameSpeed", std::slice::from_ref(&fast))
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        fast
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.375f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_speed_changes_do_not_rewrite_a_pending_or_active_grant() {
+    use pcx_script::Host;
+    let script = "\
+globals
+timer t=CreateTimer()
+integer trace=0
+endglobals
+function switch takes nothing returns nothing
+set trace=trace+1
+call SetGameSpeed(COUNTER_FAST)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TimerStart(t,0.0625,false,function switch)
+endfunction
+";
+    for pending in [false, true] {
+        let mut app = timer_app();
+        publish_counter_map(&mut app, script);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let input = Some(Duration::from_millis(50));
+        if pending {
+            assert!(session.advance_native_counter_frame(input, 0).is_err());
+            let fast = session.global("COUNTER_FAST").unwrap();
+            session
+                .host()
+                .unwrap()
+                .native("SetGameSpeed", &[fast])
+                .unwrap();
+            session.advance_native_counter_frame(None, 16).unwrap();
+        } else {
+            session.advance_native_counter_frame(input, 16).unwrap();
+        }
+        assert_eq!(session.global("trace"), Some(Value::Int(1)));
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: 0.625f32.to_bits()
+            })
+        );
+        assert!(session.advance_timers(1., 16).is_err());
+        session.advance_native_counter_frame(None, 16).unwrap();
+        assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_speed_changes_require_the_counter_rate_consumer() {
+    use pcx_script::Host;
+    for producer in 0..3 {
+        let mut app = timer_app();
+        publish_counter_map(
+            &mut app,
+            "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+        );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let frame = clock::FrameInput {
+            game_elapsed: Duration::ZERO,
+            real_elapsed_ms: 0,
+        };
+        match producer {
+            0 => {
+                pcx_play::campaign_host::advance_paced_tick(&mut session, Duration::ZERO, 0., 16)
+                    .unwrap();
+            }
+            1 => {
+                session.advance_native_frame(Some(frame), 16).unwrap();
+            }
+            _ => {
+                session
+                    .advance_native_counter_frame(Some(Duration::ZERO), 16)
+                    .unwrap();
+            }
+        }
+        let normal = session.global("COUNTER_NORMAL").unwrap();
+        let fast = session.global("COUNTER_FAST").unwrap();
+        let before = format!(
+            "{:?}",
+            session.host().unwrap().objects().test_native_clock_state()
+        );
+        let result = session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&fast));
+        if producer == 2 {
+            result.unwrap();
+            assert_eq!(
+                session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+                fast
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "producer {producer} accepted an unused speed change"
+            );
+            assert_eq!(
+                session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+                normal
+            );
+        }
+        assert_eq!(
+            format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            ),
+            before
+        );
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", &[if producer == 2 { fast } else { normal }])
+            .unwrap();
+        match producer {
+            0 => {
+                pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    Duration::from_millis(250),
+                    0.25,
+                    16,
+                )
+                .unwrap();
+            }
+            1 => {
+                session
+                    .advance_native_frame(
+                        Some(clock::FrameInput {
+                            game_elapsed: Duration::from_millis(250),
+                            ..frame
+                        }),
+                        16,
+                    )
+                    .unwrap();
+            }
+            _ => {
+                session
+                    .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: if producer == 2 { 0.375f32 } else { 0.25f32 }.to_bits()
+            })
+        );
+    }
 }

@@ -306,7 +306,7 @@ impl NumericPolicy {
         self
     }
     pub(crate) fn native_game_clock(&self) -> Option<crate::native_game_clock::Rules> {
-        self.native_clock
+        self.native_clock.clone()
     }
     pub(crate) fn equality_threshold(&self) -> f32 {
         self.equality_threshold
@@ -324,6 +324,53 @@ impl NumericPolicy {
             return Ok(1.0f32.to_bits());
         }
         real::mul(left, self.reciprocal(right))
+    }
+
+    pub(crate) fn positive_remainder_shape(&self, bytes: &[u8], base: u32) -> bool {
+        word(bytes, 0x33) == Some(self.binding.reciprocal_table.va)
+            && word(bytes, 0x3e) == self.binding.reciprocal_table.va.checked_add(4)
+            && at(bytes, 0x8b, &[0x83, 0xe9, 0x7f])
+            && at(bytes, 0x95, &[0x83, 0xf9, 0x17])
+            && at(
+                bytes,
+                0x9a,
+                &[0x83, 0xc1, 8, 0xb8, 0, 0, 0, 0x80, 0xd3, 0xf8, 0x23, 0xc2],
+            )
+            && [
+                (0x79, self.binding.math_mul.va),
+                (0xb2, self.binding.math_sub.va),
+                (0xcf, self.binding.math_mul.va),
+                (0xfb, self.binding.math_sub.va),
+            ]
+            .iter()
+            .all(|&(offset, target)| call(bytes, base, offset) == Some(target))
+    }
+
+    /// The admitted nonnegative branch of the native fractional reciprocal product.
+    pub(crate) fn positive_remainder(&self, left: u32, right: u32) -> Result<u32, real::MathError> {
+        let l = f32::from_bits(left);
+        let r = f32::from_bits(right);
+        real::from_f32(l)?;
+        real::from_f32(r)?;
+        if l < 0.0 || r <= 0.0 {
+            return Err(real::MathError::Unsupported);
+        }
+        let q = real::mul(left, self.reciprocal(right))?;
+        let exponent = ((q >> 23) & 0xff) as i32 - 127;
+        let fractional = if exponent < 0 {
+            q
+        } else if exponent < 23 {
+            let integer = q & ((i32::MIN >> (exponent + 8)) as u32);
+            real::sub(q, integer)?
+        } else {
+            0
+        };
+        let remainder = real::mul(fractional, right)?;
+        if f32::from_bits(remainder) >= r {
+            real::sub(remainder, right)
+        } else {
+            Ok(remainder)
+        }
     }
 
     pub(crate) fn reciprocal(&self, right: u32) -> u32 {

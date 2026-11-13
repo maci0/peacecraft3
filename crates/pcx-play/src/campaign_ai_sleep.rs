@@ -1,6 +1,6 @@
 //! AI continuations retain legacy deadlines separately from source Game entries.
 use super::{AiHost, AiWorld, MAX_SLEEPERS, Runtime};
-use crate::native_game_clock::{Domain, Point, SleepRequest};
+use crate::native_game_clock::{Domain, Point, QueueError, SleepRequest};
 use pcx_script::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -208,15 +208,19 @@ impl<W: AiWorld> Runtime<W> {
         &mut self,
         until: Point,
         work: &mut usize,
-    ) -> Result<Option<AiWake>, String> {
+    ) -> Result<Option<AiWake>, QueueError> {
         let mut chosen: Option<AiWake> = None;
         for (&player, vm) in &mut self.active {
-            *work = work.checked_sub(1).ok_or("AI native selection work")?;
+            *work = work
+                .checked_sub(1)
+                .ok_or(QueueError::Budget("AI native selection"))?;
             if self.pending_retirement.contains(&player) {
                 continue;
             }
             for (&ticket, sleep) in &vm.host().sleepers {
-                *work = work.checked_sub(1).ok_or("AI native selection work")?;
+                *work = work
+                    .checked_sub(1)
+                    .ok_or(QueueError::Budget("AI native selection"))?;
                 let request = sleep
                     .native
                     .ok_or("AI sleep has no native source request")?;

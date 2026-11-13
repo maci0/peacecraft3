@@ -192,6 +192,16 @@ mod tests {
                     script: Domain::Real,
                     ai: Domain::Game,
                 },
+                turn: clock::turn::Rules {
+                    quantum_ms: 20,
+                    credit_cap: 512,
+                    speed_steps: Arc::from([1, 3, 5]),
+                    scale: 1f32.to_bits(),
+                    modifier: 1,
+                    elapsed_numerator: 1,
+                    elapsed_denominator: 1,
+                    initial_carry: 0,
+                },
             });
         let common = pcx_script::parse_script("type agent extends handle\ntype timer extends agent\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\nnative TimerStart takes timer t, real timeout, boolean periodic, code callback returns nothing\nnative TimerGetElapsed takes timer t returns real\nnative TimerGetRemaining takes timer t returns real\nnative TimerGetTimeout takes timer t returns real\nnative GetExpiredTimer takes nothing returns timer\n").unwrap();
         let script = pcx_script::parse_script("").unwrap();

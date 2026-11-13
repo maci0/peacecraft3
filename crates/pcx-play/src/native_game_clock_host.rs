@@ -1,6 +1,8 @@
 //! The published source clock stays with its canonical arena and timer queue.
 use super::{Error, Failure, ObjectHost};
-use crate::native_game_clock::{Domain, Driver, FrameInput, Point, Segment, SleepRequest, State};
+use crate::native_game_clock::{
+    Domain, Driver, Input, Point, QueueError, Segment, SleepRequest, State,
+};
 use std::time::Duration;
 
 #[path = "native_sleep_checkpoint.rs"]
@@ -42,7 +44,7 @@ impl ObjectHost {
                 ),
             ));
         }
-        let mut clock = State::new(rules)
+        let mut clock = State::new(rules.clone())
             .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
         if initial.to_bits() != f64::from(rules.simple.origin).to_bits() {
             clock
@@ -58,6 +60,53 @@ impl ObjectHost {
             .as_ref()
             .filter(|clock| clock.driver() != Driver::Legacy)
             .map(State::point)
+    }
+    pub fn native_counter_platform(&self) -> bool {
+        self.native_game_clock
+            .as_ref()
+            .is_some_and(State::counter_platform)
+    }
+    pub fn native_counter_progress_ns(&self) -> Option<u128> {
+        self.native_game_clock
+            .as_ref()
+            .filter(|clock| clock.counter_platform())
+            .map(State::counter_progress_ns)
+    }
+    pub fn native_counter_pending_ns(&self) -> Option<u128> {
+        self.native_game_clock
+            .as_ref()
+            .filter(|clock| clock.counter_platform())
+            .map(State::counter_pending_ns)
+    }
+    pub fn select_native_counter_platform(&mut self) -> Result<bool, Error> {
+        let Some(clock) = self.native_game_clock.as_ref() else {
+            return Ok(false);
+        };
+        if clock.driver() == Driver::Legacy {
+            return Ok(false);
+        }
+        if !self.inner.timer_slots.is_empty() || self.parked_thread_count() != 0 {
+            return Err(self.inner.error(
+                "native platform",
+                Failure::GameClock(
+                    "counter platform must be selected before script globals".into(),
+                ),
+            ));
+        }
+        let fresh = clock.driver() == Driver::Fresh;
+        let physics = if fresh {
+            self.prepare_native_physics_admission()?
+        } else {
+            None
+        };
+        let mut next = clock.clone();
+        next.select_counter_platform()
+            .map_err(|e| self.inner.error("native platform", Failure::GameClock(e)))?;
+        if fresh {
+            self.commit_native_physics_admission(physics);
+        }
+        self.native_game_clock = Some(next);
+        Ok(true)
     }
 
     pub(crate) fn select_legacy_clock_domain(
@@ -119,9 +168,9 @@ impl ObjectHost {
             .is_some_and(State::frame_active)
     }
 
-    pub(crate) fn enqueue_native_frame(
+    pub(crate) fn enqueue_native_input(
         &mut self,
-        input: FrameInput,
+        input: Input,
         work: &mut usize,
     ) -> Result<(), Error> {
         let fail = |e| self.inner.error("native frame", Failure::GameClock(e));
@@ -131,18 +180,20 @@ impl ObjectHost {
             .ok_or_else(|| fail("source clock is not admitted".into()))?;
         let fresh = clock.driver() == Driver::Fresh;
         let mut next = clock.clone();
-        next.enqueue_frame(input, work).map_err(fail)?;
+        next.enqueue_input(input, work).map_err(fail)?;
         let prepared = if fresh {
             Some((
                 self.prepare_native_timer_admission(work)?,
                 self.prepare_native_thread_admission(work)?,
+                self.prepare_native_physics_admission()?,
             ))
         } else {
             None
         };
-        if let Some((timers, threads)) = prepared {
+        if let Some((timers, threads, physics)) = prepared {
             self.commit_native_timer_rebase(timers);
             self.commit_native_thread_rows(threads);
+            self.commit_native_physics_admission(physics);
         }
         self.native_game_clock = Some(next);
         Ok(())
@@ -152,6 +203,21 @@ impl ObjectHost {
         &mut self,
         work: &mut usize,
     ) -> Result<Option<(Domain, Segment)>, Error> {
+        let speed = self
+            .startup_settings
+            .map(|settings| {
+                self.inner
+                    .symbolic_value(settings.speed, "gamespeed")
+                    .map_err(|e| self.inner.error("native counter", e.failure))
+                    .and_then(|value| {
+                        usize::try_from(value).map_err(|_| {
+                            self.inner
+                                .error("native counter", Failure::OutsideDomain(value))
+                        })
+                    })
+            })
+            .transpose()?;
+        let paused = self.game_paused() == Some(true);
         let clock = self.native_game_clock.as_mut().ok_or_else(|| {
             self.inner.error(
                 "native frame",
@@ -159,8 +225,16 @@ impl ObjectHost {
             )
         })?;
         clock
-            .next_frame_segment(work)
-            .map_err(|e| self.inner.error("native frame", Failure::GameClock(e)))
+            .next_frame_segment_with_settings(work, speed, paused)
+            .map_err(|e| {
+                self.inner.error(
+                    "native frame",
+                    match e {
+                        QueueError::Budget(stage) => Failure::Budget(stage),
+                        QueueError::Invalid(reason) => Failure::GameClock(reason),
+                    },
+                )
+            })
     }
     pub(crate) fn native_game_clock_seconds(&self, point: Point) -> Result<f64, Error> {
         self.native_game_clock
@@ -369,7 +443,15 @@ impl ObjectHost {
         } else {
             Vec::new()
         };
+        let physics = if fresh {
+            self.prepare_native_physics_admission()?
+        } else {
+            None
+        };
         self.commit_native_timer_rebase(timers);
+        if fresh {
+            self.commit_native_physics_admission(physics);
+        }
         self.native_game_clock = Some(next);
         Ok(true)
     }
@@ -382,9 +464,15 @@ impl ObjectHost {
             .native_game_clock
             .as_mut()
             .expect("admitted source clock");
-        let segment = clock
-            .next_segment(work)
-            .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
+        let segment = clock.next_segment(work).map_err(|e| {
+            self.inner.error(
+                "native game clock",
+                match e {
+                    QueueError::Budget(stage) => Failure::Budget(stage),
+                    QueueError::Invalid(reason) => Failure::GameClock(reason),
+                },
+            )
+        })?;
         Ok(segment.map(|segment| (segment, clock.rules().seconds(segment.point))))
     }
 
@@ -420,6 +508,7 @@ impl ObjectHost {
         finished.map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
         if segment.ends_cycle {
             let timers = self.prepare_native_timer_rebase(work)?;
+            let physics = self.prepare_native_physics_rebase(work)?;
             *work = work.checked_sub(self.autocast_ticks.len()).ok_or_else(|| {
                 self.inner
                     .error("native game clock", Failure::Budget("autocast rebase"))
@@ -450,6 +539,7 @@ impl ObjectHost {
                 ));
             }
             self.commit_native_timer_rebase(timers);
+            self.commit_native_physics_admission(physics);
             self.autocast_ticks = auto;
         }
         self.native_game_clock = Some(clock);

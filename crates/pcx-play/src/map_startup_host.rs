@@ -498,7 +498,7 @@ impl MapStartupHost {
         &mut self,
         until: crate::native_game_clock::Point,
         work: &mut usize,
-    ) -> Result<Option<crate::campaign_ai::AiWake>, String> {
+    ) -> Result<Option<crate::campaign_ai::AiWake>, crate::native_game_clock::QueueError> {
         self.ai.next_native_wake(until, work)
     }
     pub(crate) fn deliver_native_ai_wake(

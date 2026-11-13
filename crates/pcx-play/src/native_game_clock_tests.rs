@@ -21,6 +21,16 @@ fn rules() -> Rules {
             script: Domain::Real,
             ai: Domain::Game,
         },
+        turn: turn::Rules {
+            quantum_ms: 25,
+            credit_cap: 4000,
+            speed_steps: Arc::from([1, 2, 3]),
+            scale: 1f32.to_bits(),
+            modifier: 1,
+            elapsed_numerator: 1,
+            elapsed_denominator: 1,
+            initial_carry: 0,
+        },
     }
 }
 
@@ -143,6 +153,145 @@ fn real_counter_conversion_uses_its_loaded_sse_operands() {
         rule.delta(0x80000000).unwrap(),
         Some(1610612736f32.to_bits())
     );
+}
+
+#[test]
+fn counter_frames_keep_submillisecond_carry_and_get_tick_count_wrap() {
+    let mut policy = rules();
+    policy.frame.scale = 0.001f32.to_bits();
+    let mut state = State::new(policy.clone()).unwrap();
+    for _ in 0..10 {
+        state
+            .enqueue_counter_frame(Duration::from_micros(100), &mut 32)
+            .unwrap();
+        while let Some((domain, segment)) = state
+            .next_frame_segment_with_settings(&mut 32, Some(1), false)
+            .unwrap()
+        {
+            assert_eq!(domain, Domain::Real);
+            state.finish_frame_segment(domain, segment).unwrap();
+        }
+    }
+    assert_eq!(state.sub_ms_nanos, 0);
+    assert_eq!(state.turn_credit_ms, 1);
+    assert_eq!(state.completed_point().local, 0);
+    assert_eq!(
+        state.queue_point(Domain::Real).local,
+        policy.frame.delta(1).unwrap().unwrap()
+    );
+    let mut wrapped = State::new(policy).unwrap();
+    wrapped
+        .enqueue_counter_frame(Duration::from_millis(u64::from(u32::MAX) + 2), &mut 32)
+        .unwrap();
+    while let Some((domain, segment)) = wrapped
+        .next_frame_segment_with_settings(&mut 32, Some(1), false)
+        .unwrap()
+    {
+        wrapped.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(wrapped.turn_credit_ms, state.turn_credit_ms);
+    assert_eq!(
+        wrapped.queue_point(Domain::Real),
+        state.queue_point(Domain::Real)
+    );
+}
+
+#[test]
+fn counter_pause_and_speed_changes_apply_after_the_inflight_grant() {
+    let mut policy = rules();
+    policy.frame.scale = 0.001f32.to_bits();
+    let mut state = State::new(policy).unwrap();
+    state
+        .enqueue_counter_frame(Duration::from_millis(50), &mut 64)
+        .unwrap();
+    let (domain, first) = state
+        .next_frame_segment_with_settings(&mut 64, Some(2), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.point.local, 0.125f32.to_bits());
+    state.finish_frame_segment(domain, first).unwrap();
+    let mut games = 1;
+    while let Some((domain, segment)) = state
+        .next_frame_segment_with_settings(&mut 64, Some(0), true)
+        .unwrap()
+    {
+        games += usize::from(domain == Domain::Game);
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(games, 3);
+    assert_eq!(state.completed_point().local, 0.375f32.to_bits());
+    state
+        .enqueue_counter_frame(Duration::from_millis(25), &mut 64)
+        .unwrap();
+    while let Some((domain, segment)) = state
+        .next_frame_segment_with_settings(&mut 64, Some(0), false)
+        .unwrap()
+    {
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(state.completed_point().local, 0.5f32.to_bits());
+}
+
+#[test]
+fn counter_grant_uses_sse_fractional_carry_and_retains_work_refusal() {
+    let mut policy = rules();
+    policy.frame.scale = 0.001f32.to_bits();
+    policy.turn.scale = 0.5f32.to_bits();
+    let mut state = State::new(policy).unwrap();
+    state
+        .enqueue_counter_frame(Duration::from_millis(25), &mut 64)
+        .unwrap();
+    assert!(
+        state
+            .next_frame_segment_with_settings(&mut 0, Some(0), false)
+            .is_err()
+    );
+    while let Some((domain, segment)) = state
+        .next_frame_segment_with_settings(&mut 64, Some(0), false)
+        .unwrap()
+    {
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(state.turn_carry, 0.5f32.to_bits());
+    assert_eq!(state.completed_point().local, 0);
+    state
+        .enqueue_counter_frame(Duration::from_millis(25), &mut 64)
+        .unwrap();
+    while let Some((domain, segment)) = state
+        .next_frame_segment_with_settings(&mut 64, Some(0), false)
+        .unwrap()
+    {
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(state.turn_carry, 0);
+    assert_eq!(state.completed_point().local, 0.125f32.to_bits());
+}
+
+#[test]
+fn counter_committed_duration_excludes_retained_partial_frames() {
+    let mut policy = rules();
+    policy.frame.scale = 0.001f32.to_bits();
+    let mut state = State::new(policy).unwrap();
+    let elapsed = Duration::from_millis(25);
+    state.enqueue_counter_frame(elapsed, &mut 64).unwrap();
+    assert!(state.counter_platform());
+    assert_eq!(state.counter_progress_ns(), 0);
+    assert_eq!(state.counter_pending_ns(), elapsed.as_nanos());
+    let (domain, segment) = state
+        .next_frame_segment_with_settings(&mut 64, Some(1), false)
+        .unwrap()
+        .unwrap();
+    state.finish_frame_segment(domain, segment).unwrap();
+    assert_eq!(state.counter_progress_ns(), 0);
+    assert_eq!(state.counter_pending_ns(), elapsed.as_nanos());
+    while let Some((domain, segment)) = state
+        .next_frame_segment_with_settings(&mut 64, Some(1), false)
+        .unwrap()
+    {
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(state.counter_progress_ns(), elapsed.as_nanos());
+    assert_eq!(state.counter_pending_ns(), 0);
 }
 
 fn drain(state: &mut State, work: &mut usize) -> Vec<Segment> {
@@ -343,7 +492,7 @@ fn native_wrap_near_zero_rule_uses_source_tolerance_and_retains_two_drains() {
     policy.wrap_tolerance = 0.125f32.to_bits();
     policy.numerator = 3;
     policy.denominator = 10;
-    let mut state = State::new(policy).unwrap();
+    let mut state = State::new(policy.clone()).unwrap();
     state.pace(Duration::from_millis(2100)).unwrap();
     let trace = drain(&mut state, &mut 7);
     assert_eq!(trace.len(), 8);
@@ -420,7 +569,7 @@ fn selected_native_game_queue_derives_observed_step_and_first_wrap_model() {
     let policy = Rules::read(&image, &numeric, budget).unwrap();
     assert_eq!(policy.step, 0x3ba3d70a, "independent VM_READ observation");
     assert_eq!(policy.simple.cycle.to_bits(), 0x43960000);
-    let mut state = State::new(policy).unwrap();
+    let mut state = State::new(policy.clone()).unwrap();
     let steps = 60111u64; // Diagnostic model boundary; the native trace brackets the wrap.
     state
         .pace(Duration::from_nanos(

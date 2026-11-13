@@ -1,5 +1,5 @@
 //! Independently supplied real-clock progress, after a frame's game work.
-use super::{Pending, Point, Rules as ClockRules, Segment, call, real, shape, word};
+use super::{Pending, Point, QueueError, Rules as ClockRules, Segment, call, real, shape, word};
 use crate::script_numeric::NumericPolicy;
 use std::time::Duration;
 
@@ -106,15 +106,17 @@ impl Rules {
             return Ok(None);
         }
         // The producer uses SSE conversion and multiplication, before queue soft arithmetic.
-        let converted = (f64::from(milliseconds as i32)
-            + f64::from_bits(self.unsigned_correction[(milliseconds >> 31) as usize]))
-            as f32;
+        let converted = self.unsigned(milliseconds);
         let delta = converted * f32::from_bits(self.scale);
         let word = real::from_f32(delta).map_err(|e| e.to_string())?;
         if delta <= 0. {
             return Err("native real-clock conversion did not progress".into());
         }
         Ok(Some(word))
+    }
+    pub(super) fn unsigned(&self, value: u32) -> f32 {
+        (f64::from(value as i32) + f64::from_bits(self.unsigned_correction[(value >> 31) as usize]))
+            as f32
     }
 }
 
@@ -155,7 +157,7 @@ impl Queue {
         &mut self,
         rules: &ClockRules,
         work: &mut usize,
-    ) -> Result<Option<Segment>, String> {
+    ) -> Result<Option<Segment>, QueueError> {
         if let Some(pending) = self.pending {
             return Ok(Some(pending.segment));
         }
@@ -163,7 +165,7 @@ impl Queue {
             return Ok(None);
         };
         if *work == 0 {
-            return Err("native real-clock chunk budget exceeded".into());
+            return Err(QueueError::Budget("native real-clock chunk"));
         }
         let amount = if real::below_or_equal(remaining, rules.frame.chunk) {
             remaining
