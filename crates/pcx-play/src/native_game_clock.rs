@@ -15,6 +15,8 @@ pub mod frame;
 pub mod sleep;
 #[path = "native_turn_rules.rs"]
 pub mod turn;
+#[path = "native_clock_checkpoint.rs"]
+mod checkpoint;
 pub use frame::FrameInput;
 pub use sleep::Domain;
 

@@ -242,6 +242,85 @@ mod tests {
     }
 
     #[test]
+    fn native_clock_checkpoint_candidate_restores_source_scope_before_sleep_sections() {
+        let mut live = host();
+        live.pace_native_game_clock(Duration::ZERO, &mut 128)
+            .unwrap();
+        let mut request = live
+            .prepare_native_sleep(Domain::Game, 20.25, &mut 1)
+            .unwrap()
+            .unwrap();
+        live.pace_native_game_clock(Duration::from_secs(2), &mut 128)
+            .unwrap();
+        let mut work = 128;
+        while let Some((segment, until)) = live.next_native_game_segment(&mut work).unwrap() {
+            assert!(live.next_timer_expiry(until, &mut 0).unwrap().is_none());
+            if segment.ends_cycle {
+                live.rebase_native_sleep(&mut request).unwrap();
+            }
+            live.finish_native_game_segment(segment, &mut work).unwrap();
+        }
+        let point = live.native_queue_point(Domain::Game).unwrap();
+        live.begin_native_domain_callback(Domain::Game, point)
+            .unwrap();
+        let mut out = Writer::new(budget()).unwrap();
+        live.write_native_clock_checkpoint(&mut out).unwrap();
+        let clock_bytes = out.finish();
+        let mut out = Writer::new(budget()).unwrap();
+        live.write_sleep_checkpoint(request, Domain::Game, &mut out)
+            .unwrap();
+        let sleep_bytes = out.finish();
+        let mut candidate = host();
+        let before = format!("{:?}", candidate.test_native_clock_state());
+        for end in 0..clock_bytes.len() {
+            assert!(
+                candidate
+                    .restore_native_clock_checkpoint(
+                        &mut Reader::new(&clock_bytes[..end], budget()).unwrap()
+                    )
+                    .is_err()
+            );
+            assert_eq!(format!("{:?}", candidate.test_native_clock_state()), before);
+        }
+        for at in [1, 33] {
+            let mut foreign = clock_bytes.clone();
+            foreign[at] ^= 1;
+            assert!(
+                candidate
+                    .restore_native_clock_checkpoint(&mut Reader::new(&foreign, budget()).unwrap())
+                    .is_err()
+            );
+            assert_eq!(format!("{:?}", candidate.test_native_clock_state()), before);
+        }
+        let mut input = Reader::new(&clock_bytes, budget()).unwrap();
+        candidate
+            .restore_native_clock_checkpoint(&mut input)
+            .unwrap();
+        input.finish().unwrap();
+        assert_eq!(
+            format!("{:?}", candidate.test_native_clock_state()),
+            format!("{:?}", live.test_native_clock_state())
+        );
+        let mut input = Reader::new(&sleep_bytes, budget()).unwrap();
+        let mut restored = candidate
+            .read_sleep_checkpoint(&mut input, Domain::Game)
+            .unwrap();
+        input.finish().unwrap();
+        assert_eq!(request, restored);
+        assert_eq!(
+            live.advance_native_sleep(&mut request).unwrap(),
+            candidate.advance_native_sleep(&mut restored).unwrap()
+        );
+        assert_eq!(request, restored);
+        live.end_native_domain_callback().unwrap();
+        candidate.end_native_domain_callback().unwrap();
+        assert_eq!(
+            format!("{:?}", candidate.test_native_clock_state()),
+            format!("{:?}", live.test_native_clock_state())
+        );
+    }
+
+    #[test]
     fn deferred_sleep_checkpoint_validates_origin_before_native_or_legacy_admission() {
         let mut native = host();
         let request = native

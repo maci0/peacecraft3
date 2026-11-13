@@ -556,3 +556,23 @@ These are component reconstruction checks. The whole clock/world/application
 graph, immediate AI-to-map observer bridge, complete checkpoint owner, durable
 storage and cold publication remain incomplete; SaveGame/LoadGame and menu
 save/load remain unsupported.
+
+The native clock candidate section preserves both completed queue positions,
+source-derived pending wrap halves, selected callback domain and position, the
+ordered paired/counter frame FIFO and phase, pacing credit, turn credit and
+fractional carry, sub-millisecond counter remainder, platform selection and
+committed counter duration. Its policy fingerprint includes every admitted
+clock operand and the source speed-table digest; the table and image bytes stay
+in the local source provider. Candidate decoding validates source identity,
+frame ownership, exact source segment splits, counter low-DWORD conversion and
+allocation budgets before replacing this section. Sleep and timer sections must
+then resolve against that restored queue state in the unpublished whole root.
+
+Synthetic continuation regressions compare every next segment across both
+queues and wrap halves, including active callback scopes and queued counter
+inputs. A candidate-world regression restores the clock before a rebased sleep
+record and compares its next internal entry. Truncated or foreign sections leave
+the candidate clock unchanged. These are recreation component checks; no new
+original-client save behavior is claimed. They do not capture the application's
+outer delivery cursor, the complete world graph or durable storage, and do not
+enable SaveGame/LoadGame.
