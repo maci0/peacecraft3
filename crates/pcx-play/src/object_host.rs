@@ -1467,7 +1467,8 @@ pub use music::{MapMusicSelection, ThematicMusicRequest};
 
 #[path = "play_music_host.rs"]
 mod play_music;
-pub use play_music::{PlayMusicRequest, ThematicMusicExRequest};
+pub use play_music::volume_rules::Rules as RegularMusicVolumeRules;
+pub use play_music::{PlayMusicRequest, RegularMusicVolumeRequest, ThematicMusicExRequest};
 
 #[path = "sound_environment_host.rs"]
 mod environments;

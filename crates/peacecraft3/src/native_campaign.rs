@@ -476,6 +476,7 @@ fn configuration(
     };
     Ok(Configuration {
         resolver,
+        client_sources: recipe.client_sources(),
         campaign: Some(recipe),
         map,
         common,
@@ -498,7 +499,16 @@ fn campaign_recipe(dir: &Path, mode: GameMode) -> Result<Arc<CampaignRecipe>, St
             Addon::Roc => "VERSION_REIGN_OF_CHAOS",
             Addon::Tft => "VERSION_FROZEN_THRONE",
         };
+        let iat = pcx_play::playercolor_host::RegularMusicVolumeRules::backend_iat(image)?;
+        let demand =
+            pcx_play::client_module::ImportDemand::for_iat(image, iat, Default::default())?;
+        let module = match pcx_play::client_module::pin_sibling(dir, Path::new(source), &demand) {
+            Ok(module) => Ok(module),
+            Err(pcx_play::client_module::PinError::Invalid(reason)) => return Err(reason),
+            Err(error) => Err(error.to_string()),
+        };
         CampaignRecipe::pin(dir, asset_mode(mode)?, rules, image, None, global)
+            .and_then(|recipe| recipe.with_client_modules(demand, module))
             .map(Arc::new)
             .map_err(|error| error.to_string())
     })

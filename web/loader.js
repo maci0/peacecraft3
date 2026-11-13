@@ -18,6 +18,7 @@ import init, {
   selftest,
   stored_asset,
   stored_assets,
+  begin_archive_import_bound, client_module_request, committed_client_module_identity,
   begin_archive_import, cancel_archive_import, stage_archive, stage_client_image,
   pending_archive_member, commit_archive_import, archive_member,
   asset_revision, menu_music_path, menu_font_files, menu_font_alias,
@@ -308,7 +309,7 @@ try {
 } catch (error) {
   wasmLoading.error(`Demo loading failed: ${error.message}`);
   fail('wasm module', error);
-  for (const id of ['archives', 'self', 'drop', 'iso', 'iso-import', 'iso-cancel']) document.getElementById(id).disabled = true;
+  for (const id of ['archives', 'client-module', 'self', 'drop', 'iso', 'iso-import', 'iso-cancel']) document.getElementById(id).disabled = true;
   throw error;
 }
 say('wasm module loaded');
@@ -323,6 +324,8 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
         say(selftest());
         say(`in memory: ${stored_assets().join(', ') || '(nothing)'}`);
       } else {
+        retainedLooseFiles = [];
+        document.getElementById("client-module").value = "";
         say(`dropped ${drop_assets()} entries`);
         globalThis.peacecraft3Audio?.resetLocalAssets();
         refreshDemoControls();
@@ -337,6 +340,7 @@ for (const el of [document.getElementById('self'), document.getElementById('drop
 
 function localArchiveApi() {
   return {
+    begin_archive_import_bound, client_module_request,
     begin_archive_import, cancel_archive_import, stage_archive, stage_client_image, commit_archive_import,
   };
 }
@@ -344,15 +348,29 @@ function localArchiveApi() {
 // One optional client file may share this picker. Its bytes are staged with
 // stage_client_image inside the archive transaction. An archive-only selection
 // keeps the page's existing import.
-document.getElementById('archives').addEventListener('change', async (ev) => {
-  const files = [...ev.target.files];
+let retainedLooseFiles = [];
+function moduleOptions() {
+  return { clientModuleFile: document.getElementById('client-module').files[0] ?? null,
+    onClientModuleRequest(request) {
+      document.getElementById('client-module-request').textContent = request?.status === 'available'
+        ? `Optional module requested by this client: ${request.module_name}` : 'This client has no qualified optional module request.';
+    } };
+}
+document.getElementById('client-module').addEventListener('change', async () => {
+  if (retainedLooseFiles.length && !isoBusy) await importLooseFiles(retainedLooseFiles);
+});
+document.getElementById('archives').addEventListener('change', async ev => {
+  retainedLooseFiles = [...ev.target.files];
+  await importLooseFiles(retainedLooseFiles);
+  ev.target.value = '';
+});
+async function importLooseFiles(files) {
   if (demoOnly) {
     if (isoBusy || !files.length) return;
   } else if (!files.length) return;
   const selection = classifyLocalArchiveSelection(files);
   if (!selection.ok) {
     fail('local archives', localClientInputError(selection.reason));
-    ev.target.value = '';
     return;
   }
   const api = localArchiveApi();
@@ -360,9 +378,9 @@ document.getElementById('archives').addEventListener('change', async (ev) => {
     isoController = new AbortController();
     isoState(true);
     isoLoading.update({ phase: 'Reading local archives', loadedBytes: 0 });
-    let committed = false;
     try {
       const result = await importLocalArchives(files, api, {
+        ...moduleOptions(),
         signal: isoController.signal,
         onArchiveProgress(progress) {
           isoLoading.update({
@@ -377,30 +395,27 @@ document.getElementById('archives').addEventListener('change', async (ev) => {
           await new Promise(resolve => setTimeout(resolve, 0));
         },
       });
-      committed = true;
       for (const line of result.diagnostics) say(line, true);
       await applyLocalAudio({ sourceName: files.map(file => file.name).join(', '), edition: null, build: null });
       refreshDemoControls();
       say('Local archives committed; available menus come from validated content');
       isoLoading.complete('Local archives imported. Available menus follow supplied content.');
     } catch (error) {
-      if (committed) cancel_archive_import();
       isoLoading.error(error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error));
       fail('local archives', error);
     } finally {
       isoState(false);
-      ev.target.value = '';
-    }
+      }
     return;
   }
   if (selection.client && isoBusy) {
     fail('local archives', new Error('An import is already running.'));
-    ev.target.value = '';
     return;
   }
   let heldBusy = false;
   try {
     const result = await importLocalArchives(files, api, {
+        ...moduleOptions(),
       archiveOnly: selection.client ? undefined : async (archives) => {
         for (const file of archives) {
           try {
@@ -429,9 +444,8 @@ document.getElementById('archives').addEventListener('change', async (ev) => {
     fail('local archives', retained);
   } finally {
     if (heldBusy) isoState(false);
-    ev.target.value = '';
   }
-});
+}
 
 // Exported for the console, so the module's API can be poked at by hand: the
 // same calls a future asset loader would make.
@@ -441,6 +455,7 @@ window.peacecraft3 = {
   drop_assets,
   selftest,
   stored_asset,
+  begin_archive_import_bound, client_module_request, committed_client_module_identity,
   stored_assets, begin_archive_import, cancel_archive_import, stage_archive, stage_client_image,
   pending_archive_member, commit_archive_import, archive_member,
   asset_revision, menu_music_path, menu_font_files, menu_font_alias, discoverIso, importIsoCandidates,
@@ -495,6 +510,7 @@ function isoState(busy) {
   isoBusy = busy; isoInput.disabled = busy;
   mapConfiguration?.setImportBusy(busy);
   document.getElementById('archives').disabled = busy;
+  document.getElementById('client-module').disabled = busy;
   document.getElementById('drop').disabled = busy;
   isoCancel.disabled = !busy;
   isoImport.disabled = busy || !isoDiscovery?.candidates.length;
@@ -510,6 +526,8 @@ function installerProgress(work) {
 isoInput.addEventListener('change', async () => {
   const file = isoInput.files[0];
   if (!file || isoBusy) return;
+  retainedLooseFiles = [];
+  document.getElementById('client-module').value = '';
   isoFile = file; isoDiscovery = null; isoCandidates.replaceChildren();
   installerDecoder?.close(); installerDecoder = undefined; installerNeedsRestart = false;
   isoController = new AbortController(); isoState(true);
@@ -585,11 +603,24 @@ isoImport.addEventListener('click', async () => {
         await installerDecoder.inspect(isoFile, isoDiscovery, importSignal); installerNeedsRestart = false;
       }
       const extracted = await installerDecoder.extract(selected.map(c => c.id), importSignal);
+      let clientModule = null;
+      if (extracted.clientImage) {
+        const bytes = new Uint8Array(await extracted.clientImage.file.arrayBuffer());
+        importSignal.throwIfAborted();
+        const demand = JSON.parse(client_module_request(bytes));
+        if (demand.status === 'available') {
+          const auxiliary = await installerDecoder.extractClientModule(extracted.extractionId, demand, importSignal);
+          importSignal.throwIfAborted(); clientModule = auxiliary.module;
+        }
+        extracted.clientImage.bytes = bytes;
+      }
       const staged = await stageStoredInstallerFiles(extracted.files, isoDiscovery.provenance.sourceName, {
+        begin_archive_import_bound, client_module_request,
         begin_archive_import, cancel_archive_import, stage_archive, stage_client_image, commit_archive_import, stored_assets, asset_revision,
       }, {
         signal: importSignal,
         clientImage: extracted.clientImage ?? null,
+        clientModule,
         onProgress(work) {
           isoLoading.update({ phase: work.phase === 'hydrate'
             ? 'Validating authored model dependencies locally'
@@ -611,7 +642,6 @@ isoImport.addEventListener('click', async () => {
     isoLoading.complete(`Committed local assets at revision ${result.revision}; ${result.canonicalPaths.length} runtime paths. Edition/build unverified.`);
     window.dispatchEvent(new CustomEvent('peacecraft3-local-import', { detail: result }));
   } catch (error) {
-    cancel_archive_import();
     if (isoDiscovery.installer) installerNeedsRestart = true;
     isoLoading.error(error.name === 'AbortError' ? 'Import cancelled; current assets retained' : String(error));
     localImportActive = priorLocalMode;

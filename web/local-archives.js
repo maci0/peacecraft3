@@ -1,3 +1,4 @@
+import { beginClientImport, stageClientSources, readClientFile } from './iso/engine-member.js';
 // Local archive picker. A file whose name ends in .exe or .dll is one optional
 // client file. That file name is the source identity passed to stage_client_image.
 // CLIENT_IMAGE_BYTES is the memory budget. Size and the file name do not decide
@@ -66,12 +67,11 @@ async function readClientImage(file, signal) {
 }
 
 // Archive-only callers pass archiveOnly and keep their existing import.
-// A client file is read and rejected before begin_archive_import. Its bytes are
-// passed only to stage_client_image, after the archives and before commit.
+// Checked imports reserve their ticket before reads; legacy adapters retain their preflight.
 export async function importLocalArchives(files, api, options = {}) {
   const classified = classifyLocalArchiveSelection(files);
   if (!classified.ok) throw localClientInputError(classified.reason);
-  if (!classified.archives.length && !classified.client) {
+  if (!classified.archives.length && !classified.client && !options.clientModuleFile) {
     return { usedTransaction: false, summaries: [], diagnostics: [], clientStaged: false };
   }
   let signal = options.signal ?? null;
@@ -79,34 +79,49 @@ export async function importLocalArchives(files, api, options = {}) {
     const prepared = options.prepareTransaction() ?? {};
     if (prepared.signal) signal = prepared.signal;
   }
-  const image = classified.client ? await readClientImage(classified.client, signal) : null;
-  if (!image && options.archiveOnly) {
+  if (!classified.client && options.clientModuleFile) throw new Error("Auxiliary module requires a main in the same selection");
+  if (!classified.client && options.archiveOnly) {
     await options.archiveOnly(classified.archives);
     return { usedTransaction: false, summaries: [], diagnostics: [], clientStaged: false };
   }
   signal?.throwIfAborted();
-  api.begin_archive_import();
+  // Reserve a checked ticket before the first read can yield to a newer selection.
+  let tx = api.begin_archive_import_bound ? beginClientImport(api) : null;
   try {
+    const image = classified.client ? await readClientImage(classified.client, signal) : null;
+    let module = null;
+    const request = image && api.client_module_request ? JSON.parse(api.client_module_request(image.bytes)) : null;
+    options.onClientModuleRequest?.(request);
+    if (options.clientModuleFile) {
+      if (!image || request?.status !== 'available') throw new Error('Auxiliary module requires its supported main in the same selection');
+      if (options.clientModuleFile.name.toLowerCase() !== request.module_name.toLowerCase()) throw new Error('Auxiliary filename does not match the main import descriptor');
+      module = await readClientFile(options.clientModuleFile, signal);
+    }
+    signal?.throwIfAborted();
+    tx ??= beginClientImport(api);
     const summaries = [];
     let loadedBytes = 0;
     const totalBytes = classified.archives.reduce((sum, file) => sum + file.size, 0);
     for (const file of classified.archives) {
       const bytes = new Uint8Array(await file.arrayBuffer());
       signal?.throwIfAborted();
-      summaries.push(api.stage_archive(file.name, bytes));
+      summaries.push(tx.stage_archive(file.name, bytes));
       loadedBytes += bytes.length;
       options.onArchiveProgress?.({ loadedBytes, totalBytes });
       await new Promise(resolve => setTimeout(resolve, 0));
       signal?.throwIfAborted();
     }
     signal?.throwIfAborted();
-    if (image) api.stage_client_image(image.source, image.bytes);
+    if (image) stageClientSources(tx, image.source, image.bytes, {
+      kind: 'local', container: 'explicit loose co-selection', main_member: image.source,
+      module_member: options.clientModuleFile?.name ?? null, module_source: options.clientModuleFile?.name ?? null,
+    }, module);
     if (options.beforeCommit) await options.beforeCommit();
     signal?.throwIfAborted();
-    const diagnostics = api.commit_archive_import();
+    const diagnostics = tx.commit();
     return { usedTransaction: true, summaries, diagnostics, clientStaged: image !== null };
   } catch (error) {
-    api.cancel_archive_import();
+    tx?.cancel();
     throw error;
   }
 }
