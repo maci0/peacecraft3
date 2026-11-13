@@ -1062,6 +1062,8 @@ impl ObjectHost {
         args: &[Value],
         strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Result<Value, String> {
+        self.check_static_heading_native(name, args)
+            .map_err(|e| e.to_string())?;
         self.order_queue_observe(name, args);
         if let Some(result) = self.alt_minimap_icon_native_with_strings(name, args, strings) {
             return result.map_err(|e| e.to_string());

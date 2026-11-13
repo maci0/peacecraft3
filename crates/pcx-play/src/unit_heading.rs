@@ -7,6 +7,8 @@ pub mod direction;
 pub mod power;
 #[path = "unit_heading_profile.rs"]
 pub mod profile;
+#[path = "unit_heading_timed.rs"]
+pub mod timed;
 #[path = "unit_heading_visual.rs"]
 pub mod visual;
 
@@ -19,6 +21,7 @@ pub struct Rules {
     pub full_turn: f32,
     pub visual: Option<visual::Rules>,
     pub profile: Option<profile::Rules>,
+    pub timed: Option<timed::Rules>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -197,6 +200,7 @@ impl Rules {
             full_turn: value(read, word(&arc, 10)?)?,
             visual: None,
             profile: None,
+            timed: None,
         };
         if !rules.period.is_finite()
             || rules.period <= 0.0
@@ -645,7 +649,12 @@ pub(crate) mod tests {
                 arctangent: window(0x9a0da0, 423, true),
                 zero_initializer: window(0x401300, 16, true),
                 one_initializer: window(0x401460, 16, true),
-                trig: None,
+                trig: Some(crate::script_math::TrigBinding {
+                    sine_native: window(0x4ac180, 26, true),
+                    cosine_native: window(0x48afc0, 26, true),
+                    sine: window(0x9a1da0, 288, true),
+                    cosine: window(0x9a0fe0, 289, true),
+                }),
             },
             budget,
         )

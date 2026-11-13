@@ -5048,3 +5048,185 @@ fn structure_upgrade_food_death_and_equal_food_transfer_keep_canonical_owners_wi
         }
     }
 }
+
+fn timed_heading_production_fixture(mode1: bool) -> (Vm, HandleId, HandleId) {
+    let (image, origin, numeric, budget) =
+        crate::unit_activity::heading::tests::selected_numeric_image();
+    let registry = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
+    let admitted = crate::campaign_client::unit_activity(&image, origin, &registry)
+        .unwrap()
+        .with_heading(&image, &numeric, budget)
+        .unwrap();
+    let heading = admitted.heading_rules().unwrap().clone();
+    let properties = heading.profile.as_ref().unwrap();
+    let fields = vec![
+        profile_field(b"T011", "Researches", "upgradeList", "R001"),
+        column(
+            b"Shtr",
+            SlkId::UnitData,
+            &properties.turn_column,
+            FieldKind::Real,
+            "0.5",
+        ),
+        column(
+            b"Shwi",
+            SlkId::UnitData,
+            &properties.window_column,
+            FieldKind::Real,
+            "53",
+        ),
+        column(
+            b"Shsi",
+            SlkId::UnitData,
+            &properties.selector_column,
+            FieldKind::Int,
+            "5",
+        ),
+    ];
+    let (registry, mut activity) = super::super::super::activity::rules();
+    activity.heading = Some(heading);
+    let script =
+        format!("native SetUnitFacingTimed takes unit u, real a, real d returns nothing\n{EVENTS}");
+    let (mut vm, actor, producer) = fixture_with_training_refunds_configured(
+        &fields,
+        4,
+        (
+            0.37,
+            Some(0.61),
+            Some(crate::training_rules::UpgradePolicy {
+                refund_rate: 0.23,
+                relative_cost: false,
+                damage_penalty: false,
+                in_progress_id_change: mode1,
+            }),
+        ),
+        true,
+        (registry, activity),
+        false,
+        (&script, |mut host| {
+            let (health, rounding) = crate::player_handicap::tests::health_rules_with_bias(0.13);
+            host.training_health_fixture(health, rounding);
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradePoolCatalog {
+                inner: Arc::new(UpgradeCatalog(Arc::new(AiProductionCatalog(catalog)))),
+                edits: Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                    hp: "53",
+                    collision: None,
+                })),
+            }));
+            host.with_script_numeric(numeric)
+        }),
+    );
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(
+        &context,
+        crate::upgrade_research::fixture_with_research(
+            &context.sources.catalog,
+            vec![(
+                i32::from_be_bytes(RESEARCHED),
+                1,
+                [20, 0, 10, 0, 7, 0],
+                vec![vec![]],
+            )],
+        ),
+    )
+    .unwrap();
+    h.admit_native_game_clock().unwrap();
+    assert!(
+        h.pace_native_game_clock(std::time::Duration::ZERO, &mut 100)
+            .unwrap()
+    );
+    (vm, actor, producer)
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; internal AI production paths during a source-bound static heading"]
+fn timed_controller_internal_ai_training_research_and_both_upgrade_modes_refuse_atomically_and_recover()
+ {
+    for mode1 in [false, true] {
+        for route in 0..3 {
+            let (mut vm, actor, producer) = timed_heading_production_fixture(mode1);
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            h.native(
+                "SetUnitFacingTimed",
+                &[Value::Handle(producer), Value::Real(135.), Value::Real(1.)],
+            )
+            .unwrap();
+            let units = h
+                .executed_units()
+                .map(|(id, r)| (id, r.clone()))
+                .collect::<Vec<_>>();
+            let queue = h.unit_training_queue(producer).unwrap();
+            let bank_before = [
+                "PLAYER_STATE_RESOURCE_GOLD",
+                "PLAYER_STATE_RESOURCE_LUMBER",
+                "PLAYER_STATE_RESOURCE_FOOD_USED",
+            ]
+            .map(|key| bank(h, owner, key));
+            let clock = format!("{:?}", h.test_native_clock_state());
+            let request = |h: &mut ObjectHost| match route {
+                0 => h
+                    .set_ai_produce(4, 1, i32::from_be_bytes(*b"u001"), -1)
+                    .map(|_| ()),
+                1 => h.set_ai_upgrade(4, i32::from_be_bytes(RESEARCHED)),
+                _ => h
+                    .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .map(|_| ()),
+            };
+            let error = request(h).unwrap_err().to_string();
+            assert!(
+                error.contains("static timed-facing relation"),
+                "mode1={mode1} route={route}: {error}"
+            );
+            assert_eq!(
+                h.executed_units()
+                    .map(|(id, r)| (id, r.clone()))
+                    .collect::<Vec<_>>(),
+                units
+            );
+            assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+            assert_eq!(
+                [
+                    "PLAYER_STATE_RESOURCE_GOLD",
+                    "PLAYER_STATE_RESOURCE_LUMBER",
+                    "PLAYER_STATE_RESOURCE_FOOD_USED"
+                ]
+                .map(|key| bank(h, owner, key)),
+                bank_before
+            );
+            assert_eq!(format!("{:?}", h.test_native_clock_state()), clock);
+            assert!(h.take_fired_event().is_none());
+            let stop = h
+                .standard_command_order(producer, crate::standard_command::Kind::Stop)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                h.native(
+                    "IssueImmediateOrderById",
+                    &[Value::Handle(producer), Value::Int(stop)]
+                )
+                .unwrap(),
+                Value::Bool(true)
+            );
+            request(h).unwrap();
+            assert!(
+                !h.unit_training_queue(producer).unwrap().is_empty(),
+                "mode1={mode1} route={route}"
+            );
+            let before = h.executed_unit(producer).unwrap().clone();
+            let queue = h.unit_training_queue(producer).unwrap();
+            let error = h
+                .native(
+                    "SetUnitFacingTimed",
+                    &[Value::Handle(producer), Value::Real(270.), Value::Real(1.)],
+                )
+                .unwrap_err();
+            assert!(error.contains("qualified stationary unit"), "{error}");
+            assert_eq!(h.executed_unit(producer).unwrap(), &before);
+            assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+        }
+    }
+}

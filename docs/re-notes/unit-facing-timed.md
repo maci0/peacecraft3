@@ -2,8 +2,9 @@
 
 Selected input is Legacy `1.29.2.9231`, executable SHA256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-This checkpoint implements the handler's bounded direct-facing branch. Longer
-duration controllers and full native turn parity remain open.
+The checked paths cover direct facing and stationary timed relations. Moving,
+paused and interrupted order transitions outside the qualified bounds still
+refuse explicitly; full native turn parity remains open.
 
 ## Source and actual callers
 
@@ -65,7 +66,7 @@ activity checks. Strict native/WASM Clippy and both library builds pass, with
 unchanged gameplay-source hashes. Earlier fixture admission/signature failures
 and the initially insufficient Counter input remain in their separate logs.
 
-## Remaining controller path
+## Longer controller source
 
 The longer branch computes the shortest arc from public visual facing, divides the
 requested duration by a source string-derived period, and derives an absolute
@@ -75,11 +76,11 @@ submits a cluster relation. The existing source math policy already binds those
 trigonometric routines; host trigonometry or a linear interpolation would lose
 the native arithmetic and point quantization.
 
-Controller ownership, replacement/cancellation, moving/paused units, arrival and
-order-resume interactions still need their canonical join before this branch is
-enabled. This checkpoint adds only an immutable source-profile field and no new
-resident turn or save state. An unchanged-map Counter rerun must report its exact
-next frontier; this branch alone does not establish normal startup completion.
+The earlier direct-facing checkpoint added only an immutable source-profile
+field. The stationary controller described below adds a typed relation to the
+existing heading state. Moving/paused units and wider order-resume interactions
+remain outside admission. An unchanged-map Counter rerun must report its exact
+next frontier; these paths alone do not establish normal startup completion.
 
 ## Negative-angle admission
 
@@ -131,10 +132,91 @@ setter leaves the timed relation active; a later Stop cancels the relation while
 the visual orientation settles afterward. These controls cover a stationary
 worker only. The symmetric requested direction does not discriminate every
 position-quantization case. Moving/paused units and complete order-resume behavior
-remain open, and no long controller is enabled by this receipt alone.
+remain open. The complete source join and public caller checks below qualify
+only the stationary controller.
 
 The replacement also corrected the earlier logical-facing rate interpretation:
 the handler reads virtual slot `+0x1c` on the unit's `+0x26c` wrapper. The selected
 constructor installs its table at `0x6759e6`; that slot resolves `0x7fe970`, which
 reads public orientation `+0xc8`. Logical physics still advances `+0x8c`. The rate
 read point must preserve that distinction when the controller is implemented.
+
+
+## Stationary relation checkpoint
+
+The timed rules decoder binds the two duration/rate divisions, both tolerance
+comparisons, the visual getter's constructor/vtable relationship, native sine
+and cosine calls, source point scale, software additions and the point/rate/flag
+handoff into the physics relation. Every period, tolerance and point scale is
+read from the selected image. Neither duration interpolation nor host
+trigonometry supplies the result.
+
+`Heading.target` is now a typed unit target or static point/rate target. A long
+request prepares its complete static target before publication and changes
+neither logical heading, public orientation nor current order immediately.
+Subsequent canonical physics frames apply the existing direction and stationary
+step with the request's temporary rate. Arrival retires the static relation
+before visual publication and never resumes a Slow cast. Authored turn properties
+remain intact. Direct facing preserves the relation, replacement submits a new
+point/rate, and Stop/death/removal use canonical cleanup. There is no separate
+linear turn job or additional clock/deadline. Form profile replacement continues
+to retain dynamic heading state separately from authored properties.
+
+The selected replay test resolves the exact retained control map through
+`CampaignRecipe`, including its map-header namespace. It reads the worker's
+orientation selector and properties from that selected UnitData, corroborates
+the captured turn/property getters, and reproduces all 1,024 public-facing words
+across all four controls bit for bit. This is a pure-kernel native replay;
+separate Counter tests exercise actual native dispatch and lifecycle using a
+synthetic cadence. Neither test class alone establishes whole-mission parity.
+
+Acceptance requires a shown, unpaused, stationary unit without retained cast,
+form or production work. Unsupported state refuses before relation mutation.
+For an existing static relation, a shared readonly guard runs in the actual
+`object_native_with_strings` entry used by both Host call forms, before order
+queue observation or family dispatch. Qualified no-op setters retain their
+existing paths. Nonstatic units bypass the restriction. The explicit guarded
+mutation list is immediate/point/location/target/build orders, pause, hide,
+owner change, position/location relocation and pathing relocation. Direct-facing
+and timed-facing setters remain available. Unsupported `SetUnitX`, `SetUnitY`,
+neutral and instant order aliases have no admitted implementation to bypass this
+check. Group order implementations reach the same per-unit native dispatch;
+internal move preparation, attack/spell facing and form preparation have their
+own readonly guards before effects.
+
+Internal AI training, research and structure-upgrade roots also check before
+bank, food, queue or form mutation. Producer selection and source-price reads
+preceding these checks are readonly. Both pending-form modes share the upgrade
+check. Conversely, existing production/research jobs prevent new static-facing
+admission, so cancellation/completion needs no altered behavior. Existing
+multi-producer partial-acceptance policy and pricing/refund rules are unchanged.
+Incoming form casts and retained polymorph/conversion work are excluded before
+the two lifecycles can overlap.
+
+Named public regressions cover direct-facing retention, replacement and Stop,
+death/removal cleanup, both Host call forms, malformed arguments and unchanged
+unit/clock/event state on refused transitions. The internal AI regression covers
+ordinary training, research and both upgrade modes, snapshots all units, banks,
+food, jobs and clock on refusal, then checks recovery after Stop and the reverse
+pending-job-to-facing refusal. Nonstock source fixtures reject getter, scalar,
+branch and handoff drift. Early fixture failures (missing trig binding,
+non-path source label, synthetic order spelling and omitted explicit clock
+admission) are retained in their separate logs and do not count as passes.
+
+At wrap-up, the source is frozen against
+`/tmp/pc3-sol04-timed-controller-frozen-rust.json`. The already-running validation
+receipt is `/tmp/pc3-sol04-timed-controller-validation-1794563515099356055/report.json`.
+No new original-client or application runs were started for wrap-up. Human01
+previously reached player control after the negative-angle checkpoint, then
+refused its first longer timed request; that log is
+`/tmp/pc3-sol09-normal-counter-human01-negative-timed.log`. No unchanged-map rerun
+against this stationary checkpoint is claimed. Moving/paused controller
+behavior, general order replacement, full normal adoption, automatic Slow's
+common due loop and complete save/load continuation remain unfinished.
+
+The wrap-up audit also found a remaining automatic-acquisition interaction:
+`advance_combat` may choose a new target and call `clear_combat_target`, whose
+canonical cleanup removes the static relation. The four native controls disabled
+acquisition, so they do not qualify that later automatic cancellation. The frozen
+candidate's ten validation groups pass, but this gap prevents general long-turn
+admission. No additional acquisition implementation or native run is claimed.

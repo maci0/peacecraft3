@@ -2872,15 +2872,24 @@ endfunction
     assert_eq!(vm.global("HeadingEvents"), Value::Int(0));
 }
 
-#[test]
-#[ignore = "requires PCX_WAR3_EXE; source timed-facing threshold and synthetic Counter cadence"]
-fn counter_timed_facing_instant_boundary_preserves_logical_visual_phases_and_refusal_atomicity() {
-    const SCRIPT: &str = r#"
+const TIMED_FACING_SCRIPT: &str = r#"
 native GetPlayerNeutralPassive takes nothing returns integer
 native GetPlayerNeutralAggressive takes nothing returns integer
 native GetBJMaxPlayers takes nothing returns integer
 native GetBJPlayerNeutralVictim takes nothing returns integer
 native GetBJPlayerNeutralExtra takes nothing returns integer
+native PauseUnit takes unit u, boolean b returns nothing
+native ShowUnit takes unit u, boolean b returns nothing
+native SetUnitPosition takes unit u, real x, real y returns nothing
+native SetUnitOwner takes unit u, player p, boolean b returns nothing
+native SetUnitPathing takes unit u, boolean b returns nothing
+native SetUnitFacing takes unit u, real angle returns nothing
+native IssueImmediateOrder takes unit u, string order returns boolean
+native IssueImmediateOrderById takes unit u, integer order returns boolean
+native IssuePointOrder takes unit u, string order, real x, real y returns boolean
+native IssueTargetOrder takes unit u, string order, widget target returns boolean
+native KillUnit takes unit u returns nothing
+native RemoveUnit takes unit u returns nothing
 native SetUnitFacingTimed takes unit u, real angle, real duration returns nothing
 constant native GetUnitFacing takes unit u returns real
 type gamespeed extends handle
@@ -2896,34 +2905,64 @@ integer HeadingEvents=0
 endglobals
 function HeadingWatch takes nothing returns nothing
 endfunction
+function TimedTransition takes unit u, integer mode, unit target, player owner, integer hold returns nothing
+if mode==0 then
+call PauseUnit(u,true)
+elseif mode==1 then
+call ShowUnit(u,false)
+elseif mode==2 then
+call SetUnitPosition(u,32.0,32.0)
+elseif mode==3 then
+call SetUnitPathing(u,false)
+elseif mode==4 then
+call SetUnitOwner(u,owner,false)
+elseif mode==5 then
+call IssuePointOrder(u,"move",64.0,64.0)
+elseif mode==6 then
+call IssueTargetOrder(u,"attack",target)
+elseif mode==7 then
+call IssueTargetOrder(u,"alpha",target)
+else
+call IssueImmediateOrderById(u,hold)
+endif
+endfunction
 function TimedFacing takes unit u, real angle, real duration returns nothing
 call SetUnitFacingTimed(u,angle,duration)
 endfunction
 "#;
-    let session = || {
-        heading_session_with_script(SCRIPT, |mut host| {
-            let context = Arc::clone(host.context());
-            let speed = host
-                .objects_mut()
-                .native("ConvertGameSpeed", &[Value::Int(0)])
-                .unwrap();
-            let Value::Handle(speed) = speed else {
-                panic!("speed")
-            };
-            host.objects_mut()
-                .admit_startup_settings(
-                    &context,
-                    crate::playercolor_host::StartupSettings {
-                        speed,
-                        fog_enabled: false,
-                        fog_mask_enabled: false,
-                    },
-                )
-                .unwrap();
-            assert!(host.objects_mut().select_native_counter_platform().unwrap());
-            host
-        })
-    };
+
+fn timed_counter_session() -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
+    heading_session_with_script(TIMED_FACING_SCRIPT, |mut host| {
+        let context = Arc::clone(host.context());
+        let speed = host
+            .objects_mut()
+            .native("ConvertGameSpeed", &[Value::Int(0)])
+            .unwrap();
+        let Value::Handle(speed) = speed else {
+            panic!("speed")
+        };
+        host.objects_mut()
+            .admit_startup_settings(
+                &context,
+                crate::playercolor_host::StartupSettings {
+                    speed,
+                    fog_enabled: false,
+                    fog_mask_enabled: false,
+                },
+            )
+            .unwrap();
+        assert!(host.objects_mut().select_native_counter_platform().unwrap());
+        host
+    })
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source timed-facing threshold and synthetic Counter cadence"]
+fn counter_timed_facing_instant_boundary_preserves_logical_visual_phases_and_refusal_atomicity() {
     let (image, origin, numeric, budget) =
         crate::unit_activity::heading::tests::selected_numeric_image();
     let orders = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
@@ -2937,7 +2976,7 @@ endfunction
         .map(|duration| (90., duration))
         .chain([-90., -450., -810., 450., 810., -0., 0.].map(|angle| (angle, limit)));
     for (angle, duration) in cases {
-        let (mut session, caster, target) = session();
+        let (mut session, caster, target) = timed_counter_session();
         let function = session
             .context()
             .unwrap()
@@ -3026,7 +3065,7 @@ endfunction
         let objects = session.host().unwrap().objects();
         let before = objects.executed_unit(caster).unwrap().clone();
         let clock = format!("{:?}", objects.test_native_clock_state());
-        let error = session
+        session
             .call_function(
                 function,
                 &[
@@ -3035,17 +3074,26 @@ endfunction
                     Value::Real(limit.next_up()),
                 ],
             )
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("above the native instant limit"), "{error}");
+            .unwrap();
         assert_eq!(
             session
                 .host()
                 .unwrap()
                 .objects()
                 .executed_unit(caster)
-                .unwrap(),
-            &before
+                .unwrap()
+                .face,
+            before.face
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .executed_unit(caster)
+                .unwrap()
+                .vitals,
+            before.vitals
         );
         assert_eq!(
             format!(
@@ -3130,4 +3178,466 @@ endfunction
         assert_eq!(vm.global(name), Value::Real(0.), "{name}");
     }
     assert!(vm.host().inner.native_counter_platform());
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; actual Counter static-facing calls and transition atomicity"]
+fn counter_timed_controller_retains_direct_facing_replaces_and_stops_without_a_parallel_turn_job() {
+    let (mut session, caster, _) = timed_counter_session();
+    let function = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("TimedFacing")
+        .unwrap();
+    let before = session
+        .host()
+        .unwrap()
+        .objects()
+        .executed_unit(caster)
+        .unwrap()
+        .clone();
+    session
+        .call_function(
+            function,
+            &[Value::Handle(caster), Value::Real(135.), Value::Real(1.)],
+        )
+        .unwrap();
+    let objects = session.host().unwrap().objects();
+    assert!(objects.require_no_static_heading(caster, "probe").is_err());
+    assert_eq!(objects.executed_unit(caster).unwrap().face, before.face);
+    assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+    let quantum = objects
+        .test_native_clock_state()
+        .unwrap()
+        .rules()
+        .turn
+        .quantum_ms;
+    for _ in 0..32 {
+        session
+            .advance_native_counter_frame(
+                Some(std::time::Duration::from_millis(u64::from(quantum))),
+                100,
+            )
+            .unwrap();
+    }
+    let objects = session.host().unwrap().objects();
+    let face = objects.native_unit_facing(caster).unwrap().unwrap();
+    assert!(face > 0. && face < 135., "gradual public facing: {face}");
+    session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .native("SetUnitFacing", &[Value::Handle(caster), Value::Real(45.)])
+        .unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .require_no_static_heading(caster, "probe")
+            .is_err()
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_unit_facing(caster)
+            .unwrap(),
+        Some(face)
+    );
+    session
+        .call_function(
+            function,
+            &[Value::Handle(caster), Value::Real(270.), Value::Real(0.75)],
+        )
+        .unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .require_no_static_heading(caster, "probe")
+            .is_err()
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_unit_facing(caster)
+            .unwrap(),
+        Some(face)
+    );
+    let stop = session
+        .host()
+        .unwrap()
+        .objects()
+        .standard_command_order(caster, crate::standard_command::Kind::Stop)
+        .unwrap()
+        .unwrap();
+    let stopped = session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(caster), Value::Int(stop)],
+        )
+        .unwrap();
+    assert_eq!(stopped, Value::Bool(true));
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .require_no_static_heading(caster, "probe")
+            .is_ok()
+    );
+    for _ in 0..8 {
+        session
+            .advance_native_counter_frame(
+                Some(std::time::Duration::from_millis(u64::from(quantum))),
+                100,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .current_unit_order(caster)
+            .unwrap(),
+        0
+    );
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; direct Host and VM transition refusals before order observation"]
+fn counter_timed_controller_unqualified_transitions_refuse_before_unit_clock_or_event_mutation() {
+    let (mut session, caster, target) = timed_counter_session();
+    let function = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("TimedFacing")
+        .unwrap();
+    let transition = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("TimedTransition")
+        .unwrap();
+    let owner = session
+        .host()
+        .unwrap()
+        .objects()
+        .executed_unit(target)
+        .unwrap()
+        .owner;
+    session
+        .call_function(
+            function,
+            &[Value::Handle(caster), Value::Real(135.), Value::Real(1.)],
+        )
+        .unwrap();
+    let hold = session
+        .host()
+        .unwrap()
+        .objects()
+        .standard_command_order(caster, crate::standard_command::Kind::Hold)
+        .unwrap()
+        .unwrap();
+    for (mode, name, args) in [
+        (
+            0,
+            "PauseUnit",
+            vec![Value::Handle(caster), Value::Bool(true)],
+        ),
+        (
+            1,
+            "ShowUnit",
+            vec![Value::Handle(caster), Value::Bool(false)],
+        ),
+        (
+            2,
+            "SetUnitPosition",
+            vec![Value::Handle(caster), Value::Real(32.), Value::Real(32.)],
+        ),
+        (
+            3,
+            "SetUnitPathing",
+            vec![Value::Handle(caster), Value::Bool(false)],
+        ),
+        (
+            4,
+            "SetUnitOwner",
+            vec![
+                Value::Handle(caster),
+                Value::Handle(owner),
+                Value::Bool(false),
+            ],
+        ),
+        (
+            5,
+            "IssuePointOrder",
+            vec![
+                Value::Handle(caster),
+                Value::Str("move".into()),
+                Value::Real(64.),
+                Value::Real(64.),
+            ],
+        ),
+        (
+            6,
+            "IssueTargetOrder",
+            vec![
+                Value::Handle(caster),
+                Value::Str("attack".into()),
+                Value::Handle(target),
+            ],
+        ),
+        (
+            7,
+            "IssueTargetOrder",
+            vec![
+                Value::Handle(caster),
+                Value::Str("alpha".into()),
+                Value::Handle(target),
+            ],
+        ),
+        (
+            8,
+            "IssueImmediateOrderById",
+            vec![Value::Handle(caster), Value::Int(hold)],
+        ),
+    ] {
+        let objects = session.host().unwrap().objects();
+        let units = objects
+            .executed_units()
+            .map(|(id, r)| (id, r.clone()))
+            .collect::<Vec<_>>();
+        let clock = format!("{:?}", objects.test_native_clock_state());
+        let queue = objects.queued_orders(caster);
+        let error = pcx_script::Host::native(session.host().unwrap().objects_mut(), name, &args)
+            .unwrap_err();
+        assert!(
+            error.contains("static timed-facing relation"),
+            "{name}: {error}"
+        );
+        let error = session
+            .call_function(
+                transition,
+                &[
+                    Value::Handle(caster),
+                    Value::Int(mode),
+                    Value::Handle(target),
+                    Value::Handle(owner),
+                    Value::Int(hold),
+                ],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("static timed-facing relation"),
+            "mode {mode}: {error}"
+        );
+        let objects = session.host().unwrap().objects();
+        assert_eq!(
+            objects
+                .executed_units()
+                .map(|(id, r)| (id, r.clone()))
+                .collect::<Vec<_>>(),
+            units,
+            "{name}"
+        );
+        assert_eq!(
+            format!("{:?}", objects.test_native_clock_state()),
+            clock,
+            "{name}"
+        );
+        assert_eq!(objects.queued_orders(caster), queue, "{name}");
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .take_fired_event()
+                .is_none()
+        );
+    }
+    for (name, args) in [
+        (
+            "PauseUnit",
+            vec![Value::Handle(caster), Value::Bool(true), Value::Bool(false)],
+        ),
+        (
+            "SetUnitPosition",
+            vec![
+                Value::Handle(caster),
+                Value::Real(f32::NAN),
+                Value::Real(0.),
+            ],
+        ),
+        (
+            "SetUnitOwner",
+            vec![
+                Value::Handle(caster),
+                Value::Handle(target),
+                Value::Bool(false),
+            ],
+        ),
+        (
+            "IssuePointOrder",
+            vec![
+                Value::Handle(caster),
+                Value::Int(47),
+                Value::Real(0.),
+                Value::Real(0.),
+            ],
+        ),
+    ] {
+        let objects = session.host().unwrap().objects();
+        let before = objects.executed_unit(caster).unwrap().clone();
+        let error = session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(name, &args)
+            .unwrap_err();
+        assert!(
+            !error.contains("static timed-facing relation"),
+            "malformed {name}: {error}"
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .executed_unit(caster)
+                .unwrap(),
+            &before
+        );
+    }
+    // These setters already describe the unit's state and retain their existing no-op paths.
+    let owner = session
+        .host()
+        .unwrap()
+        .objects()
+        .executed_unit(caster)
+        .unwrap()
+        .owner;
+    let position = session
+        .host()
+        .unwrap()
+        .objects()
+        .executed_unit(caster)
+        .unwrap()
+        .position
+        .unwrap();
+    for (name, args) in [
+        ("PauseUnit", vec![Value::Handle(caster), Value::Bool(false)]),
+        ("ShowUnit", vec![Value::Handle(caster), Value::Bool(true)]),
+        (
+            "SetUnitPathing",
+            vec![Value::Handle(caster), Value::Bool(true)],
+        ),
+        (
+            "SetUnitOwner",
+            vec![
+                Value::Handle(caster),
+                Value::Handle(owner),
+                Value::Bool(false),
+            ],
+        ),
+        (
+            "SetUnitPosition",
+            vec![
+                Value::Handle(caster),
+                Value::Real(position[0]),
+                Value::Real(position[1]),
+            ],
+        ),
+    ] {
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(name, &args)
+            .unwrap();
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .require_no_static_heading(caster, "probe")
+                .is_err()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; canonical death/removal relation cleanup"]
+fn counter_timed_controller_death_and_removal_retire_static_targets_before_later_physics() {
+    for name in ["KillUnit", "RemoveUnit"] {
+        let (mut session, caster, _) = timed_counter_session();
+        let function = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("TimedFacing")
+            .unwrap();
+        session
+            .call_function(
+                function,
+                &[Value::Handle(caster), Value::Real(135.), Value::Real(1.)],
+            )
+            .unwrap();
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .require_no_static_heading(caster, "probe")
+                .is_err()
+        );
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(name, &[Value::Handle(caster)])
+            .unwrap();
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .require_no_static_heading(caster, "probe")
+                .is_ok()
+        );
+        let quantum = session
+            .host()
+            .unwrap()
+            .objects()
+            .test_native_clock_state()
+            .unwrap()
+            .rules()
+            .turn
+            .quantum_ms;
+        for _ in 0..8 {
+            session
+                .advance_native_counter_frame(
+                    Some(std::time::Duration::from_millis(u64::from(quantum))),
+                    100,
+                )
+                .unwrap();
+        }
+    }
 }

@@ -709,6 +709,7 @@ impl ObjectHost {
         unit: HandleId,
         activity: Option<&UnitActivity>,
     ) -> Result<(), Error> {
+        self.require_no_static_heading(unit, "morph")?;
         let original = self.executed_unit(unit)?.activity.as_ref();
         let result = match (original, activity) {
             (Some(original), Some(activity)) => original.validate_form_profile(activity),
@@ -1709,6 +1710,9 @@ impl ObjectHost {
         name: &str,
     ) -> Result<Option<PreparedSteer>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
+        if destination.is_some() {
+            self.require_no_static_heading(unit, name)?;
+        }
         if destination.is_some() && self.unit_uprooted(unit) {
             return Err(fail(UPROOTED_MOVEMENT));
         }
@@ -2447,7 +2451,7 @@ impl ObjectHost {
         if name == "GetUnitFacing" {
             return Ok(Value::Real(self.native_unit_facing(unit)?.unwrap_or(face)));
         }
-        if let Some(heading) = self.prepare_native_unit_facing(unit, target)? {
+        if let Some(mut heading) = self.prepare_native_unit_facing(unit, target)? {
             if name == "SetUnitFacingTimed" {
                 let profile = self
                     .unit_activity
@@ -2456,9 +2460,7 @@ impl ObjectHost {
                     .and_then(|rules| rules.profile.as_ref())
                     .ok_or_else(|| fail("native timed-facing source profile missing"))?;
                 if duration > profile.timed_instant_limit {
-                    return Err(fail(
-                        "script timed turning above the native instant limit is not qualified",
-                    ));
+                    heading = self.prepare_native_timed_facing(unit, target, duration)?;
                 }
             }
             self.commit_native_heading_target(unit, heading);
