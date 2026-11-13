@@ -738,7 +738,14 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_timer_expiry(step_until, budget)?;
+                .next_timer_expiry(step_until, budget)
+                .map_err(|error| {
+                    if paired {
+                        queue_selection_error(error)
+                    } else {
+                        error.into()
+                    }
+                })?;
             let selected_expiry = expiry.is_some();
             if let Some(expiry) = expiry {
                 self.active

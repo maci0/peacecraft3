@@ -345,6 +345,25 @@ fn host_with(config: &Config) -> ObjectHost {
             denominator: 32,
             step: 0.03125_f32.to_bits(),
             wrap_tolerance: 0.00001_f32.to_bits(),
+            frame: crate::native_game_clock::frame::Rules {
+                unsigned_correction: [0f64.to_bits(), 4294967296f64.to_bits()],
+                scale: 0.125f32.to_bits(),
+                chunk: 1f32.to_bits(),
+            },
+            sleep: crate::native_game_clock::sleep::Rules {
+                script: crate::native_game_clock::Domain::Real,
+                ai: crate::native_game_clock::Domain::Game,
+            },
+            turn: crate::native_game_clock::turn::Rules {
+                quantum_ms: 25,
+                credit_cap: 4000,
+                speed_steps: Arc::from([1, 2, 3]),
+                scale: 1f32.to_bits(),
+                modifier: 1,
+                elapsed_numerator: 1,
+                elapsed_denominator: 1,
+                initial_carry: 0,
+            },
         })
     });
     let (mut hero_rules, combat_rules) = hero_rules();
@@ -596,6 +615,7 @@ native SetUnitPosition takes unit u, real x, real y returns nothing
 constant native GetUnitFacing takes unit u returns real
 native PauseTimer takes timer t returns nothing
 native ResumeTimer takes timer t returns nothing
+native StartCampaignAI takes player p, string path returns nothing
 globals
 integer HeadingEvents=0
 real HeadingChannelFace=-1.0
@@ -608,6 +628,18 @@ integer HeadingPausedCalls=0
 integer HeadingOneShotCalls=0
 integer HeadingTimedCalls=0
 endglobals
+function HeadingArbitrationSetup takes nothing returns nothing
+set HeadingPaused=CreateTimer()
+call TimerStart(HeadingPaused,4.0,false,null)
+set HeadingOneShot=CreateTimer()
+endfunction
+function HeadingObserve takes nothing returns nothing
+set HeadingChannelFace=TimerGetElapsed(HeadingPaused)
+set HeadingFail=GetExpiredTimer()==HeadingOneShot
+endfunction
+function HeadingStartAi takes nothing returns nothing
+call StartCampaignAI(Player(0),"heading.ai")
+endfunction
 function HeadingPausedFire takes nothing returns nothing
 set HeadingPausedCalls=HeadingPausedCalls+1
 endfunction
@@ -688,6 +720,18 @@ fn heading_session() -> (
     HandleId,
     HandleId,
 ) {
+    heading_session_with(|host| host)
+}
+
+fn heading_session_with(
+    prepare: impl FnOnce(
+        crate::map_startup_host::MapStartupHost,
+    ) -> crate::map_startup_host::MapStartupHost,
+) -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
     use crate::{
         map_script_session::MapScriptSession,
         map_startup_host::MapStartupHost,
@@ -725,7 +769,11 @@ fn heading_session() -> (
     session
         .replace(
             context,
-            |_| Ok::<_, std::convert::Infallible>(MapStartupHost::timer_session_fixture(world)),
+            |_| {
+                Ok::<_, std::convert::Infallible>(prepare(MapStartupHost::timer_session_fixture(
+                    world,
+                )))
+            },
             &entrypoints,
         )
         .unwrap();
@@ -2373,4 +2421,237 @@ fn slow_effect_ability_replacement_refuses_the_unqualified_cost_read_point() {
     assert!(buffs(&mut vm, enemy).is_empty());
     assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
     assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with nonstock physics and paired queue cadence"]
+fn paired_native_physics_arbitrates_timer_ai_and_equal_deadlines_before_entering_a_scope() {
+    use crate::{
+        native_game_clock::{Domain, FrameInput, Point},
+        scripts::{AssetIdentity, MapScripts, ScriptAsset},
+    };
+    for (timer_at, ai_at, physics_first) in [
+        (0.0625, 0.1875, false),
+        (0.1875, 0.0625, false),
+        (0.21875, 0.1875, true),
+        (0.125, 0.125, true),
+    ] {
+        let (mut session, _, _) = heading_session_with(|mut host| {
+            let context = Arc::clone(host.context());
+            host.objects_mut()
+                .admit_campaign_mode(
+                    &context,
+                    crate::campaign_mode_policy::CampaignModePolicy::fixture(),
+                )
+                .unwrap();
+            let common = &context.scripts.digests[0].label;
+            let entry = format!(
+                "globals\nunit H=null\nunit E=null\nendglobals\nfunction main takes nothing returns nothing\nlocal real retained=0.25\ncall Sleep({ai_at})\ncall Sleep(retained)\nendfunction\n"
+            );
+            let program = Arc::new(
+                MapScripts::compile(
+                    AssetIdentity {
+                        source: "heading.ai".into(),
+                        edition: "synthetic".into(),
+                        version: "paired-physics".into(),
+                    },
+                    ScriptAsset {
+                        label: common,
+                        bytes: context.scripts.source(common).unwrap().as_bytes(),
+                    },
+                    ScriptAsset {
+                        label: "synthetic:heading-ai-common",
+                        bytes: b"native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n",
+                    },
+                    ScriptAsset {
+                        label: "synthetic:heading-ai",
+                        bytes: entry.as_bytes(),
+                    },
+                    None,
+                )
+                .unwrap(),
+            );
+            host.with_ai_pause_rules(Ok(crate::campaign_ai_pause_policy::Rules {
+                initial: 0,
+                retry_seconds: 1.,
+                retry_word: 1f32.to_bits(),
+            }))
+            .with_ai_loader(move |_| Ok(Arc::clone(&program)))
+        });
+        let setup = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("HeadingArbitrationSetup")
+            .unwrap();
+        let start = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("HeadingStartAi")
+            .unwrap();
+        let callback = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("HeadingObserve")
+            .unwrap();
+        session.call_function(setup, &[]).unwrap();
+        let timer = session.global("HeadingOneShot").unwrap();
+        session
+            .host()
+            .unwrap()
+            .native(
+                "TimerStart",
+                &[
+                    timer,
+                    Value::Real(timer_at),
+                    Value::Bool(false),
+                    Value::Code(callback),
+                ],
+            )
+            .unwrap();
+        session.call_function(start, &[]).unwrap();
+        let until = Point {
+            cycle: 0,
+            local: 0.5f32.to_bits(),
+        };
+        let error = session
+            .advance_native_frame(
+                Some(FrameInput {
+                    game_elapsed: std::time::Duration::from_millis(250),
+                    real_elapsed_ms: 0,
+                }),
+                1,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                crate::map_script_session::TimerSessionError::WakeBudget
+                    | crate::map_script_session::TimerSessionError::QueueBudget(_)
+            ),
+            "{error}"
+        );
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .pending_native_physics()
+                .is_none()
+        );
+        let next_physics = session
+            .host()
+            .unwrap()
+            .objects()
+            .next_native_physics_boundary(until)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            f32::from_bits(next_physics.local),
+            if physics_first { 0.25 } else { 0.125 }
+        );
+        let next_ai = session
+            .host()
+            .unwrap()
+            .next_native_ai_wake(until, &mut 1024)
+            .unwrap()
+            .unwrap();
+        let ai_resumed = ai_at < 0.125;
+        assert_eq!(
+            f32::from_bits(next_ai.point.local),
+            if ai_resumed { ai_at + 0.25 } else { ai_at }
+        );
+        assert_eq!(
+            session.global("HeadingChannelFace"),
+            Some(Value::Real(if timer_at < 0.125 { timer_at } else { -1. }))
+        );
+        session.advance_native_frame(None, 100).unwrap();
+        assert_eq!(
+            session.global("HeadingChannelFace"),
+            Some(Value::Real(timer_at))
+        );
+        assert_eq!(session.global("HeadingFail"), Some(Value::Bool(true)));
+        let next_ai = session
+            .host()
+            .unwrap()
+            .next_native_ai_wake(until, &mut 1024)
+            .unwrap()
+            .unwrap();
+        assert_eq!(f32::from_bits(next_ai.point.local), ai_at + 0.25);
+        let objects = session.host().unwrap().objects();
+        assert_eq!(
+            objects.native_game_point(),
+            Some(Point {
+                cycle: 0,
+                local: 0.25f32.to_bits()
+            })
+        );
+        assert_eq!(
+            objects.native_queue_point(Domain::Real),
+            Some(Point { cycle: 0, local: 0 })
+        );
+        assert_eq!(
+            objects
+                .next_native_physics_boundary(until)
+                .unwrap()
+                .unwrap()
+                .local,
+            0.375f32.to_bits()
+        );
+        session.advance_native_frame(None, 100).unwrap();
+        assert_eq!(
+            session.global("HeadingChannelFace"),
+            Some(Value::Real(timer_at))
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic and nonstock physics admission"]
+fn native_physics_counter_admission_retains_fresh_state_on_zero_work_and_arms_once_before_globals()
+{
+    use crate::native_game_clock::{Domain, FrameInput, Input, Point};
+    let mut host = host_with(&Config {
+        heading: true,
+        ..Config::default()
+    });
+    let before = format!("{:?}", host.test_native_clock_state());
+    assert!(
+        host.enqueue_native_input(
+            Input::Independent(FrameInput {
+                game_elapsed: std::time::Duration::ZERO,
+                real_elapsed_ms: 0
+            }),
+            &mut 0
+        )
+        .is_err()
+    );
+    assert_eq!(format!("{:?}", host.test_native_clock_state()), before);
+    let until = Point {
+        cycle: 0,
+        local: 0.5f32.to_bits(),
+    };
+    assert_eq!(host.next_native_physics_boundary(until).unwrap(), None);
+    assert!(host.select_native_counter_platform().unwrap());
+    let next = host.next_native_physics_boundary(until).unwrap().unwrap();
+    assert_eq!(next.local, 0.125f32.to_bits());
+    assert!(host.native_counter_platform());
+    assert!(host.select_native_counter_platform().unwrap());
+    assert_eq!(
+        host.next_native_physics_boundary(until).unwrap(),
+        Some(next)
+    );
+    assert_eq!(
+        host.native_queue_point(Domain::Game),
+        Some(Point { cycle: 0, local: 0 })
+    );
+    assert_eq!(
+        host.native_queue_point(Domain::Real),
+        Some(Point { cycle: 0, local: 0 })
+    );
 }

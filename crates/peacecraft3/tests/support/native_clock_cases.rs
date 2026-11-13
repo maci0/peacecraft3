@@ -173,7 +173,14 @@ endfunction
                     0,
                 )
             };
-            assert!(matches!(selection, Err(TimerSessionError::Timer(_))));
+            if paired {
+                assert!(matches!(
+                    selection,
+                    Err(TimerSessionError::QueueBudget("timer delivery"))
+                ));
+            } else {
+                assert!(matches!(selection, Err(TimerSessionError::Timer(_))));
+            }
             // The paired selector visits our one timer before world projection.
             let error = session
                 .test_advance_timers_with_projection_work(0.25, 8, usize::from(paired))
