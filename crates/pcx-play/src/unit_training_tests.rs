@@ -2,6 +2,9 @@ use super::*;
 
 const EVENTS: &str = r#"
 constant native GetUnitTypeId takes unit u returns integer
+constant native SetPlayerHandicap takes player p, real factor returns nothing
+constant native GetPlayerHandicap takes player p returns real
+native SetUnitUseFood takes unit u, boolean enable returns nothing
 constant native GetPlayerStructureCount takes player p, boolean includeIncomplete returns integer
 constant native GetPlayerUnitCount takes player p, boolean includeIncomplete returns integer
 constant native GetConstructingStructure takes nothing returns unit
@@ -29,6 +32,8 @@ constant unitevent EVENT_UNIT_TRAIN_CANCEL=ConvertUnitEvent(80)
 constant playerunitevent EVENT_PLAYER_UNIT_TRAIN_START=ConvertPlayerUnitEvent(178)
 constant playerunitevent EVENT_PLAYER_UNIT_TRAIN_FINISH=ConvertPlayerUnitEvent(179)
 constant playerunitevent EVENT_PLAYER_UNIT_TRAIN_CANCEL=ConvertPlayerUnitEvent(180)
+constant playerunitevent EVENT_PLAYER_UNIT_PICKUP_ITEM=ConvertPlayerUnitEvent(-71)
+constant playerunitevent EVENT_PLAYER_UNIT_DROP_ITEM=ConvertPlayerUnitEvent(99)
 constant playerstate PLAYER_STATE_RESOURCE_HERO_TOKENS=ConvertPlayerState(17)
 endglobals
 "#;
@@ -2753,12 +2758,27 @@ fn upgrade_pool_fixture() -> (Vm, HandleId, HandleId) {
 fn upgrade_pool_fixture_with_edits(
     edits: Arc<std::sync::Mutex<UpgradePoolEdits>>,
 ) -> (Vm, HandleId, HandleId) {
+    upgrade_pool_fixture_with_mode(edits, false)
+}
+
+fn upgrade_pool_fixture_with_mode(
+    edits: Arc<std::sync::Mutex<UpgradePoolEdits>>,
+    in_progress_id_change: bool,
+) -> (Vm, HandleId, HandleId) {
+    upgrade_pool_fixture_configured(edits, in_progress_id_change, |host| host)
+}
+
+fn upgrade_pool_fixture_configured(
+    edits: Arc<std::sync::Mutex<UpgradePoolEdits>>,
+    in_progress_id_change: bool,
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> (Vm, HandleId, HandleId) {
     let (mut vm, actor, producer) = upgrade_fixture_configured(
         Some(crate::training_rules::UpgradePolicy {
             refund_rate: 0.23,
             relative_cost: false,
             damage_penalty: false,
-            in_progress_id_change: false,
+            in_progress_id_change,
         }),
         |mut host| {
             // Synthetic source rounder; production reads this policy from the selected image.
@@ -2769,7 +2789,7 @@ fn upgrade_pool_fixture_with_edits(
                 inner: catalog,
                 edits,
             }));
-            host
+            configure(host)
         },
     );
     let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
@@ -3277,7 +3297,7 @@ fn structure_upgrade_signed_credit_missing_numeric_or_bounds_and_overflow_are_at
 }
 
 #[test]
-fn structure_upgrade_pending_form_mode_refuses_before_credit_or_queue_mutation() {
+fn structure_upgrade_mode1_missing_health_rounder_refuses_before_credit_or_queue_mutation() {
     let (mut vm, actor, producer) = upgrade_fixture_configured(
         Some(crate::training_rules::UpgradePolicy {
             refund_rate: 0.23,
@@ -3298,10 +3318,7 @@ fn structure_upgrade_pending_form_mode_refuses_before_credit_or_queue_mutation()
     let error = h
         .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
         .unwrap_err();
-    assert!(
-        error.to_string().contains("UpgradeInProgressIdChange"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("health rounding"), "{error}");
     assert_eq!(h.executed_unit(producer).unwrap(), &before);
     assert!(h.unit_training_queue(producer).unwrap().is_empty());
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
@@ -3377,6 +3394,1657 @@ fn malformed_upgrade_profiles_preserve_public_training_and_research_and_refuse_u
             assert!(h.unit_training_queue(producer).unwrap().is_empty());
             assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
             assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 16);
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_publishes_pending_type_and_finishes_by_life_delta_after_pause() {
+    let (mut vm, _, producer) = upgrade_pool_fixture_with_mode(
+        Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+            hp: "53",
+            collision: None,
+        })),
+        true,
+    );
+    let life = vm.global("UNIT_STATE_LIFE");
+    let h = &mut vm.host().inner;
+    let old_max = h.executed_unit(producer).unwrap().vitals.unwrap().max_life;
+    let old_life = old_max * 0.5;
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(producer), life, Value::Real(old_life)],
+    )
+    .unwrap();
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    let record = h.executed_unit(producer).unwrap();
+    assert_eq!(record.definition.rawcode, *b"d001");
+    assert_eq!(
+        (record.vitals.unwrap().life, record.vitals.unwrap().max_life),
+        (old_life, old_max)
+    );
+    step(&mut vm, 3.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(producer), Value::Bool(true)])
+        .unwrap();
+    step(&mut vm, 13.);
+    vm.host()
+        .inner
+        .native("PauseUnit", &[Value::Handle(producer), Value::Bool(false)])
+        .unwrap();
+    step(&mut vm, 18.);
+    assert!(vm.host().inner.producer_has_training(producer));
+    step(&mut vm, 20.);
+    let h = &mut vm.host().inner;
+    let record = h.executed_unit(producer).unwrap();
+    assert_eq!(record.definition.rawcode, *b"d001");
+    assert_eq!(record.vitals.unwrap().max_life, 53.);
+    assert_eq!(record.vitals.unwrap().life, old_life + 53. - old_max);
+    assert!(!h.producer_has_training(producer));
+}
+
+fn mode1_fixture() -> (Vm, HandleId, HandleId) {
+    upgrade_pool_fixture_with_mode(
+        Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+            hp: "53",
+            collision: None,
+        })),
+        true,
+    )
+}
+
+#[test]
+fn structure_upgrade_mode1_cancel_restores_original_type_and_recipient_refund_without_resetting_pools()
+ {
+    let (mut vm, actor, producer) = mode1_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    let life = vm.global("UNIT_STATE_LIFE");
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    h.native(
+        "SetUnitState",
+        &[Value::Handle(producer), life, Value::Real(7.25)],
+    )
+    .unwrap();
+    let old_max = h.executed_unit(producer).unwrap().vitals.unwrap().max_life;
+    let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    fund(&mut vm, recipient, 37, 41);
+    let h = &mut vm.host().inner;
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(producer),
+            Value::Handle(recipient),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    h.native("PauseUnit", &[Value::Handle(producer), Value::Bool(true)])
+        .unwrap();
+    assert_eq!(
+        h.executed_unit(producer).unwrap().definition.rawcode,
+        *b"d001"
+    );
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert!(!h.cancel_unit_training(producer, 0).unwrap());
+    let record = h.executed_unit(producer).unwrap();
+    assert_eq!(record.definition.rawcode, *b"b001");
+    assert_eq!(
+        (record.vitals.unwrap().life, record.vitals.unwrap().max_life),
+        (7.25, old_max)
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_GOLD"), 46);
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_LUMBER"), 44);
+    step(&mut vm, 20.);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(producer)
+            .unwrap()
+            .definition
+            .rawcode,
+        *b"b001"
+    );
+}
+
+#[test]
+fn structure_upgrade_mode1_death_and_removal_keep_the_pending_type_and_maximum_without_refund() {
+    for action in ["KillUnit", "RemoveUnit"] {
+        let (mut vm, actor, producer) = mode1_fixture();
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        let event = vm.global("EVENT_UNIT_DEATH");
+        let h = &mut vm.host().inner;
+        let trigger = h.native("CreateTrigger", &[]).unwrap();
+        h.native(
+            "TriggerRegisterUnitEvent",
+            &[trigger, Value::Handle(producer), event],
+        )
+        .unwrap();
+        let old_max = h.executed_unit(producer).unwrap().vitals.unwrap().max_life;
+        assert!(
+            h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap()
+        );
+        h.native(action, &[Value::Handle(producer)]).unwrap();
+        h.native(action, &[Value::Handle(producer)]).unwrap();
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+        assert!(!h.producer_has_training(producer));
+        if action == "KillUnit" {
+            let fired = h.take_fired_event().expect("death callback");
+            h.begin_fired_event(&fired).unwrap().unwrap();
+            assert_eq!(
+                h.native("GetUnitTypeId", &[Value::Handle(producer)])
+                    .unwrap(),
+                Value::Int(i32::from_be_bytes(*b"d001"))
+            );
+            let pools = h.executed_unit(producer).unwrap().vitals.unwrap();
+            assert_eq!((pools.life, pools.max_life), (0., old_max));
+            h.finish_fired_event();
+        }
+        assert!(h.take_fired_event().is_none());
+        step(&mut vm, 20.);
+        assert!(!vm.host().inner.producer_has_training(producer));
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_transfer_preserves_job_and_compatible_owner_completion() {
+    let (mut vm, actor, producer) = mode1_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    let queue = h.unit_training_queue(producer).unwrap();
+    let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    h.training_owner_health_fixture(recipient, 0.75);
+    let before = h.executed_unit(producer).unwrap().clone();
+    assert!(
+        h.native(
+            "SetUnitOwner",
+            &[
+                Value::Handle(producer),
+                Value::Handle(recipient),
+                Value::Bool(false)
+            ]
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("health-factor")
+    );
+    assert_eq!(h.executed_unit(producer).unwrap(), &before);
+    assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+    h.training_owner_health_fixture(recipient, before.health_handicap);
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(producer),
+            Value::Handle(recipient),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+    step(&mut vm, 10.);
+    let h = &mut vm.host().inner;
+    let record = h.executed_unit(producer).unwrap();
+    assert_eq!(record.owner, recipient);
+    assert_eq!(record.definition.rawcode, *b"d001");
+    assert_eq!(
+        (record.vitals.unwrap().life, record.vitals.unwrap().max_life),
+        (53., 53.)
+    );
+    assert!(!h.producer_has_training(producer));
+}
+
+#[test]
+fn structure_upgrade_mode1_negative_pool_bonus_and_mana_classes_refuse_before_payment() {
+    for (hp, life_bonus, mana_bonus, expected) in [
+        ("7", 0., 0., "negative"),
+        ("53", 3., 0., "bonuses"),
+        ("53", 0., 2., "mana"),
+    ] {
+        let (mut vm, actor, producer) = upgrade_pool_fixture_with_mode(
+            Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                hp,
+                collision: None,
+            })),
+            true,
+        );
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        let h = &mut vm.host().inner;
+        h.training_pool_bonus_fixture(producer, life_bonus, mana_bonus);
+        let before = h.executed_unit(producer).unwrap().clone();
+        let random = h.script_random_state().cloned();
+        let handles = h.inner().handles();
+        let error = h
+            .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(h.executed_unit(producer).unwrap(), &before);
+        assert_eq!(h.script_random_state(), random.as_ref());
+        assert_eq!(h.inner().handles(), handles);
+        assert!(h.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 100);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 100);
+    }
+}
+
+struct Mode1OriginalFailureCatalog {
+    inner: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
+    broken: Arc<std::sync::atomic::AtomicBool>,
+}
+impl pcx_sim::world::ObjectCatalog for Mode1OriginalFailureCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.inner.resolve(code)?;
+        if code == *b"b001" && self.broken.load(std::sync::atomic::Ordering::Relaxed) {
+            definition.fields.get_mut(b"H001").unwrap().value =
+                Ok(FieldValue::Cell("broken".into()));
+        }
+        Ok(definition)
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_low_funds_and_bad_placement_leave_original_form_and_queue_unchanged() {
+    for collision in [None, Some("NaN")] {
+        let (mut vm, actor, producer) = upgrade_pool_fixture_with_mode(
+            Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                hp: "53",
+                collision,
+            })),
+            true,
+        );
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        if collision.is_none() {
+            fund(&mut vm, owner, 0, 0);
+        }
+        let h = &mut vm.host().inner;
+        let before = h.executed_unit(producer).unwrap().clone();
+        let random = h.script_random_state().cloned();
+        let handles = h.inner().handles();
+        let result = h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1);
+        if collision.is_none() {
+            assert!(!result.unwrap());
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(h.executed_unit(producer).unwrap(), &before);
+        assert_eq!(h.script_random_state(), random.as_ref());
+        assert_eq!(h.inner().handles(), handles);
+        assert!(h.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(
+            bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+            if collision.is_none() { 0 } else { 100 }
+        );
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_cancel_rebinds_retained_original_before_any_refund_and_retries_once() {
+    let broken = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut vm, actor, producer) = upgrade_pool_fixture_configured(
+        Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+            hp: "53",
+            collision: None,
+        })),
+        true,
+        |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(Mode1OriginalFailureCatalog {
+                inner: catalog,
+                broken: Arc::clone(&broken),
+            }));
+            host
+        },
+    );
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    let before = h.executed_unit(producer).unwrap().clone();
+    let queue = h.unit_training_queue(producer).unwrap();
+    let random = h.script_random_state().cloned();
+    broken.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.cancel_unit_training(producer, 0).is_err());
+    assert_eq!(h.executed_unit(producer).unwrap(), &before);
+    assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+    assert_eq!(h.script_random_state(), random.as_ref());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+    broken.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert!(!h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(
+        h.executed_unit(producer).unwrap().definition.rawcode,
+        *b"b001"
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 66);
+}
+
+#[test]
+fn structure_upgrade_mode1_signed_price_keeps_paid_identity_through_transfer_and_cancel() {
+    let (mut vm, actor, producer) = upgrade_pool_fixture_configured(
+        Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+            hp: "53",
+            collision: None,
+        })),
+        true,
+        |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradeCreditCatalog(catalog)));
+            host
+        },
+    );
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 0, 16);
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    assert_eq!(
+        h.executed_unit(producer).unwrap().definition.rawcode,
+        *b"d001"
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 43);
+    let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    fund(&mut vm, recipient, 4, 7);
+    let h = &mut vm.host().inner;
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(producer),
+            Value::Handle(recipient),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    let detail = h.unit_training_details(producer).unwrap();
+    assert_eq!((detail[0].gold, detail[0].lumber), (-43, 16));
+    assert_eq!((detail[0].refund_gold, detail[0].refund_lumber), (-9, 3));
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert!(!h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(
+        h.executed_unit(producer).unwrap().definition.rawcode,
+        *b"b001"
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 43);
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_LUMBER"), 10);
+}
+
+struct Mode1ResearchCatalog(Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>);
+impl pcx_sim::world::ObjectCatalog for Mode1ResearchCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.0.resolve(code)?;
+        let (id, field) = column(
+            b"PMUP",
+            SlkId::UnitBalance,
+            "upgrades",
+            FieldKind::Token,
+            "Qm05",
+        );
+        definition.fields.insert(id, field);
+        Ok(definition)
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_research_and_transfer_pool_changes_refuse_atomically_and_recover() {
+    for effect in [*b"rhpx", *b"rmnx", *b"rmnr"] {
+        for transfer in [false, true] {
+            for cancel in [false, true] {
+                let (mut vm, actor, producer) = upgrade_pool_fixture_configured(
+                    Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                        hp: "53",
+                        collision: None,
+                    })),
+                    true,
+                    |mut host| {
+                        let catalog = host.unit_catalog().unwrap();
+                        host.construction_test_catalog(Arc::new(Mode1ResearchCatalog(catalog)));
+                        host
+                    },
+                );
+                let h = &mut vm.host().inner;
+                let owner = h.executed_unit(actor).unwrap().owner;
+                let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+                    panic!("player")
+                };
+                let ctx = Arc::clone(h.player_context().unwrap());
+                let upgrade = i32::from_be_bytes(*b"Qm05");
+                let table = crate::upgrade_effects::Table::synthetic(
+                    &[effect],
+                    vec![(
+                        upgrade,
+                        vec![crate::upgrade_effects::Slot {
+                            number: 1,
+                            effect,
+                            base: 3.,
+                            modifier: 0.,
+                            code: String::new(),
+                        }],
+                    )],
+                );
+                h.admit_upgrade_research(
+                    &ctx,
+                    crate::upgrade_research::fixture_with_effects(&ctx.sources.catalog, table),
+                )
+                .unwrap();
+                if transfer {
+                    h.native(
+                        "SetPlayerTechResearched",
+                        &[Value::Handle(recipient), Value::Int(upgrade), Value::Int(1)],
+                    )
+                    .unwrap();
+                }
+                assert!(
+                    h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                        .unwrap()
+                );
+                let before: Vec<_> = h
+                    .executed_units()
+                    .map(|(id, record)| (id, record.clone()))
+                    .collect();
+                let owner_levels = h.player_settings(owner).unwrap().research_levels.clone();
+                let recipient_levels = h
+                    .player_settings(recipient)
+                    .unwrap()
+                    .research_levels
+                    .clone();
+                let queue = h.unit_training_queue(producer).unwrap();
+                let handles = h.inner().handles();
+                let random = h.script_random_state().cloned();
+                let error = if transfer {
+                    h.native(
+                        "SetUnitOwner",
+                        &[
+                            Value::Handle(producer),
+                            Value::Handle(recipient),
+                            Value::Bool(false),
+                        ],
+                    )
+                } else {
+                    h.native(
+                        "SetPlayerTechResearched",
+                        &[Value::Handle(owner), Value::Int(upgrade), Value::Int(1)],
+                    )
+                }
+                .unwrap_err();
+                assert!(
+                    error.contains("mode1 upgrade changed pool bonuses"),
+                    "{effect:?} transfer={transfer}: {error}"
+                );
+                assert_eq!(
+                    h.executed_units()
+                        .map(|(id, record)| (id, record.clone()))
+                        .collect::<Vec<_>>(),
+                    before
+                );
+                assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+                assert_eq!(
+                    h.player_settings(owner).unwrap().research_levels,
+                    owner_levels
+                );
+                assert_eq!(
+                    h.player_settings(recipient).unwrap().research_levels,
+                    recipient_levels
+                );
+                assert_eq!(h.inner().handles(), handles);
+                assert_eq!(h.script_random_state(), random.as_ref());
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+                assert!(h.take_fired_event().is_none());
+                if cancel {
+                    assert!(h.cancel_unit_training(producer, 0).unwrap());
+                } else {
+                    step(&mut vm, 20.);
+                }
+                let h = &mut vm.host().inner;
+                assert!(!h.producer_has_training(producer));
+                assert_eq!(
+                    h.executed_unit(producer).unwrap().definition.rawcode,
+                    if cancel { *b"b001" } else { *b"d001" }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_handicap_change_refuses_all_units_and_owner_row_before_mutation() {
+    for cancel in [false, true] {
+        let (mut vm, actor, producer) = mode1_fixture();
+        let h = &mut vm.host().inner;
+        let owner = h.executed_unit(actor).unwrap().owner;
+        h.training_owner_health_fixture(owner, 1.);
+        assert!(
+            h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap()
+        );
+        h.native(
+            "SetPlayerHandicap",
+            &[Value::Handle(owner), Value::Real(1.)],
+        )
+        .unwrap();
+        let before: Vec<_> = h
+            .executed_units()
+            .map(|(id, record)| (id, record.clone()))
+            .collect();
+        let handicap = h
+            .native("GetPlayerHandicap", &[Value::Handle(owner)])
+            .unwrap();
+        let queue = h.unit_training_queue(producer).unwrap();
+        let error = h
+            .native(
+                "SetPlayerHandicap",
+                &[Value::Handle(owner), Value::Real(0.75)],
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("mode1 upgrade changes the health-factor class"),
+            "{error}"
+        );
+        assert_eq!(
+            h.native("GetPlayerHandicap", &[Value::Handle(owner)])
+                .unwrap(),
+            handicap
+        );
+        assert_eq!(
+            h.executed_units()
+                .map(|(id, record)| (id, record.clone()))
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+        assert!(h.take_fired_event().is_none());
+        if cancel {
+            assert!(h.cancel_unit_training(producer, 0).unwrap());
+        } else {
+            step(&mut vm, 20.);
+        }
+        assert!(!vm.host().inner.producer_has_training(producer));
+    }
+}
+
+struct Mode1AbilityCatalog {
+    inner: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
+    alias: &'static str,
+}
+impl pcx_sim::world::ObjectCatalog for Mode1AbilityCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.inner.resolve(code)?;
+        definition.fields.insert(
+            *b"uabi",
+            super::super::super::ability_field("abilList", self.alias),
+        );
+        Ok(definition)
+    }
+}
+
+fn mode1_capability_tables(
+    slots: &str,
+    ordinary: bool,
+) -> Arc<pcx_objects::editor::defaults::DefaultTables> {
+    let inventory_row = ["Zm05", "Xinv", "1", "0", "0", slots, "0", "0", "1", "0"];
+    let ordinary_row = ["Za05", "Xother", "1", "0", "0", "0", "0", "0", "0", "0"];
+    let mut rows = vec![inventory_row.as_slice()];
+    if ordinary {
+        rows.push(ordinary_row.as_slice());
+    }
+    let data = super::super::super::sylk(
+        &[
+            "alias",
+            "code",
+            "levels",
+            "reqLevel",
+            "levelSkip",
+            "DataA1",
+            "DataB1",
+            "DataC1",
+            "DataD1",
+            "DataE1",
+        ],
+        &rows,
+    );
+    let metadata = super::super::super::sylk(
+        &[
+            "ID",
+            "field",
+            "slk",
+            "index",
+            "type",
+            "category",
+            "data",
+            "useSpecific",
+            "maxVal",
+        ],
+        &[
+            &[
+                "alev",
+                "levels",
+                "AbilityData",
+                "-1",
+                "int",
+                "data",
+                "0",
+                "",
+                "1",
+            ],
+            &[
+                "inv1",
+                "Data",
+                "AbilityData",
+                "-1",
+                "int",
+                "data",
+                "1",
+                "Zm05",
+                "9",
+            ],
+            &[
+                "inv2",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "2",
+                "",
+                "1",
+            ],
+            &[
+                "inv3",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "3",
+                "",
+                "1",
+            ],
+            &[
+                "inv4",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "4",
+                "",
+                "1",
+            ],
+            &[
+                "inv5",
+                "Data",
+                "AbilityData",
+                "-1",
+                "bool",
+                "data",
+                "5",
+                "",
+                "1",
+            ],
+        ],
+    );
+    Arc::new(
+        pcx_objects::editor::defaults::DefaultTables::from_bytes(
+            pcx_objects::editor::defaults::Identity {
+                install: super::super::super::source().install,
+                edition_version: "synthetic capability".into(),
+            },
+            &[
+                (SlkId::AbilityData.path(), &data),
+                (SlkId::AbilityMetaData.path(), &metadata),
+            ],
+            &[],
+            pcx_objects::editor::EditorReadLimits {
+                max_listed_paths: 2,
+                max_asset_bytes: 16384,
+                max_aggregate_input_bytes: 32768,
+            },
+        )
+        .unwrap(),
+    )
+}
+
+fn mode1_capability_fixture(
+    alias: &'static str,
+    inventory: Option<&str>,
+    mode1: bool,
+) -> (Vm, HandleId, HandleId) {
+    let script = format!(
+        "{EVENTS}\ntype item extends widget\nnative CreateItem takes integer kind, real x, real y returns item\nnative UnitAddItem takes unit u, item i returns boolean\nnative UnitAddAbility takes unit u, integer a returns boolean\nnative UnitRemoveAbility takes unit u, integer a returns boolean\n"
+    );
+    let orders = super::super::super::inventory::order_inputs();
+    let registry = Arc::clone(&orders.0);
+    fixture_with_training_refunds_configured(
+        &[profile_field(b"T009", "Upgrade", "unitList", "")],
+        4,
+        (
+            0.37,
+            Some(0.61),
+            Some(crate::training_rules::UpgradePolicy {
+                refund_rate: 0.23,
+                relative_cost: false,
+                damage_penalty: false,
+                in_progress_id_change: mode1,
+            }),
+        ),
+        true,
+        orders,
+        false,
+        (&script, |mut host| {
+            let (health, numeric) = crate::player_handicap::tests::health_rules_with_bias(0.13);
+            host.training_health_fixture(health, numeric);
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(Mode1AbilityCatalog {
+                inner: Arc::new(UpgradePoolCatalog {
+                    inner: Arc::new(UpgradeCatalog(catalog)),
+                    edits: Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                        hp: "53",
+                        collision: None,
+                    })),
+                }),
+                alias,
+            }));
+            let tables = mode1_capability_tables("2", true);
+            let origin = crate::scripts::AssetIdentity {
+                source: tables.identity().install.clone(),
+                edition: "synthetic".into(),
+                version: "synthetic".into(),
+            };
+            host = host
+                .with_hero_skills(
+                    tables,
+                    origin,
+                    Default::default(),
+                    super::super::hero_rules().0,
+                    crate::playercolor_host::HeroBudget {
+                        abilities_per_unit: 8,
+                        overlay_objects: 0,
+                        modifications_per_ability: 0,
+                    },
+                )
+                .unwrap();
+            if let Some(slots) = inventory {
+                let tables = mode1_capability_tables(
+                    if slots == "missing" { "2" } else { slots },
+                    slots != "missing",
+                );
+                let rules = crate::inventory::Rules::read(
+                    tables,
+                    Default::default(),
+                    Arc::clone(&registry),
+                    &[(
+                        "synthetic capability ranges",
+                        b"[Misc]\nPickupItemRange=5\nDropItemRange=7\nGiveItemRange=9",
+                    )],
+                    1024,
+                )
+                .unwrap();
+                let catalog = host.unit_catalog().unwrap();
+                host = host
+                    .with_item_catalog(
+                        catalog,
+                        super::super::super::source(),
+                        crate::playercolor_host::ItemBudget {
+                            max_records: 8,
+                            max_retained_fields: 16,
+                            max_modifications: 0,
+                        },
+                    )
+                    .unwrap()
+                    .with_inventory(
+                        rules,
+                        crate::inventory::InventoryBudget {
+                            max_slots_per_unit: 9,
+                            max_pending_orders: 4,
+                        },
+                    )
+                    .unwrap();
+            }
+            host
+        }),
+    )
+}
+
+#[test]
+fn structure_upgrade_mode1_ability_changes_refuse_before_mutation_but_noops_and_mode0_remain_valid()
+{
+    for mode1 in [true, false] {
+        for adding in [true, false] {
+            let (mut vm, actor, producer) = mode1_capability_fixture("Za05", Some("2"), mode1);
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            assert!(
+                h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .unwrap()
+            );
+            assert_eq!(
+                h.native(
+                    "UnitAddAbility",
+                    &[
+                        Value::Handle(producer),
+                        Value::Int(i32::from_be_bytes(*b"Za05"))
+                    ]
+                )
+                .unwrap(),
+                Value::Bool(false)
+            );
+            assert_eq!(
+                h.native(
+                    "UnitRemoveAbility",
+                    &[
+                        Value::Handle(producer),
+                        Value::Int(i32::from_be_bytes(*b"Zm05"))
+                    ]
+                )
+                .unwrap(),
+                Value::Bool(false)
+            );
+            let before = h.executed_unit(producer).unwrap().clone();
+            let queue = h.unit_training_queue(producer).unwrap();
+            let result = h.native(
+                if adding {
+                    "UnitAddAbility"
+                } else {
+                    "UnitRemoveAbility"
+                },
+                &[
+                    Value::Handle(producer),
+                    Value::Int(i32::from_be_bytes(if adding { *b"Zm05" } else { *b"Za05" })),
+                ],
+            );
+            if mode1 {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("mode1 upgrade ability changes")
+                );
+                assert_eq!(h.executed_unit(producer).unwrap(), &before);
+                assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+                assert!(h.cancel_unit_training(producer, 0).unwrap());
+            } else {
+                assert_eq!(result.unwrap(), Value::Bool(true));
+            }
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_inventory_source_capability_and_errors_refuse_before_debit() {
+    for (alias, inventory) in [("Zm05", "2"), ("Zm05", "bogus"), ("Za05", "missing")] {
+        let (mut vm, actor, producer) = mode1_capability_fixture(alias, Some(inventory), true);
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        fund(&mut vm, owner, 100, 100);
+        let h = &mut vm.host().inner;
+        let before = h.executed_unit(producer).unwrap().clone();
+        let handles = h.inner().handles();
+        let random = h.script_random_state().cloned();
+        assert!(
+            h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .is_err(),
+            "{alias} {inventory}"
+        );
+        assert_eq!(h.executed_unit(producer).unwrap(), &before);
+        assert!(h.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(h.inner().handles(), handles);
+        assert_eq!(h.script_random_state(), random.as_ref());
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 100);
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_unadmitted_inventory_family_keeps_item_mutations_unavailable() {
+    let (mut vm, actor, producer) = mode1_capability_fixture("Zm05", None, true);
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 100, 100);
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    let before = h.executed_unit(producer).unwrap().clone();
+    assert!(
+        h.native("UnitAddItem", &[Value::Handle(producer), Value::Null])
+            .is_err()
+    );
+    assert_eq!(h.executed_unit(producer).unwrap(), &before);
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+}
+
+#[test]
+fn structure_upgrade_counts_use_pending_target_without_unlocking_its_own_technology_in_either_mode()
+{
+    for mode1 in [false, true] {
+        for action in [
+            "finish",
+            "cancel",
+            "KillUnit",
+            "RemoveUnit",
+            "transfer",
+            "transfer-remove",
+        ] {
+            let (mut vm, actor, producer) = upgrade_pool_fixture_with_mode(
+                Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                    hp: "53",
+                    collision: None,
+                })),
+                mode1,
+            );
+            let h = &mut vm.host().inner;
+            let owner = h.executed_unit(actor).unwrap().owner;
+            let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+                panic!("player")
+            };
+            let ctx = Arc::clone(h.player_context().unwrap());
+            h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+                .unwrap();
+            let count = |h: &mut ObjectHost, player, code, specific| {
+                h.native(
+                    "GetPlayerTechCount",
+                    &[
+                        Value::Handle(player),
+                        Value::Int(i32::from_be_bytes(code)),
+                        Value::Bool(specific),
+                    ],
+                )
+                .unwrap()
+            };
+            assert_eq!(count(h, owner, *b"b001", true), Value::Int(1));
+            assert!(
+                h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .unwrap()
+            );
+            assert_eq!(count(h, owner, *b"b001", true), Value::Int(0));
+            assert_eq!(count(h, owner, *b"b001", false), Value::Int(1));
+            assert_eq!(count(h, owner, *b"d001", true), Value::Int(0));
+            assert_eq!(count(h, owner, *b"d001", false), Value::Int(0));
+            assert_eq!(
+                h.native(
+                    "GetPlayerTechResearched",
+                    &[
+                        Value::Handle(owner),
+                        Value::Int(i32::from_be_bytes(*b"d001")),
+                        Value::Bool(false)
+                    ]
+                )
+                .unwrap(),
+                Value::Bool(false)
+            );
+            assert_eq!(
+                h.native(
+                    "GetPlayerTechResearched",
+                    &[
+                        Value::Handle(owner),
+                        Value::Int(i32::from_be_bytes(*b"b001")),
+                        Value::Bool(false)
+                    ]
+                )
+                .unwrap(),
+                Value::Bool(true)
+            );
+            assert_eq!(player_count(h, "GetPlayerStructureCount", owner, false), 0);
+            assert_eq!(player_count(h, "GetPlayerStructureCount", owner, true), 1);
+            match action {
+                "cancel" => {
+                    assert!(h.cancel_unit_training(producer, 0).unwrap());
+                }
+                "KillUnit" | "RemoveUnit" => {
+                    h.native(action, &[Value::Handle(producer)]).unwrap();
+                }
+                "transfer" | "transfer-remove" => {
+                    h.native(
+                        "SetUnitOwner",
+                        &[
+                            Value::Handle(producer),
+                            Value::Handle(recipient),
+                            Value::Bool(false),
+                        ],
+                    )
+                    .unwrap();
+                    assert_eq!(count(h, owner, *b"b001", false), Value::Int(0));
+                    assert_eq!(count(h, recipient, *b"b001", false), Value::Int(1));
+                    assert_eq!(count(h, recipient, *b"d001", false), Value::Int(0));
+                }
+                "finish" => {}
+                _ => unreachable!(),
+            }
+            let current_owner = if action.starts_with("transfer") {
+                recipient
+            } else {
+                owner
+            };
+            if action == "transfer-remove" {
+                h.native("RemoveUnit", &[Value::Handle(producer)]).unwrap();
+            }
+            if matches!(action, "RemoveUnit" | "transfer-remove") {
+                assert_eq!(count(h, current_owner, *b"b001", true), Value::Int(0));
+                assert_eq!(count(h, current_owner, *b"b001", false), Value::Int(1));
+                assert_eq!(count(h, current_owner, *b"d001", true), Value::Int(0));
+                assert_eq!(count(h, current_owner, *b"d001", false), Value::Int(0));
+                assert_eq!(
+                    player_count(h, "GetPlayerStructureCount", current_owner, false),
+                    0
+                );
+                assert_eq!(
+                    player_count(h, "GetPlayerStructureCount", current_owner, true),
+                    1
+                );
+            }
+            if action == "KillUnit" {
+                assert_eq!(count(h, owner, *b"b001", false), Value::Int(0));
+                assert_eq!(player_count(h, "GetPlayerStructureCount", owner, true), 0);
+            }
+            step(&mut vm, 20.);
+            let h = &mut vm.host().inner;
+            let final_owner = if action.starts_with("transfer") {
+                recipient
+            } else {
+                owner
+            };
+            let completed = matches!(action, "finish" | "transfer");
+            let cancelled = action == "cancel";
+            assert_eq!(
+                count(h, final_owner, *b"d001", true),
+                Value::Int(i32::from(completed))
+            );
+            assert_eq!(
+                count(h, final_owner, *b"b001", true),
+                Value::Int(i32::from(cancelled))
+            );
+            assert_eq!(
+                count(h, final_owner, *b"b001", false),
+                Value::Int(i32::from(completed || cancelled))
+            );
+            assert_eq!(
+                player_count(h, "GetPlayerStructureCount", final_owner, false),
+                i32::from(completed || cancelled)
+            );
+            assert_eq!(
+                player_count(h, "GetPlayerStructureCount", final_owner, true),
+                i32::from(completed || cancelled)
+            );
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_mode1_later_inventory_admission_cannot_change_its_source_capability_class() {
+    let (mut vm, _, producer) = mode1_capability_fixture("Zm05", None, true);
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(producer).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    fund(&mut vm, owner, 100, 100);
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    let catalog = h.unit_catalog().unwrap();
+    let h = std::mem::replace(h, super::super::super::object(&ctx, 64));
+    let rules = crate::inventory::Rules::read(
+        mode1_capability_tables("2", true),
+        Default::default(),
+        super::super::super::inventory::order_inputs().0,
+        &[(
+            "synthetic ranges",
+            b"[Misc]\nPickupItemRange=5\nDropItemRange=7\nGiveItemRange=9",
+        )],
+        1024,
+    )
+    .unwrap();
+    let result = h
+        .with_item_catalog(
+            catalog,
+            super::super::super::source(),
+            crate::playercolor_host::ItemBudget {
+                max_records: 8,
+                max_retained_fields: 16,
+                max_modifications: 0,
+            },
+        )
+        .unwrap()
+        .with_inventory(
+            rules,
+            crate::inventory::InventoryBudget {
+                max_slots_per_unit: 9,
+                max_pending_orders: 4,
+            },
+        );
+    match result {
+        Ok(_) => panic!("pending inventory source class changed"),
+        Err(error) => assert!(
+            error
+                .to_string()
+                .contains("mode1 upgrade inventory capability"),
+            "{error}"
+        ),
+    }
+}
+
+struct UpgradeRequirementCatalog(Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>);
+impl pcx_sim::world::ObjectCatalog for UpgradeRequirementCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.0.resolve(code)?;
+        if code == *b"u001" {
+            definition.fields.get_mut(b"T002").unwrap().value = Ok(FieldValue::Cell("d001".into()));
+        }
+        Ok(definition)
+    }
+}
+
+#[test]
+fn structure_upgrade_pending_target_cannot_supply_training_requirement_until_completion() {
+    for mode1 in [false, true] {
+        let (mut vm, actor, producer) = upgrade_pool_fixture_configured(
+            Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+                hp: "53",
+                collision: None,
+            })),
+            mode1,
+            |mut host| {
+                let catalog = host.unit_catalog().unwrap();
+                host.construction_test_catalog(Arc::new(UpgradeRequirementCatalog(catalog)));
+                host
+            },
+        );
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        fund(&mut vm, owner, 1000, 1000);
+        let h = &mut vm.host().inner;
+        let ctx = Arc::clone(h.player_context().unwrap());
+        h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+            .unwrap();
+        let idle = h
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(owner),
+                    Value::Int(i32::from_be_bytes(*b"b001")),
+                    Value::Real(48.),
+                    Value::Real(48.),
+                    Value::Real(0.),
+                ],
+            )
+            .unwrap();
+        let order = [idle.clone(), Value::Int(i32::from_be_bytes(*b"u001"))];
+        assert_eq!(
+            h.native("IssueImmediateOrderById", &order).unwrap(),
+            Value::Bool(false)
+        );
+        assert!(
+            h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap()
+        );
+        assert!(h.producer_has_training(producer));
+        let bank_before = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+        assert_eq!(
+            h.native("IssueImmediateOrderById", &order).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), bank_before);
+        step(&mut vm, 20.);
+        let h = &mut vm.host().inner;
+        assert_eq!(
+            h.native("IssueImmediateOrderById", &order).unwrap(),
+            Value::Bool(true)
+        );
+        let Value::Handle(idle) = idle else {
+            panic!("unit")
+        };
+        assert_eq!(h.unit_training_queue(idle).unwrap().len(), 1);
+        assert!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD") < bank_before);
+    }
+}
+
+#[test]
+fn technology_removed_unknown_category_retires_before_any_missing_liveness_error() {
+    let (mut vm, actor, _) = fixture();
+    let h = &mut vm.host().inner;
+    let owner = h.executed_unit(actor).unwrap().owner;
+    let ctx = Arc::clone(h.player_context().unwrap());
+    h.admit_upgrade_research(&ctx, crate::upgrade_research::fixture(&ctx.sources.catalog))
+        .unwrap();
+    // Synthetic partial admission: this unit has neither liveness subsystem.
+    h.training_unadmitted_liveness_fixture(actor);
+    h.native("RemoveUnit", &[Value::Handle(actor)]).unwrap();
+    let query = |h: &mut ObjectHost| {
+        h.native(
+            "GetPlayerTechCount",
+            &[
+                Value::Handle(owner),
+                Value::Int(i32::from_be_bytes(*b"u001")),
+                Value::Bool(true),
+            ],
+        )
+    };
+    assert!(
+        query(h)
+            .unwrap_err()
+            .contains("removed technology liveness is not admitted")
+    );
+    step(&mut vm, 1.);
+    let h = &mut vm.host().inner;
+    assert_eq!(
+        query(h),
+        Ok(Value::Int(0)),
+        "retired unknown unit must no longer poison the query"
+    );
+    h.native(
+        "CreateUnit",
+        &[
+            Value::Handle(owner),
+            Value::Int(i32::from_be_bytes(*b"u001")),
+            Value::Real(48.),
+            Value::Real(48.),
+            Value::Real(0.),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        query(h),
+        Ok(Value::Int(1)),
+        "other living providers remain countable"
+    );
+}
+
+struct UpgradeFoodCatalog {
+    inner: Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>,
+    target_used: &'static str,
+    target_cap: &'static str,
+    broken: Arc<std::sync::Mutex<Option<&'static str>>>,
+    actor_cap: &'static str,
+}
+impl pcx_sim::world::ObjectCatalog for UpgradeFoodCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.inner.resolve(code)?;
+        if code == *b"b001" || code == *b"d001" {
+            for (id, value) in [
+                (
+                    b"T006",
+                    if code == *b"b001" {
+                        "2"
+                    } else {
+                        self.target_used
+                    },
+                ),
+                (
+                    b"T007",
+                    if code == *b"b001" {
+                        "13"
+                    } else {
+                        self.target_cap
+                    },
+                ),
+            ] {
+                definition.fields.get_mut(id).unwrap().value = Ok(FieldValue::Cell(value.into()));
+            }
+            if code == *b"d001"
+                && let Some(column) = *self.broken.lock().unwrap()
+            {
+                let id = if column == "fused" { b"T006" } else { b"T007" };
+                definition.fields.get_mut(id).unwrap().value =
+                    Ok(FieldValue::Cell("broken".into()));
+            }
+        } else if code == *b"u001" {
+            definition.fields.get_mut(b"T007").unwrap().value =
+                Ok(FieldValue::Cell(self.actor_cap.into()));
+        }
+        Ok(definition)
+    }
+}
+
+fn upgrade_food_fixture(
+    mode1: bool,
+    used: &'static str,
+    cap: &'static str,
+    actor_cap: &'static str,
+    broken: Arc<std::sync::Mutex<Option<&'static str>>>,
+) -> (Vm, HandleId, HandleId) {
+    let (mut vm, actor, producer) = upgrade_pool_fixture_configured(
+        Arc::new(std::sync::Mutex::new(UpgradePoolEdits {
+            hp: "53",
+            collision: None,
+        })),
+        mode1,
+        |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradeFoodCatalog {
+                inner: catalog,
+                target_used: used,
+                target_cap: cap,
+                actor_cap,
+                broken,
+            }));
+            host.with_unit_food_use(8).unwrap()
+        },
+    );
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    for (name, column) in [
+        ("PLAYER_STATE_RESOURCE_FOOD_USED", "fused"),
+        ("PLAYER_STATE_RESOURCE_FOOD_CAP", "fmade"),
+    ] {
+        let state = vm.global(name);
+        let h = &mut vm.host().inner;
+        let current = h.test_live_food(owner, column).unwrap();
+        h.native(
+            "SetPlayerState",
+            &[Value::Handle(owner), state, Value::Int(current)],
+        )
+        .unwrap();
+    }
+    (vm, actor, producer)
+}
+
+#[test]
+fn structure_upgrade_food_uses_target_cost_original_capacity_and_source_reenrollment() {
+    for mode1 in [false, true] {
+        for used in ["2", "5"] {
+            for cancel in [false, true] {
+                let (mut vm, actor, producer) = upgrade_food_fixture(
+                    mode1,
+                    used,
+                    "21",
+                    "0",
+                    Arc::new(std::sync::Mutex::new(None)),
+                );
+                let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+                let used_state = vm.global("PLAYER_STATE_RESOURCE_FOOD_USED");
+                let cap_state = vm.global("PLAYER_STATE_RESOURCE_FOOD_CAP");
+                let food = |h: &mut ObjectHost| {
+                    [used_state.clone(), cap_state.clone()].map(|state| {
+                        h.native("GetPlayerState", &[Value::Handle(owner), state])
+                            .unwrap()
+                    })
+                };
+                let h = &mut vm.host().inner;
+                assert_eq!(food(h), [Value::Int(5), Value::Int(13)]);
+                h.native(
+                    "SetUnitUseFood",
+                    &[Value::Handle(producer), Value::Bool(false)],
+                )
+                .unwrap();
+                assert_eq!(food(h), [Value::Int(3), Value::Int(13)]);
+                assert!(
+                    h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                        .unwrap()
+                );
+                let pending_used = 3 + used.parse::<i32>().unwrap();
+                assert_eq!(food(h), [Value::Int(pending_used), Value::Int(13)]);
+                h.native("PauseUnit", &[Value::Handle(producer), Value::Bool(true)])
+                    .unwrap();
+                step(&mut vm, 3.);
+                let h = &mut vm.host().inner;
+                assert_eq!(food(h), [Value::Int(pending_used), Value::Int(13)]);
+                h.native(
+                    "SetUnitUseFood",
+                    &[Value::Handle(producer), Value::Bool(true)],
+                )
+                .unwrap();
+                let disable = h.native(
+                    "SetUnitUseFood",
+                    &[Value::Handle(producer), Value::Bool(false)],
+                );
+                let safely_disabled = mode1 || used == "2";
+                if safely_disabled {
+                    disable.unwrap();
+                    assert_eq!(food(h), [Value::Int(3), Value::Int(13)]);
+                } else {
+                    assert!(
+                        disable
+                            .unwrap_err()
+                            .contains("mode0 changed-food pending toggle")
+                    );
+                    assert_eq!(food(h), [Value::Int(pending_used), Value::Int(13)]);
+                }
+                if cancel {
+                    assert!(h.cancel_unit_training(producer, 0).unwrap());
+                } else {
+                    h.native("PauseUnit", &[Value::Handle(producer), Value::Bool(false)])
+                        .unwrap();
+                }
+                step(&mut vm, 20.);
+                let h = &mut vm.host().inner;
+                assert_eq!(
+                    food(h),
+                    if cancel {
+                        [Value::Int(5), Value::Int(13)]
+                    } else {
+                        [
+                            Value::Int(if safely_disabled { 3 } else { pending_used }),
+                            Value::Int(21),
+                        ]
+                    }
+                );
+                assert!(!h.producer_has_training(producer));
+            }
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_changed_food_transfer_refuses_before_owner_finance_and_keeps_recovery() {
+    for mode1 in [false, true] {
+        for cancel in [false, true] {
+            let (mut vm, actor, producer) =
+                upgrade_food_fixture(mode1, "5", "21", "0", Arc::new(std::sync::Mutex::new(None)));
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            let h = &mut vm.host().inner;
+            let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+                panic!("player")
+            };
+            assert!(
+                h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .unwrap()
+            );
+            let before: Vec<_> = h
+                .executed_units()
+                .map(|(id, record)| (id, record.clone()))
+                .collect();
+            let queue = h.unit_training_queue(producer).unwrap();
+            let banks = [owner, recipient].map(|player| {
+                [
+                    bank(h, player, "PLAYER_STATE_RESOURCE_GOLD"),
+                    bank(h, player, "PLAYER_STATE_RESOURCE_LUMBER"),
+                ]
+            });
+            h.native(
+                "SetUnitOwner",
+                &[
+                    Value::Handle(producer),
+                    Value::Handle(owner),
+                    Value::Bool(false),
+                ],
+            )
+            .unwrap();
+            let error = h
+                .native(
+                    "SetUnitOwner",
+                    &[
+                        Value::Handle(producer),
+                        Value::Handle(recipient),
+                        Value::Bool(false),
+                    ],
+                )
+                .unwrap_err();
+            assert!(
+                error.contains("changed-food upgrade ownership transfer"),
+                "{error}"
+            );
+            assert_eq!(
+                h.executed_units()
+                    .map(|(id, record)| (id, record.clone()))
+                    .collect::<Vec<_>>(),
+                before
+            );
+            assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+            assert_eq!(
+                [owner, recipient].map(|player| [
+                    bank(h, player, "PLAYER_STATE_RESOURCE_GOLD"),
+                    bank(h, player, "PLAYER_STATE_RESOURCE_LUMBER")
+                ]),
+                banks
+            );
+            assert!(h.take_fired_event().is_none());
+            if cancel {
+                assert!(h.cancel_unit_training(producer, 0).unwrap());
+            } else {
+                step(&mut vm, 20.);
+            }
+            assert!(!vm.host().inner.producer_has_training(producer));
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_food_source_errors_and_future_capacity_overflow_are_atomic() {
+    for mode1 in [false, true] {
+        for column in ["fused", "fmade"] {
+            for stage in ["start", "cancel", "owner"] {
+                let broken = Arc::new(std::sync::Mutex::new(None));
+                let (mut vm, actor, producer) =
+                    upgrade_food_fixture(mode1, "2", "13", "0", Arc::clone(&broken));
+                let h = &mut vm.host().inner;
+                let owner = h.executed_unit(actor).unwrap().owner;
+                let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+                    panic!("player")
+                };
+                if stage != "start" {
+                    assert!(
+                        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                            .unwrap()
+                    );
+                }
+                let before = h.executed_unit(producer).unwrap().clone();
+                let queue = h.unit_training_queue(producer).unwrap();
+                let money = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+                let handles = h.inner().handles();
+                let random = h.script_random_state().cloned();
+                *broken.lock().unwrap() = Some(column);
+                let refused = match stage {
+                    "start" => h
+                        .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                        .is_err(),
+                    "cancel" => h.cancel_unit_training(producer, 0).is_err(),
+                    "owner" => h
+                        .native(
+                            "SetUnitOwner",
+                            &[
+                                Value::Handle(producer),
+                                Value::Handle(recipient),
+                                Value::Bool(false),
+                            ],
+                        )
+                        .is_err(),
+                    _ => unreachable!(),
+                };
+                assert!(refused, "{mode1} {column} {stage}");
+                assert_eq!(h.executed_unit(producer).unwrap(), &before);
+                assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), money);
+                assert_eq!(h.inner().handles(), handles);
+                assert_eq!(h.script_random_state(), random.as_ref());
+                *broken.lock().unwrap() = None;
+                if stage != "start" {
+                    assert!(h.cancel_unit_training(producer, 0).unwrap());
+                }
+            }
+        }
+        let (mut vm, actor, producer) = upgrade_food_fixture(
+            mode1,
+            "5",
+            "2147483647",
+            "3",
+            Arc::new(std::sync::Mutex::new(None)),
+        );
+        let h = &mut vm.host().inner;
+        let owner = h.executed_unit(actor).unwrap().owner;
+        let before = h.executed_unit(producer).unwrap().clone();
+        let error = h
+            .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("upgrade food counter overflow"),
+            "{error}"
+        );
+        assert_eq!(h.executed_unit(producer).unwrap(), &before);
+        assert!(h.unit_training_queue(producer).unwrap().is_empty());
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 100);
+    }
+}
+
+#[test]
+fn structure_upgrade_food_death_and_equal_food_transfer_keep_canonical_owners_without_refund() {
+    for mode1 in [false, true] {
+        for transfer in [false, true] {
+            let (mut vm, actor, producer) =
+                upgrade_food_fixture(mode1, "2", "13", "0", Arc::new(std::sync::Mutex::new(None)));
+            let h = &mut vm.host().inner;
+            let owner = h.executed_unit(actor).unwrap().owner;
+            let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+                panic!("player")
+            };
+            let prior_recipient = [
+                bank(h, recipient, "PLAYER_STATE_RESOURCE_FOOD_USED"),
+                bank(h, recipient, "PLAYER_STATE_RESOURCE_FOOD_CAP"),
+            ];
+            assert!(
+                h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .unwrap()
+            );
+            if transfer {
+                h.native(
+                    "SetUnitOwner",
+                    &[
+                        Value::Handle(producer),
+                        Value::Handle(recipient),
+                        Value::Bool(false),
+                    ],
+                )
+                .unwrap();
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 3);
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_CAP"), 0);
+                assert_eq!(
+                    bank(h, recipient, "PLAYER_STATE_RESOURCE_FOOD_USED"),
+                    prior_recipient[0] + 2
+                );
+                assert_eq!(
+                    bank(h, recipient, "PLAYER_STATE_RESOURCE_FOOD_CAP"),
+                    prior_recipient[1] + 13
+                );
+            } else {
+                h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+                h.native("KillUnit", &[Value::Handle(producer)]).unwrap();
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"), 3);
+                assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_FOOD_CAP"), 0);
+            }
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
+            step(&mut vm, 20.);
+            let h = &mut vm.host().inner;
+            assert!(!h.producer_has_training(producer));
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 57);
         }
     }
 }

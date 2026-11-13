@@ -7536,3 +7536,24 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   explicit in `/tmp/pc3-module-volume-main-validation/acceptance.json`.
   Audible/native-amplitude parity, full music play/stop/fades, complete source
   registry restore, normal native clock adoption and full tick parity remain open.
+
+- 2026-11-13: Source-qualified pending structure upgrades now retain their
+  original form for cancellation, publish the selected pending form, and finish
+  the admitted positive-life/zero-mana class without a second form reset.
+  Research, handicap, ability, inventory and recipient-pool changes preflight
+  before they can strand a paid job. Canonical pending technology counts and
+  retained removal categories preserve incomplete providers without unlocking
+  their own target requirement. Food queries use the target's used amount and
+  original capacity; start/cancel enrollment and unsupported toggle/transfer
+  classes remain explicit. Construction refund/debit ordering is preserved.
+
+  Combined main validation passes 3,637 package tests, zero failures, 179
+  explicit ignores, twenty-seven selected source/witness gates and 368
+  application executions. Strict native/WASM checks, library builds, scoped
+  formatting and staged-source identity checks pass. The validation harness's
+  obsolete refusal-test name was corrected against its retained successful
+  package log; the original failed receipt remains intact. Receipt:
+  `/tmp/pc3-upgrade-mode1-main-validation/acceptance.json`.
+  Damage refunds, negative-life/mana/bonus/inventory classes, changed-food
+  transfers, generic same-callback food-removal timing, normal native clock
+  adoption, complete Save/root restore and full tick parity remain unfinished.
