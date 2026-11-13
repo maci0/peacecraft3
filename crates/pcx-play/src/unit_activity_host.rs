@@ -2447,16 +2447,22 @@ impl ObjectHost {
         if name == "GetUnitFacing" {
             return Ok(Value::Real(self.native_unit_facing(unit)?.unwrap_or(face)));
         }
-        if name == "SetUnitFacing"
-            && let Some(heading) = self.prepare_native_unit_facing(unit, target)?
-        {
+        if let Some(heading) = self.prepare_native_unit_facing(unit, target)? {
+            if name == "SetUnitFacingTimed" {
+                let profile = self
+                    .unit_activity
+                    .as_ref()
+                    .and_then(|s| s.rules.heading_rules())
+                    .and_then(|rules| rules.profile.as_ref())
+                    .ok_or_else(|| fail("native timed-facing source profile missing"))?;
+                if duration > profile.timed_instant_limit {
+                    return Err(fail(
+                        "script timed turning above the native instant limit is not qualified",
+                    ));
+                }
+            }
             self.commit_native_heading_target(unit, heading);
             return Ok(Value::Null);
-        }
-        if name == "SetUnitFacingTimed" && self.native_unit_facing(unit)?.is_some() {
-            return Err(fail(
-                "script timed turning on the native physics clock is not qualified",
-            ));
         }
         let now = self.timer_game_time().ok_or_else(|| fail("game clock"))?;
         let delta = (target - face + 180.0).rem_euclid(360.0) - 180.0;

@@ -735,6 +735,19 @@ fn heading_session_with(
     HandleId,
     HandleId,
 ) {
+    heading_session_with_script(HEADING_CALLBACKS, prepare)
+}
+
+fn heading_session_with_script(
+    script: &'static str,
+    prepare: impl FnOnce(
+        crate::map_startup_host::MapStartupHost,
+    ) -> crate::map_startup_host::MapStartupHost,
+) -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
     use crate::{
         map_script_session::MapScriptSession,
         map_startup_host::MapStartupHost,
@@ -742,7 +755,7 @@ fn heading_session_with(
     };
     let mut host = host_with(&Config {
         heading: true,
-        script: HEADING_CALLBACKS,
+        script,
         ..Config::default()
     });
     host.admit_unit_curses().unwrap();
@@ -2857,4 +2870,228 @@ endfunction
     assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
     assert!(objects.unit_buffs(target).unwrap().is_empty());
     assert_eq!(vm.global("HeadingEvents"), Value::Int(0));
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source timed-facing threshold and synthetic Counter cadence"]
+fn counter_timed_facing_instant_boundary_preserves_logical_visual_phases_and_refusal_atomicity() {
+    const SCRIPT: &str = r#"
+native GetPlayerNeutralPassive takes nothing returns integer
+native GetPlayerNeutralAggressive takes nothing returns integer
+native GetBJMaxPlayers takes nothing returns integer
+native GetBJPlayerNeutralVictim takes nothing returns integer
+native GetBJPlayerNeutralExtra takes nothing returns integer
+native SetUnitFacingTimed takes unit u, real angle, real duration returns nothing
+constant native GetUnitFacing takes unit u returns real
+type gamespeed extends handle
+constant native ConvertGameSpeed takes integer i returns gamespeed
+constant native GetGameSpeed takes nothing returns gamespeed
+native IsFogEnabled takes nothing returns boolean
+native IsFogMaskEnabled takes nothing returns boolean
+native FogEnable takes boolean b returns nothing
+native FogMaskEnable takes boolean b returns nothing
+globals
+constant gamespeed TimedSpeed=ConvertGameSpeed(0)
+integer HeadingEvents=0
+endglobals
+function HeadingWatch takes nothing returns nothing
+endfunction
+function TimedFacing takes unit u, real angle, real duration returns nothing
+call SetUnitFacingTimed(u,angle,duration)
+endfunction
+"#;
+    let session = || {
+        heading_session_with_script(SCRIPT, |mut host| {
+            let context = Arc::clone(host.context());
+            let speed = host
+                .objects_mut()
+                .native("ConvertGameSpeed", &[Value::Int(0)])
+                .unwrap();
+            let Value::Handle(speed) = speed else {
+                panic!("speed")
+            };
+            host.objects_mut()
+                .admit_startup_settings(
+                    &context,
+                    crate::playercolor_host::StartupSettings {
+                        speed,
+                        fog_enabled: false,
+                        fog_mask_enabled: false,
+                    },
+                )
+                .unwrap();
+            assert!(host.objects_mut().select_native_counter_platform().unwrap());
+            host
+        })
+    };
+    let (image, origin, numeric, budget) =
+        crate::unit_activity::heading::tests::selected_numeric_image();
+    let orders = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
+    let rules = crate::campaign_client::unit_activity(&image, origin, &orders)
+        .unwrap()
+        .with_heading(&image, &numeric, budget)
+        .unwrap();
+    let limit = rules.heading.unwrap().profile.unwrap().timed_instant_limit;
+    for duration in [-1., 0., limit.next_down(), limit] {
+        let (mut session, caster, target) = session();
+        let function = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("TimedFacing")
+            .unwrap();
+        let before = session
+            .host()
+            .unwrap()
+            .objects()
+            .executed_unit(caster)
+            .unwrap()
+            .clone();
+        let clock = format!(
+            "{:?}",
+            session.host().unwrap().objects().test_native_clock_state()
+        );
+        session
+            .call_function(
+                function,
+                &[
+                    Value::Handle(caster),
+                    Value::Real(90.),
+                    Value::Real(duration),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .executed_unit(caster)
+                .unwrap()
+                .face,
+            before.face
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            ),
+            clock
+        );
+        let quantum = session
+            .host()
+            .unwrap()
+            .objects()
+            .test_native_clock_state()
+            .unwrap()
+            .rules()
+            .turn
+            .quantum_ms;
+        for _ in 0..8 {
+            session
+                .advance_native_counter_frame(
+                    Some(std::time::Duration::from_millis(u64::from(quantum))),
+                    100,
+                )
+                .unwrap();
+        }
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native("GetUnitFacing", &[Value::Handle(caster)])
+                .unwrap()
+                .as_real()
+                .unwrap()
+                > before.face
+        );
+        assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .unit_buffs(target)
+                .unwrap()
+                .is_empty()
+        );
+        let objects = session.host().unwrap().objects();
+        let before = objects.executed_unit(caster).unwrap().clone();
+        let clock = format!("{:?}", objects.test_native_clock_state());
+        let error = session
+            .call_function(
+                function,
+                &[
+                    Value::Handle(caster),
+                    Value::Real(180.),
+                    Value::Real(limit.next_up()),
+                ],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("above the native instant limit"), "{error}");
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .executed_unit(caster)
+                .unwrap(),
+            &before
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            ),
+            clock
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source timed-facing threshold on a Counter-selected startup"]
+fn counter_preentry_timed_facing_in_globals_config_and_main_keeps_native_visual_state() {
+    const MAP: &str = r#"
+globals
+unit H=null
+real GlobalFace=-1.0
+real ConfigFace=-1.0
+real MainFace=-1.0
+boolean Ready=SpawnTimed()
+endglobals
+function SpawnTimed takes nothing returns boolean
+set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
+call SetUnitFacingTimed(H,90.0,0.0)
+set GlobalFace=GetUnitFacing(H)
+return true
+endfunction
+function config takes nothing returns nothing
+call SetUnitFacingTimed(H,180.0,0.0)
+set ConfigFace=GetUnitFacing(H)
+endfunction
+function main takes nothing returns nothing
+call SetUnitFacingTimed(H,270.0,0.0)
+set MainFace=GetUnitFacing(H)
+endfunction
+"#;
+    let mut host = host_with(&Config {
+        map: MAP,
+        script: "native SetUnitFacingTimed takes unit u, real angle, real duration returns nothing\nconstant native GetUnitFacing takes unit u returns real\n",
+        heading: true,
+        ..Config::default()
+    });
+    assert!(host.select_native_counter_platform().unwrap());
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut vm = context.scripts.clone().owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("config", &[]).unwrap();
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.global("Ready"), Value::Bool(true));
+    for name in ["GlobalFace", "ConfigFace", "MainFace"] {
+        assert_eq!(vm.global(name), Value::Real(0.), "{name}");
+    }
+    assert!(vm.host().inner.native_counter_platform());
 }
