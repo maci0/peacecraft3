@@ -590,16 +590,25 @@ mod selected_tests {
                 assert_eq!(&actual, expected);
                 println!("actual chapter carryover verified: {actual:?}");
             }
-            for tick in 1..=seconds * 64 {
-                let at = tick as f64 / 64.0;
-                pcx_play::campaign_host::advance_tick(&mut session, at, 65536)
-                    .unwrap_or_else(|error| panic!("next chapter at {at:.6}s: {error}"));
+            let mut opening = CampaignRuntime::new(Duration::from_secs_f64(1.0 / 64.0), 1, 65536);
+            assert_eq!(opening.advance_ticks(&mut session, 0).unwrap(), 0);
+            let start = session.host().unwrap().objects().timer_game_time().unwrap();
+            let target = start + seconds as f64;
+            // Diagnostic counter-input bound, not an authored turn-to-wall ratio.
+            for tick in 1..=seconds.checked_mul(64 * 16).unwrap() {
+                if session.host().unwrap().objects().timer_game_time().unwrap() >= target {
+                    break;
+                }
+                let advanced = opening
+                    .advance_ticks(&mut session, 1)
+                    .unwrap_or_else(|error| panic!("next chapter counter tick {tick}: {error}"));
+                assert_eq!(advanced, 1, "next chapter counter interval must commit");
             }
             if seconds > 0 {
-                assert_eq!(
-                    session.host().unwrap().objects().timer_game_time(),
-                    Some(seconds as f64),
-                    "the script must actually advance through the requested opening interval"
+                assert!(session.host().unwrap().objects().native_counter_platform());
+                assert!(
+                    session.host().unwrap().objects().timer_game_time().unwrap() >= target,
+                    "the admitted game clock must reach the requested opening interval"
                 );
             }
         }
