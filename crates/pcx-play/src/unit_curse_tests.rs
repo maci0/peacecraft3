@@ -50,6 +50,7 @@ fn cells(headers: &[&str], values: &[(&str, &str)]) -> Vec<String> {
 
 #[derive(Clone)]
 struct Config {
+    map: &'static str,
     script: &'static str,
     heading: bool,
     mana_minimum: Option<f32>,
@@ -72,6 +73,7 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            map: HOLY_MAP,
             script: "",
             heading: false,
             mana_minimum: Some(0.),
@@ -525,7 +527,7 @@ fn host_with(config: &Config) -> ObjectHost {
         edition: "fixture".into(),
         version: "fixture".into(),
     };
-    let mut h = position_host_admitting(1000, 16, HOLY_MAP, &extra, &fields, |h| h)
+    let mut h = position_host_admitting(1000, 16, config.map, &extra, &fields, |h| h)
         .with_player_abilities(16)
         .unwrap()
         .with_locations()
@@ -2782,4 +2784,77 @@ fn native_physics_counter_admission_retains_fresh_state_on_zero_work_and_arms_on
         host.native_queue_point(Domain::Real),
         Some(Point { cycle: 0, local: 0 })
     );
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic and synthetic pre-entry cast properties"]
+fn counter_preentry_selection_keeps_global_config_and_main_slow_orders_in_native_heading() {
+    const MAP: &str = r#"
+globals
+unit H=null
+unit E=null
+real GlobalFace=-1.0
+real ConfigFace=-1.0
+real MainFace=-1.0
+boolean GlobalAccepted=false
+boolean ConfigAccepted=false
+boolean MainAccepted=false
+boolean Ready=SpawnGlobal()
+endglobals
+function SpawnGlobal takes nothing returns boolean
+set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
+set E=CreateUnit(Player(5),'u001',16.0,112.0,180.0)
+call SetUnitState(H,UNIT_STATE_MANA,200.0)
+call HeadingWatch()
+call SetUnitFacing(H,45.0)
+set GlobalAccepted=IssueTargetOrder(H,"alpha",E)
+set GlobalFace=GetUnitFacing(H)
+return true
+endfunction
+function config takes nothing returns nothing
+call SetUnitFacing(H,180.0)
+set ConfigAccepted=IssueTargetOrder(H,"alpha",E)
+set ConfigFace=GetUnitFacing(H)
+endfunction
+function main takes nothing returns nothing
+call SetUnitFacing(H,270.0)
+set MainAccepted=IssueTargetOrder(H,"alpha",E)
+set MainFace=GetUnitFacing(H)
+endfunction
+"#;
+    let mut host = host_with(&Config {
+        map: MAP,
+        script: HEADING_CALLBACKS,
+        heading: true,
+        ..Config::default()
+    });
+    host.admit_unit_curses().unwrap();
+    assert!(host.select_native_counter_platform().unwrap());
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut vm = context.scripts.clone().owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("config", &[]).unwrap();
+    vm.call("main", &[]).unwrap();
+    for name in ["Ready", "GlobalAccepted", "ConfigAccepted", "MainAccepted"] {
+        assert_eq!(vm.global(name), Value::Bool(true), "{name}");
+    }
+    for name in ["GlobalFace", "ConfigFace", "MainFace"] {
+        assert_eq!(
+            vm.global(name),
+            Value::Real(0.),
+            "{name} must precede visual publication"
+        );
+    }
+    let Value::Handle(caster) = vm.global("H") else {
+        panic!("caster")
+    };
+    let Value::Handle(target) = vm.global("E") else {
+        panic!("target")
+    };
+    let objects = &mut vm.host().inner;
+    assert!(objects.native_counter_platform());
+    assert!(objects.native_heading_waiting(caster));
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
+    assert_eq!(vm.global("HeadingEvents"), Value::Int(0));
 }

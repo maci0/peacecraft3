@@ -2154,3 +2154,299 @@ fn native_speed_changes_require_the_counter_rate_consumer() {
         );
     }
 }
+
+fn counter_runtime(app: &mut App, step: Duration, budget: usize) -> CampaignRuntime {
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::ZERO), 64)
+        .unwrap();
+    let mut runtime = CampaignRuntime::new(step, 64, budget);
+    assert_eq!(runtime.advance_ticks(&mut session, 0).unwrap(), 0);
+    runtime
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_wall_update_keeps_one_real_frame_after_all_game_quanta() {
+    let mut app = timer_app();
+    publish_counter_map(&mut app, PAIRED_SLEEP);
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), 64);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.advance(&mut session, Duration::from_millis(100));
+    assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+    assert_eq!(runtime.tick(), 4);
+    assert!(runtime.pending().is_zero());
+    assert_eq!(session.global("trace"), Some(Value::Int(12)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        1f32.to_bits()
+    );
+    runtime.advance(&mut session, Duration::from_millis(25));
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.25)));
+    assert_eq!(runtime.tick(), 5);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_explicit_ticks_progress_real_sleep_while_the_game_is_paused() {
+    let script = "globals\ntrigger action=CreateTrigger()\ntimer starter=CreateTimer()\ninteger trace=0\nendglobals\nfunction wait takes nothing returns nothing\nset trace=1\ncall PauseGame(true)\ncall TriggerSleepAction(0.125)\nset trace=2\ncall PauseGame(false)\nendfunction\nfunction begin takes nothing returns nothing\ncall TriggerExecute(action)\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TriggerAddAction(action,function wait)\ncall TimerStart(starter,0.0625,false,function begin)\nendfunction\n";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), 64);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(runtime.advance_ticks(&mut session, 2).unwrap(), 2);
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.25f32.to_bits()
+    );
+    assert_eq!(runtime.advance_ticks(&mut session, 3).unwrap(), 3);
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    let real = session
+        .host()
+        .unwrap()
+        .objects()
+        .native_queue_point(clock::Domain::Real)
+        .unwrap();
+    assert!(
+        f32::from_bits(real.local) < 0.125,
+        "source addition must retain the pre-deadline cursor"
+    );
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(session.global("trace"), Some(Value::Int(2)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.25f32.to_bits()
+    );
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.5f32.to_bits()
+    );
+    assert_eq!(runtime.tick(), 7);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_budget_retry_counts_only_committed_frames_and_never_replays_input() {
+    let script = "globals\ntimer a=CreateTimer()\ntimer b=CreateTimer()\ntimer c=CreateTimer()\ninteger trace=0\nendglobals\nfunction one takes nothing returns nothing\nset trace=trace*10+1\nendfunction\nfunction two takes nothing returns nothing\nset trace=trace*10+2\nendfunction\nfunction three takes nothing returns nothing\nset trace=trace*10+3\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(a,0.0625,false,function one)\ncall TimerStart(b,0.125,false,function two)\ncall TimerStart(c,0.1875,false,function three)\nendfunction\n";
+    let run = |budget| {
+        let mut app = timer_app();
+        publish_counter_map(&mut app, script);
+        let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), budget);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_millis(100));
+        if budget == 1 {
+            assert!(runtime.last_error.is_none());
+            assert_eq!(runtime.tick(), 0);
+            assert_eq!(runtime.pending(), Duration::from_millis(100));
+            assert_eq!(session.global("trace"), Some(Value::Int(1)));
+            assert!(matches!(
+                runtime.advance_ticks(&mut session, 1),
+                Err(peacecraft3::campaign_runtime::CampaignStepError::PendingFrameTime)
+            ));
+        }
+        for _ in 0..8 {
+            if runtime.pending().is_zero() {
+                break;
+            }
+            runtime.advance(&mut session, Duration::ZERO);
+        }
+        assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        assert!(runtime.pending().is_zero());
+        assert_eq!(runtime.tick(), 4);
+        let trace = session.global("trace");
+        let objects = session.host().unwrap().objects();
+        (
+            trace,
+            objects.native_game_point(),
+            objects.native_queue_point(clock::Domain::Real),
+            runtime.tick(),
+        )
+    };
+    assert_eq!(run(1), run(64));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_submillisecond_transport_and_explicit_ticks_keep_speed_domains_separate() {
+    use std::num::NonZeroU32;
+    let script = "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(1), 64);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.advance(&mut session, Duration::from_micros(500));
+    assert_eq!(runtime.tick(), 0);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real)
+            .unwrap()
+            .local,
+        0
+    );
+    runtime.set_speed(NonZeroU32::new(2).unwrap());
+    runtime.advance(&mut session, Duration::from_micros(250));
+    assert_eq!(runtime.tick(), 1);
+    let before = session
+        .host()
+        .unwrap()
+        .objects()
+        .native_queue_point(clock::Domain::Real);
+    runtime.view_paused = true;
+    runtime.advance(&mut session, Duration::from_secs(1));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        before
+    );
+    runtime.view_paused = false;
+    runtime.advance(&mut session, Duration::from_millis(24));
+    assert_eq!(runtime.tick(), 49);
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(runtime.tick(), 50);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.5f32.to_bits()
+    );
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 65),
+        Err(peacecraft3::campaign_runtime::CampaignStepError::TickBudget { .. })
+    ));
+    assert_eq!(runtime.tick(), 50);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_vm_fault_is_sticky_and_session_replacement_resets_transport_accounting() {
+    let mut app = timer_app();
+    publish_counter_map(
+        &mut app,
+        "native CounterUnsupported takes nothing returns nothing\nglobals\ntimer t=CreateTimer()\nendglobals\nfunction fail takes nothing returns nothing\ncall CounterUnsupported()\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(t,0.0625,false,function fail)\nendfunction\n",
+    );
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), 64);
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_millis(25));
+        assert!(
+            runtime
+                .last_error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("CounterUnsupported")
+        );
+        assert_eq!(runtime.tick(), 0);
+        let before = session.host().unwrap().objects().native_game_point();
+        let pending = session
+            .host()
+            .unwrap()
+            .objects()
+            .native_counter_pending_ns();
+        runtime.advance(&mut session, Duration::from_secs(1));
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            before
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .native_counter_pending_ns(),
+            pending
+        );
+    }
+    publish_counter_map(
+        &mut app,
+        "globals\ninteger replacement=73\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::ZERO), 64)
+        .unwrap();
+    runtime.advance(&mut session, Duration::from_secs(1));
+    assert_eq!(runtime.tick(), 0);
+    assert!(runtime.pending().is_zero());
+    assert!(runtime.last_error.is_none());
+    runtime.advance(&mut session, Duration::from_millis(25));
+    assert_eq!(runtime.tick(), 1);
+    assert_eq!(session.global("replacement"), Some(Value::Int(73)));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_factory_selects_before_global_config_and_main_timer_requests() {
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install_native_counter(&mut app);
+    publish_counter_map(
+        &mut app,
+        "globals\ntimer held=CreateTimer()\ntimer a=CreateTimer()\ntimer b=CreateTimer()\ntimer c=CreateTimer()\ninteger trace=0\nreal global_at=-1.0\nreal config_at=-1.0\nreal main_at=-1.0\nboolean ready=ArmGlobal()\nendglobals\nfunction one takes nothing returns nothing\nset trace=trace*10+1\nset global_at=TimerGetElapsed(held)\nendfunction\nfunction two takes nothing returns nothing\nset trace=trace*10+2\nset config_at=TimerGetElapsed(held)\nendfunction\nfunction three takes nothing returns nothing\nset trace=trace*10+3\nset main_at=TimerGetElapsed(held)\nendfunction\nfunction ArmGlobal takes nothing returns boolean\ncall TimerStart(held,4.0,false,null)\ncall TimerStart(a,0.0625,false,function one)\nreturn true\nendfunction\nfunction config takes nothing returns nothing\ncall TimerStart(b,0.125,false,function two)\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(c,0.1875,false,function three)\nendfunction\n",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert!(session.host().unwrap().objects().native_counter_platform());
+    assert_eq!(session.global("ready"), Some(Value::Bool(true)));
+    assert!(session.advance_timers(0.25, 64).is_err());
+    assert_eq!(session.global("trace"), Some(Value::Int(0)));
+    let mut runtime = CampaignRuntime::new(Duration::from_millis(25), 8, 64);
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 0);
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("global_at"), Some(Value::Real(0.0625)));
+    assert_eq!(session.global("config_at"), Some(Value::Real(0.125)));
+    assert_eq!(session.global("main_at"), Some(Value::Real(0.1875)));
+}

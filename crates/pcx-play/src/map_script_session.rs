@@ -351,6 +351,17 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         }
         self.advance_native_timers(until, &mut budget, &mut work)
     }
+    /// Queue-budget refusals may resume only while no selected delivery has faulted.
+    pub fn native_pacing_can_resume(&mut self, error: &TimerSessionError) -> bool {
+        matches!(
+            error,
+            TimerSessionError::QueueBudget(_) | TimerSessionError::WakeBudget
+        ) && self.check_pending_projection().is_ok()
+            && self
+                .host()
+                .is_some_and(|host| host.objects().check_native_physics_fault().is_ok())
+    }
+
     /// Admit one independently supplied frame, or resume retained frame work.
     /// This transport does not infer game speed or real time from a legacy horizon.
     pub fn advance_native_frame(
