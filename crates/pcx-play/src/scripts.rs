@@ -221,6 +221,9 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
@@ -287,6 +290,9 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }

@@ -1221,6 +1221,9 @@ impl Host for MapStartupHost {
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.world().real_ops()
     }
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.world_mut().checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.world_mut().suspend(name, args)
     }
