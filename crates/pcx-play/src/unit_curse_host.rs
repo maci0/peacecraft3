@@ -941,6 +941,7 @@ impl ObjectHost {
     }
 
     fn cancel_curse_cast(&mut self, caster: HandleId, now: f64) -> Result<(), Error> {
+        self.clear_unit_heading_target(caster);
         self.end_interrupted_slow(caster);
         let animation = self
             .curses

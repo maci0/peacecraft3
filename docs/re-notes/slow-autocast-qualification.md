@@ -245,6 +245,19 @@ driver before issuing orders. Existing Slow effect/backswing deadlines also
 retain their previous clock representation; cross-family equal-expiry ordering,
 moving-turn behavior and positive automatic selection are not established here.
 
+Review follow-up: raw timer selection skips paused or consumed requests before
+requiring a raw deadline, while an armed timer without one still refuses. Slow
+cancellation also clears its retained heading relation when a positioned target
+dies or becomes ineligible. The two new public regressions fail against the
+previous implementation (`/tmp/pc3-sol04-heading-review-red.log`) and pass with
+the fixes, alongside the four earlier public tests. The timer control covers a
+paused/resumed timer, retained expired one-shot and one-shot timed event; it
+preserves the existing qualified resume-dispatch full-timeout rearm.
+All 15 groups, including strict native/WASM Clippy and library builds, passed
+against unchanged source hashes in
+`/tmp/pc3-sol04-heading-review-validation-1794528614226963183/report.json`.
+These error/lifecycle checks add no native parity claim.
+
 ## Selected-code findings and remaining gates
 
 Slow candidate filter `0xbf7c20`, evidence
