@@ -165,6 +165,12 @@ pub trait Host {
         false
     }
 
+    /// Stop at this native's return hole for the whole-world checkpoint owner.
+    /// The host retains the request; this neither sleeps nor writes a save.
+    fn checkpoint(&mut self, _name: &str, _args: &[Value]) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// A thread parked at a thread boundary. Return a fresh ticket that a later
     /// [`Vm::resume_thread`] presents; the host keeps that thread's own context.
     fn park_thread(&mut self) -> Result<u64, String> {
@@ -225,6 +231,7 @@ impl Host for NullHost {
 pub enum Exec {
     Finished(Value),
     Suspended,
+    Checkpoint,
 }
 
 /// One variable: a scalar or an array, plus the type its declaration spelled.
@@ -434,6 +441,7 @@ pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
     /// Set for the duration of `invoke`, `resume` and `init_globals`.
     busy: bool,
     suspended_span: Option<Span>,
+    checkpoint_span: Option<Span>,
     /// Parked threads by host ticket.
     parked: BTreeMap<u64, Thread>,
     spawns: Vec<Spawn>,
@@ -481,6 +489,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             error_source: None,
             busy: false,
             suspended_span: None,
+            checkpoint_span: None,
             parked: BTreeMap::new(),
             spawns: Vec::new(),
             thread_entry: None,
@@ -572,6 +581,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, crate::Error> {
         match self.invoke(name, args)? {
             Exec::Finished(value) => Ok(value),
+            Exec::Checkpoint => Err(self.checkpoint_owner_error()),
             Exec::Suspended => {
                 self.error_source = self.stack.last().map(|frame| frame.source.clone());
                 Err(crate::Error::run(
@@ -617,6 +627,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// or after an error cleared it, is an error.
     pub fn resume(&mut self, value: Value) -> Result<Exec, crate::Error> {
         self.refuse_reentry()?;
+        if self.checkpoint_span.is_some() {
+            return Err(self.checkpoint_owner_error());
+        }
         if self.stack.is_empty() {
             return Err(crate::Error::run(
                 Span::EMPTY,
@@ -635,6 +648,47 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         result
     }
 
+    /// Continue the exact checkpoint return hole after the root owner commits or fails.
+    /// A failure aborts only the active execution; older parked threads remain owned.
+    pub fn resume_checkpoint(
+        &mut self,
+        value: Result<Value, String>,
+    ) -> Result<Exec, crate::Error> {
+        self.refuse_reentry()?;
+        let Some(span) = self.checkpoint_span.take() else {
+            return Err(crate::Error::run(
+                Span::EMPTY,
+                "no VM checkpoint is pending",
+            ));
+        };
+        let value = match value {
+            Ok(value) => value,
+            Err(why) => return self.exit_thread(Err(crate::Error::run(span, why))),
+        };
+        self.busy = true;
+        self.suspended_span = None;
+        self.error_source = None;
+        self.stack
+            .last_mut()
+            .expect("checkpoint activation")
+            .incoming = Some(value);
+        let result = if self.thread_entry.is_some() {
+            let result = self.drive_thread();
+            self.finish_thread_entry(result)
+        } else {
+            self.drive_until(0)
+        };
+        self.exit_thread(result)
+    }
+
+    fn checkpoint_owner_error(&mut self) -> crate::Error {
+        self.error_source = self.stack.last().map(|a| a.source.clone());
+        crate::Error::run(
+            self.checkpoint_span.unwrap_or(Span::EMPTY),
+            "whole-world checkpoint pending; resume through its owning caller",
+        )
+    }
+
     /// Start `functions` in order as one new thread on an idle VM. A park stores
     /// the thread for [`Vm::resume_thread`]; the host keeps its own context.
     /// The step budget restarts here.
@@ -642,6 +696,18 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         &mut self,
         functions: &[crate::value::FunctionId],
     ) -> Result<(), crate::Error> {
+        match self.run_thread_until_checkpoint(functions)? {
+            Exec::Finished(_) => Ok(()),
+            Exec::Checkpoint => Err(self.checkpoint_owner_error()),
+            Exec::Suspended => Err(broken(Span::EMPTY, "thread park was not retained")),
+        }
+    }
+
+    /// Start a thread while allowing its owner to capture the complete world at a checkpoint.
+    pub fn run_thread_until_checkpoint(
+        &mut self,
+        functions: &[crate::value::FunctionId],
+    ) -> Result<Exec, crate::Error> {
         let mut remaining = std::collections::VecDeque::new();
         remaining.try_reserve(functions.len()).map_err(|_| {
             crate::Error::run(Span::EMPTY, "script thread callback allocation failed")
@@ -659,6 +725,15 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// Continue a parked thread by its ticket. `TriggerSleepAction`-style parks
     /// produce no value, so the parked native receives `null`.
     pub fn resume_thread(&mut self, ticket: u64) -> Result<(), crate::Error> {
+        match self.resume_thread_until_checkpoint(ticket)? {
+            Exec::Finished(_) => Ok(()),
+            Exec::Checkpoint => Err(self.checkpoint_owner_error()),
+            Exec::Suspended => Err(broken(Span::EMPTY, "thread park was not retained")),
+        }
+    }
+
+    /// Resume a parked thread without treating a checkpoint as a sleep or completion.
+    pub fn resume_thread_until_checkpoint(&mut self, ticket: u64) -> Result<Exec, crate::Error> {
         self.enter_thread()?;
         let Some(thread) = self.parked.remove(&ticket) else {
             self.busy = false;
@@ -705,7 +780,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         Ok(())
     }
 
-    fn exit_thread(&mut self, result: Result<(), crate::Error>) -> Result<(), crate::Error> {
+    fn exit_thread<T>(&mut self, result: Result<T, crate::Error>) -> Result<T, crate::Error> {
         self.busy = false;
         if result.is_err() {
             if self.error_source.is_none() {
@@ -716,6 +791,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.thread_entry = None;
             self.depth = 0;
             self.suspended_span = None;
+            self.checkpoint_span = None;
             self.host.abort_script_calls();
         }
         result
@@ -723,28 +799,39 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
 
     /// Drive the current stack, then each remaining callback, until the thread
     /// finishes or parks. A park moves the whole stack into `parked`.
-    fn run_functions(&mut self, entry: ThreadEntry) -> Result<(), crate::Error> {
+    fn run_functions(&mut self, entry: ThreadEntry) -> Result<Exec, crate::Error> {
         if self.thread_entry.is_some() {
             return Err(broken(entry.span, "script thread entry is already active"));
         }
         self.thread_entry = Some(entry);
         let result = self.drive_thread();
+        self.finish_thread_entry(result)
+    }
+
+    fn finish_thread_entry(
+        &mut self,
+        result: Result<Exec, crate::Error>,
+    ) -> Result<Exec, crate::Error> {
+        if matches!(result, Ok(Exec::Checkpoint)) {
+            return result;
+        }
         let entry = self
             .thread_entry
             .take()
             .expect("active script thread entry");
-        result.and_then(|()| {
+        result.and_then(|outcome| {
             if entry.leave_on_finish {
                 self.host
                     .leave_thread()
-                    .map_err(|why| crate::Error::run(entry.span, why))
+                    .map_err(|why| crate::Error::run(entry.span, why))?;
+                Ok(outcome)
             } else {
-                Ok(())
+                Ok(outcome)
             }
         })
     }
 
-    fn drive_thread(&mut self) -> Result<(), crate::Error> {
+    fn drive_thread(&mut self) -> Result<Exec, crate::Error> {
         loop {
             let entry = self
                 .thread_entry
@@ -753,11 +840,15 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             let span = entry.span;
             if self.stack.is_empty() {
                 let Some(id) = entry.remaining.pop_front() else {
-                    return Ok(());
+                    return Ok(Exec::Finished(Value::Null));
                 };
                 self.push_thread_callback(id, span)?;
             }
-            if let Exec::Suspended = self.drive_until(0)? {
+            let outcome = self.drive_until(0)?;
+            if outcome == Exec::Checkpoint {
+                return Ok(outcome);
+            }
+            if let Exec::Suspended = outcome {
                 let at = self.suspended_span.unwrap_or(span);
                 let ticket = self
                     .host
@@ -778,7 +869,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     ),
                 };
                 self.parked.insert(ticket, thread);
-                return Ok(());
+                return Ok(Exec::Finished(Value::Null));
             }
         }
     }
@@ -818,6 +909,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.spawns.clear();
             self.depth = 0;
             self.suspended_span = None;
+            self.checkpoint_span = None;
         }
         result
     }
@@ -977,6 +1069,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.spawns.clear();
             self.depth = 0;
             self.suspended_span = None;
+            self.checkpoint_span = None;
         }
         result
     }
@@ -992,6 +1085,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             }
             match self.run_top()? {
                 TopStop::Suspended => {
+                    if self.checkpoint_span.is_some() {
+                        return Ok(Exec::Checkpoint);
+                    }
                     let Some(spawn) = self.spawns.last() else {
                         return Ok(Exec::Suspended);
                     };
@@ -1822,7 +1918,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     let base = self.stack.len() - 1;
                     match self.drive_until(base)? {
                         Exec::Finished(value) => out = self.finish_zip(zip, value, frame)?,
-                        Exec::Suspended => {
+                        Exec::Suspended | Exec::Checkpoint => {
                             self.stack.clear();
                             self.depth = 0;
                             return Err(crate::Error::run(
@@ -2105,6 +2201,14 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 let declared_at = native.span;
                 self.check_native_arity(callee, arity, argv.len(), span)?;
                 let argv = self.coerce_params(&native.params, argv, span)?;
+                if self
+                    .host
+                    .checkpoint(callee, &argv)
+                    .map_err(|why| crate::Error::run(span, why))?
+                {
+                    self.checkpoint_span = Some(span);
+                    return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));
+                }
                 if self.host.suspend(callee, &argv) {
                     self.suspended_span = Some(span);
                     return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));
