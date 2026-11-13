@@ -156,6 +156,13 @@ resume must not inherit the enclosing outer point or reconstruct a point from
 preflight refusal can prevent corruption while a family is unbound, but is not a
 completed wake implementation.
 
+The called prototype now refuses an unbound map wake before changing its public
+clock or consuming its thread. An unbound AI wake refuses before the no-expiry
+path could advance the clock to its legacy deadline. Earlier qualified timers
+still run. Published regressions exercise both refusals, retained parked work,
+and the unchanged Legacy map sleep path. This guard is temporary; it does not
+qualify either native wake family or enable normal application adoption.
+
 The generic equal-expiry heap comparator, source queue sequence rollover and
 ordering across timer, automatic-cast and physics consumers remain open. The
 current tie policy is the documented recreation policy. Native heading needs its

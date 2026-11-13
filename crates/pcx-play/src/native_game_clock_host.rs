@@ -90,7 +90,7 @@ impl ObjectHost {
             .leave_callback()
             .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))
     }
-    pub(super) fn native_clock_driving(&self) -> bool {
+    pub(crate) fn native_clock_driving(&self) -> bool {
         self.native_game_clock
             .as_ref()
             .is_some_and(|clock| clock.driver() == Driver::Native)

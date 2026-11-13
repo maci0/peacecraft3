@@ -526,3 +526,211 @@ fn explicit_initial_caller_clocks_preserve_legacy_factory_behavior() {
     );
     assert_eq!(session.advance_timers(40., 8).unwrap(), 1);
 }
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_unbound_map_wake_preserves_ticket_and_prior_timer_progress() {
+    let common = format!(
+        "{}\nnative TriggerSleepAction takes real seconds returns nothing\n",
+        super::super::timed_trigger_cases::COMMON
+    );
+    let script = "\
+globals
+trigger sleeper=CreateTrigger()
+timer t=CreateTimer()
+integer trace=0
+endglobals
+function afterSleep takes nothing returns nothing
+set trace=trace*10+4
+endfunction
+function beforeSleep takes nothing returns nothing
+set trace=trace*10+2
+endfunction
+function sleepAction takes nothing returns nothing
+set trace=trace*10+1
+call TriggerSleepAction(0.125)
+set trace=trace*10+3
+call TimerStart(t,0.1,false,function afterSleep)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(sleeper,function sleepAction)
+call TriggerRegisterTimerEvent(sleeper,0.0625,false)
+call TimerStart(t,0.125,false,function beforeSleep)
+endfunction
+";
+    for native in [true, false] {
+        let mut app = timer_app();
+        deliver_timer_with(&mut app, script, 1, &common, |inputs| {
+            inputs.timer_time = Some(0.);
+            inputs.numeric = Some(numeric(true));
+            inputs.enumeration.names.push("ConvertGameEvent".into());
+            inputs.enumeration.limits.max_handles = 256;
+            inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+                initial_enabled: true,
+                timer_event_global: "TEST_TIMER_EVENT".into(),
+                max_timed_events: 8,
+                max_parked_threads: 8,
+            });
+        });
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        if native {
+            for elapsed in [Duration::from_millis(250), Duration::ZERO] {
+                let error =
+                    pcx_play::campaign_host::advance_paced_tick(&mut session, elapsed, 0.25, 8)
+                        .unwrap_err();
+                assert!(
+                    error.to_string().contains("native real-queue entry"),
+                    "{error}"
+                );
+                assert_eq!(session.global("trace"), Some(Value::Int(12)));
+                let objects = session.host().unwrap().objects();
+                assert_eq!(objects.parked_thread_count(), 1);
+                assert_eq!(objects.timer_game_time(), Some(0.125));
+                assert_eq!(
+                    objects.native_game_point(),
+                    Some(clock::Point {
+                        cycle: 0,
+                        local: 0.25f32.to_bits()
+                    })
+                );
+            }
+        } else {
+            assert_eq!(session.advance_timers(0.5, 8).unwrap(), 4);
+            assert_eq!(session.global("trace"), Some(Value::Int(1234)));
+            assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_unbound_ai_wake_preserves_ticket_and_prior_timer_progress() {
+    use pcx_play::map_startup_host::MapStartupError;
+    use pcx_script::Host;
+
+    let mut app = timer_app();
+    let common = "\
+native StartCampaignAI takes player p, string path returns nothing
+constant native GetPlayerState takes player p, playerstate state returns integer
+globals
+constant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)
+constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
+constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
+endglobals
+";
+    let script = "\
+globals
+timer t=CreateTimer()
+integer seen=0
+endglobals
+function tick takes nothing returns nothing
+set seen=seen+1
+endfunction
+function config takes nothing returns nothing
+call SetPlayers(1)
+endfunction
+function main takes nothing returns nothing
+call TimerStart(t,0.125,false,function tick)
+endfunction
+function start takes nothing returns nothing
+call StartCampaignAI(Player(0),\"idle.ai\")
+endfunction
+";
+    deliver_timer_with(&mut app, script, 1, common, |inputs| {
+        inputs.timer_time = Some(0.);
+        inputs.numeric = Some(numeric(true));
+    });
+    let catalog = Arc::clone(
+        &app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .catalog
+            .0,
+    );
+    let mut inputs = host_inputs(catalog);
+    inputs.timer_time = Some(0.);
+    inputs.numeric = Some(numeric(true));
+    inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture());
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = Arc::clone(session.context().unwrap());
+    let common = context
+        .scripts
+        .source(&context.scripts.digests[0].label)
+        .unwrap();
+    let ai = Arc::new(
+        pcx_play::scripts::MapScripts::compile(
+            AssetIdentity {
+                edition: "synthetic".into(),
+                version: "native-wake-guard".into(),
+                source: "idle.ai".into(),
+            },
+            ScriptAsset { label: "fixture:common.j", bytes: common.as_bytes() },
+            ScriptAsset { label: "fixture:common.ai", bytes: super::super::AI_COMMON.as_bytes() },
+            ScriptAsset {
+                label: "idle.ai",
+                bytes: b"function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),17)\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),34)\nendfunction\n",
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let entries = ["config", "main", "start"]
+        .map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            context,
+            move |ctx| {
+                Ok::<_, MapStartupError>(
+                    pcx_play::map_startup_host::assemble(ctx, inputs)?
+                        .with_ai_loader(move |_| Ok(Arc::clone(&ai))),
+                )
+            },
+            &entries,
+        )
+        .unwrap();
+    let gold = session
+        .host()
+        .unwrap()
+        .native("ConvertPlayerState", &[Value::Int(1)])
+        .unwrap();
+    let player = session
+        .host()
+        .unwrap()
+        .native("Player", &[Value::Int(0)])
+        .unwrap();
+    for elapsed in [Duration::from_millis(500), Duration::ZERO] {
+        let error =
+            pcx_play::campaign_host::advance_paced_tick(&mut session, elapsed, 0.5, 8).unwrap_err();
+        assert!(
+            error.to_string().contains("native game-queue entry"),
+            "{error}"
+        );
+        assert_eq!(session.global("seen"), Some(Value::Int(1)));
+        let host = session.host().unwrap();
+        assert_eq!(
+            host.native("GetPlayerState", &[player.clone(), gold.clone()])
+                .unwrap(),
+            Value::Int(17)
+        );
+        assert_eq!(host.objects().timer_game_time(), Some(0.125));
+        assert_eq!(
+            host.objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: 0.25f32.to_bits()
+            })
+        );
+    }
+}

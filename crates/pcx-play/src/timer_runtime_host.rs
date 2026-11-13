@@ -199,7 +199,7 @@ impl ObjectHost {
     }
 
     /// Earliest pending timer or timed-event deadline.
-    pub(super) fn next_timer_deadline(&self) -> Option<f64> {
+    pub(crate) fn next_timer_deadline(&self) -> Option<f64> {
         self.inner
             .arena
             .iter()

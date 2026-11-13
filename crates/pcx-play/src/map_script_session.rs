@@ -403,6 +403,19 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 delivered += 1;
                 continue;
             }
+            let objects = self.host().ok_or(ScriptSessionError::NoSession)?.objects();
+            // shortcut: an AI deadline needs its native game-queue entry before it can enter the callback scope.
+            if objects.native_clock_driving()
+                && ai_wake.is_some_and(|(at, _, _)| at == step_until)
+                && activity_wake != Some(step_until)
+                && objects
+                    .next_timer_deadline()
+                    .is_none_or(|at| at > step_until)
+            {
+                return Err(TimerSessionError::Ai(
+                    "parked AI wake has no native game-queue entry".into(),
+                ));
+            }
             let expiry = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?

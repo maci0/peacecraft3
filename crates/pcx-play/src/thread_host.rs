@@ -81,6 +81,13 @@ impl ObjectHost {
         if self.next_timer_deadline().is_some_and(|at| at <= deadline) {
             return Ok(None);
         }
+        // shortcut: legacy sleep deadlines do not identify native real-queue entries; bind that queue before resuming them.
+        if self.native_clock_driving() {
+            return Err(self.inner.error(
+                SLEEP,
+                Failure::GameClock("parked map wake has no native real-queue entry".into()),
+            ));
+        }
         self.set_timer_game_time(deadline)?;
         Ok(Some(ticket))
     }
