@@ -7599,3 +7599,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   retained in history before cleanup. Finished sessions and idle validation
   terminals are retired; unfinished tasks remain pending and stopped.
   See [0.18.0 release notes](docs/releases/0.18.0.md) for scope and limitations.
+
+  Published `v0.18.0` at `08fe27f5` and the GitHub release. The public Pages
+  demo is deployed at `7672f2d`; all 27 hosted file hashes match the validated
+  package, and the live headless browser gate passes with synthetic local inputs.
+  Only main and its worktree remain. Reconciled stashes and obsolete refs are
+  removed after ancestry preservation; retired sessions and validation terminals
+  are closed. Eighteen verified Cargo cache directories were removed across
+  consolidation and final cleanup. Private scratch evidence and generated copies
+  are consolidated locally rather than discarded; canonical original inputs
+  remain untouched. Audit receipts are retained outside the tracked tree.
+  Windows/macOS desktop CI runs independently; local Linux validation does not
+  claim those executable builds or complete fidelity.
