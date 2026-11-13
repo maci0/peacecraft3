@@ -6,6 +6,7 @@ pub struct Rules {
     pub class: [u8; 4],
     pub data_column: String,
     pub empty_data: f32,
+    pub attack_victim_alliance: i32,
 }
 
 fn call(bytes: &[u8], base: u32, at: usize) -> Result<u32, String> {
@@ -26,6 +27,7 @@ impl Rules {
         shape(&class, 5, &[0xc3])?;
         let class = word(&class, 1)?.to_be_bytes();
         let candidate = word(&read(table + 0x458, 4, false)?, 0)?;
+        let attack_victim_alliance = Self::victim_alliance(read, candidate)?;
         let gate = read(candidate + 0x9c, 0x3b, true)?;
         shape(
             &gate,
@@ -96,7 +98,81 @@ impl Rules {
             data_column: String::from_utf8(column[..5].to_vec())
                 .map_err(|_| "Slow data column encoding")?,
             empty_data,
+            attack_victim_alliance,
         })
+    }
+
+    fn victim_alliance(
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+        candidate: u32,
+    ) -> Result<i32, String> {
+        shape(&read(candidate + 0x25, 2, true)?, 0, &[0x8b, 0xf9])?;
+        shape(&read(candidate + 0x3b, 3, true)?, 0, &[0x8b, 0x5f, 0x30])?;
+        let relation = read(candidate + 0xf9, 16, true)?;
+        shape(
+            &relation,
+            0,
+            &[0x8b, 0x01, 0xff, 0x90, 0xec, 0, 0, 0, 0x50, 0x8b, 0xcb],
+        )?;
+        let helper = call(&relation, candidate + 0xf9, 11)?;
+        let owner = read(helper, 25, true)?;
+        shape(&owner, 3, &[0xff, 0x75, 0x08, 0xff, 0xb1, 0x60, 0x01, 0, 0])?;
+        let mask = call(&owner, helper, 18)?;
+        let mask_code = read(mask + 0x36, 0x13, true)?;
+        let player_data = call(&mask_code, mask + 0x36, 0)?;
+        shape(&mask_code, 11, &[0x8d, 0x48])?;
+        let mask_getter = call(&mask_code, mask + 0x36, 14)?;
+        let indexed = read(0x494510, 13, true)?;
+        shape(&indexed, 0, &[0xc1, 0xe6])?;
+        shape(&indexed, 3, &[0x8d, 0x4e])?;
+        shape(&indexed, 6, &[0x03, 0xc8])?;
+        let writer = read(0x4c2027, 15, true)?;
+        shape(&writer, 0, &[0x8b, 0xc3, 0xc1, 0xe0])?;
+        shape(&writer, 5, &[0x03, 0xf0, 0x8d, 0x4e])?;
+        let getter_call = read(0x4944ea, 5, true)?;
+        let enable = read(0x4c2036, 12, true)?;
+        shape(&enable, 0, &[0x0b, 0x45, 0x08, 0x8d, 0x4e])?;
+        shape(&enable, 6, &[0x50])?;
+        if call(&getter_call, 0x4944ea, 0)? != player_data
+            || call(&indexed, 0x494510, 8)? != mask_getter
+            || call(&writer, 0x4c2027, 10)? != mask_getter
+            || indexed[2] != writer[4]
+            || indexed[5] != writer[9]
+            || indexed[5] != enable[5]
+            || call(&enable, 0x4c2036, 7)? != 0x7fb380
+        {
+            return Err("Slow victim alliance layout differs".into());
+        }
+        let shift = indexed[2];
+        if mask_code[13] > i8::MAX as u8 || indexed[5] > i8::MAX as u8 {
+            return Err("Slow victim alliance field displacement is negative".into());
+        }
+        let delta = mask_code[13]
+            .checked_sub(indexed[5])
+            .ok_or("Slow victim alliance field precedes the indexed array")?;
+        let stride = 1_u32
+            .checked_shl(u32::from(shift))
+            .ok_or("Slow victim alliance stride is invalid")?;
+        if u32::from(delta) % stride != 0 {
+            return Err("Slow victim alliance field is unaligned".into());
+        }
+        let kind = u32::from(delta) / stride;
+        let startup = read(0x47ce7d, 10, true)?;
+        shape(&startup, 0, &[0x53, 0x6a])?;
+        shape(&startup, 3, &[0x8b, 0xce])?;
+        let row = read(0x47ce41, 8, true)?;
+        shape(&row, 0, &[0x8b, 0x0e, 0x53])?;
+        let player = read(0x47ce60, 9, true)?;
+        shape(&player, 0, &[0x8b, 0x0e])?;
+        shape(&player, 7, &[0x8b, 0xf0])?;
+        if u32::from(startup[2]) != kind
+            || call(&startup, 0x47ce7d, 5)? != 0x4c1f70
+            || call(&row, 0x47ce41, 3)? != 0x4c0c00
+            || call(&player, 0x47ce60, 2)? != player_data
+        {
+            return Err("Slow victim self-alliance initialization differs".into());
+        }
+        Ok(kind as i32)
     }
 
     pub fn requires_attack_target(&self, cell: &str) -> Result<bool, String> {
@@ -173,6 +249,47 @@ mod tests {
         relative(&mut init, 0x401300, 7, 0x9a1620);
         init[12..].copy_from_slice(&[0x83, 0xc4, 0x08, 0xc3]);
         put(0x401300, init);
+        put(0x21425, vec![0x8b, 0xf9]);
+        put(0x2143b, vec![0x8b, 0x5f, 0x30]);
+        let mut relation = vec![0x8b, 0x01, 0xff, 0x90, 0xec, 0, 0, 0, 0x50, 0x8b, 0xcb];
+        relation.resize(16, 0xcc);
+        relative(&mut relation, 0x214f9, 11, 0x81200);
+        put(0x214f9, relation);
+        let mut owner = vec![0xcc; 25];
+        owner[3..12].copy_from_slice(&[0xff, 0x75, 0x08, 0xff, 0xb1, 0x60, 1, 0, 0]);
+        relative(&mut owner, 0x81200, 18, 0x81500);
+        put(0x81200, owner);
+        let mut mask = vec![0xcc; 19];
+        relative(&mut mask, 0x81536, 0, 0x4b5bb0);
+        mask[11..14].copy_from_slice(&[0x8d, 0x48, 0x78]);
+        relative(&mut mask, 0x81536, 14, 0x7fb2b0);
+        put(0x81536, mask);
+        let mut indexed = vec![0xc1, 0xe6, 5, 0x8d, 0x4e, 0x18, 0x03, 0xc8];
+        indexed.resize(13, 0xcc);
+        relative(&mut indexed, 0x494510, 8, 0x7fb2b0);
+        put(0x494510, indexed);
+        let mut writer = vec![0x8b, 0xc3, 0xc1, 0xe0, 5, 0x03, 0xf0, 0x8d, 0x4e, 0x18];
+        writer.resize(15, 0xcc);
+        relative(&mut writer, 0x4c2027, 10, 0x7fb2b0);
+        put(0x4c2027, writer);
+        let mut enable = vec![0x0b, 0x45, 0x08, 0x8d, 0x4e, 0x18, 0x50];
+        enable.resize(12, 0xcc);
+        relative(&mut enable, 0x4c2036, 7, 0x7fb380);
+        put(0x4c2036, enable);
+        let mut getter = vec![0xcc; 5];
+        relative(&mut getter, 0x4944ea, 0, 0x4b5bb0);
+        put(0x4944ea, getter);
+        let mut startup = vec![0x53, 0x6a, 3, 0x8b, 0xce];
+        startup.resize(10, 0xcc);
+        relative(&mut startup, 0x47ce7d, 5, 0x4c1f70);
+        put(0x47ce7d, startup);
+        let mut row = vec![0x8b, 0x0e, 0x53];
+        row.resize(8, 0xcc);
+        relative(&mut row, 0x47ce41, 3, 0x4c0c00);
+        put(0x47ce41, row);
+        let mut player = vec![0x8b, 0x0e, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x8b, 0xf0];
+        relative(&mut player, 0x47ce60, 2, 0x4b5bb0);
+        put(0x47ce60, player);
         memory
     }
 
@@ -192,6 +309,7 @@ mod tests {
         assert_eq!(rules.class, *b"Xx01");
         assert_eq!(rules.data_column, "DataQ");
         assert_eq!(rules.empty_data, 7.);
+        assert_eq!(rules.attack_victim_alliance, 3);
     }
 
     #[test]
@@ -207,11 +325,29 @@ mod tests {
     }
 
     #[test]
+    fn victim_relation_rejects_receiver_layout_and_self_initializer_drift() {
+        for (address, at) in [
+            (0x214f9, 10),
+            (0x81200, 9),
+            (0x81536, 13),
+            (0x494510, 2),
+            (0x4c2027, 9),
+            (0x4c2036, 0),
+            (0x47ce7d, 2),
+        ] {
+            let mut memory = fixture();
+            memory.iter_mut().find(|(va, _)| *va == address).unwrap().1[at] ^= 1;
+            assert!(decode(&memory).is_err(), "{address:x}+{at}");
+        }
+    }
+
+    #[test]
     fn empty_acquisition_data_uses_the_bound_scalar_and_nonzero_is_not_idle_rejection() {
         let rules = Rules {
             class: *b"Xx01",
             data_column: "DataQ".into(),
             empty_data: 7.,
+            attack_victim_alliance: 3,
         };
         for cell in ["-", "_", "", "7.0"] {
             assert!(rules.requires_attack_target(cell).unwrap());

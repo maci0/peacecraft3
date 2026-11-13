@@ -360,6 +360,7 @@ fn host_with(config: &Config) -> ObjectHost {
             class: *b"Aslo",
             data_column: "DataC".into(),
             empty_data: 0.,
+            attack_victim_alliance: 47,
         }),
     }));
     let mut fields = hero_fields("STR");
@@ -2341,6 +2342,101 @@ fn slow_no_target_evaluation_charges_every_unit_and_refuses_a_potential_attacker
         .unwrap_err()
         .to_string();
     assert!(error.contains("potential attacking candidate"), "{error}");
+    assert!(host.take_fired_event().is_none());
+}
+
+#[test]
+fn slow_negative_filter_uses_directed_help_response_and_preserves_unknown_state() {
+    let (mut vm, [caster, friend, enemy, _]) = open_with(Config {
+        script: "globals\nconstant alliancetype SLOW_FIXTURE_RESPONSE=ConvertAllianceType(47)\nendglobals\n",
+        ..Config::default()
+    });
+    let victim = spawn(&mut vm, 3, b"u001", 80.);
+    let host = &mut vm.host().inner;
+    let now = host.timer_game_time().unwrap();
+    let attack = |host: &mut ObjectHost, target| {
+        assert_eq!(
+            host.native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(enemy),
+                    Value::Str("beta".into()),
+                    Value::Handle(target)
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+    };
+    let owner = host.executed_unit(caster).unwrap().owner;
+    let other = host.executed_unit(victim).unwrap().owner;
+    let response = host
+        .native("ConvertAllianceType", &[Value::Int(47)])
+        .unwrap();
+    let passive = host
+        .native("ConvertAllianceType", &[Value::Int(0)])
+        .unwrap();
+    let alliance = |host: &mut ObjectHost, a, b, setting: Value, value| {
+        host.native(
+            "SetPlayerAlliance",
+            &[
+                Value::Handle(a),
+                Value::Handle(b),
+                setting,
+                Value::Bool(value),
+            ],
+        )
+        .unwrap();
+    };
+    attack(host, victim);
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Help Response initial state"), "{error}");
+    alliance(host, owner, other, passive, true);
+    alliance(host, other, owner, response.clone(), true);
+    alliance(host, owner, other, response.clone(), false);
+    let before: Vec<_> = host
+        .executed_units()
+        .map(|(id, unit)| (id, unit.clone()))
+        .collect();
+    let mut work = before.len() + 2;
+    assert_eq!(
+        host.advance_slow_autocast(caster, *b"Aslo", now, &mut work)
+            .unwrap(),
+        Some(crate::autocast_rules::Outcome::Retry)
+    );
+    assert_eq!(work, 0);
+    assert_eq!(
+        host.executed_units()
+            .map(|(id, unit)| (id, unit.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut (before.len() + 1))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("work budget"), "{error}");
+    alliance(host, owner, other, response.clone(), true);
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("potential attacking candidate"), "{error}");
+    attack(host, friend);
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("potential attacking candidate"), "{error}");
+    alliance(host, owner, owner, response, false);
+    assert_eq!(
+        host.advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+            .unwrap(),
+        Some(crate::autocast_rules::Outcome::Retry)
+    );
     assert!(host.take_fired_event().is_none());
 }
 
