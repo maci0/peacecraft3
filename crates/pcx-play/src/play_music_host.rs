@@ -37,16 +37,19 @@ pub(super) struct State {
 }
 
 fn checked_name(
-    text: &str,
+    text: impl AsRef<[u8]>,
     max_name_bytes: usize,
     fail: &dyn Fn(Failure) -> Error,
 ) -> Result<String, Error> {
+    let text = text.as_ref();
     if text.len() > max_name_bytes {
         return Err(fail(Failure::Budget("play music name bytes")));
     }
-    if text.contains('\0') {
+    if text.contains(&0) {
         return Err(fail(Failure::MusicState("embedded NUL is unsupported")));
     }
+    let text = std::str::from_utf8(text)
+        .map_err(|why| fail(Failure::ScriptString(format!("music request UTF8: {why}"))))?;
     let mut name = String::new();
     name.try_reserve_exact(text.len())
         .map_err(|_| fail(Failure::Capacity))?;

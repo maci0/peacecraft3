@@ -146,13 +146,25 @@ impl ObjectHost {
     /// Attaches a live effect to an executed unit. Scripts and spell art share this path.
     pub(super) fn add_unit_effect(
         &mut self,
-        model: &str,
+        model: impl AsRef<[u8]>,
         unit: HandleId,
-        attach_point: &str,
+        attach_point: impl AsRef<[u8]>,
         expires_at: Option<f64>,
     ) -> Result<HandleId, Error> {
         self.executed_unit(unit)
             .map_err(|e| self.inner.error(ADD, e.failure))?;
+        let model = std::str::from_utf8(model.as_ref()).map_err(|e| {
+            self.inner.error(
+                ADD,
+                Failure::ScriptString(format!("effect model is not UTF-8: {e}")),
+            )
+        })?;
+        let attach_point = std::str::from_utf8(attach_point.as_ref()).map_err(|e| {
+            self.inner.error(
+                ADD,
+                Failure::ScriptString(format!("effect attachment is not UTF-8: {e}")),
+            )
+        })?;
         let entry = Entry::Effect {
             model: model.into(),
             unit,
@@ -177,10 +189,16 @@ impl ObjectHost {
         Some((|| match (name, args) {
             (ADD_AT, [Value::Str(model), location]) => {
                 let point = self.location_point(location, name)?;
+                let model = model.as_utf8().map_err(|e| {
+                    self.inner.error(
+                        name,
+                        Failure::ScriptString(format!("effect model is not UTF-8: {e}")),
+                    )
+                })?;
                 self.inner
                     .allocate(
                         Entry::PointEffect {
-                            model: model.clone(),
+                            model: model.to_owned(),
                             point,
                             live: true,
                         },

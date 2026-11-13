@@ -256,15 +256,24 @@ impl ObjectHost {
             *fade_out_rate,
         );
         let state = self.file_sounds.as_ref().expect("admitted");
-        let eax = if labeled { "" } else { tail.as_str() };
+        let eax = if labeled { &[][..] } else { tail.as_bytes() };
         if member.len() > state.assets.path_limit() || eax.len() > state.eax_bytes {
             return Some(Err(fail(Failure::Budget("file sound text"))));
         }
-        if member.contains('\0') || eax.contains('\0') {
+        if member.as_bytes().contains(&0) || eax.contains(&0) {
             return Some(Err(fail(Failure::SoundState(
                 "embedded NUL in filename or EAX text is unsupported",
             ))));
         }
+        let (member, tail) = match (member.as_utf8(), tail.as_utf8()) {
+            (Ok(member), Ok(tail)) => (member.to_owned(), tail.to_owned()),
+            (Err(why), _) | (_, Err(why)) => {
+                return Some(Err(fail(Failure::ScriptString(format!(
+                    "file sound argument UTF8: {why}"
+                )))));
+            }
+        };
+        let eax = if labeled { "" } else { tail.as_str() };
         // The label selects an admitted parameter row. It is not EAX text.
         let parameters = if labeled {
             match self.prepare_sound_parameter_label(name, &tail) {

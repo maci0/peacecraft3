@@ -68,7 +68,7 @@ fn authored_tag_parts_keep_raw_identity_without_host_substitution() {
         let mut vm = scripts.vm(FixtureHost::new(Some("x")));
         assert_eq!(
             vm.call("Tagged", &[]).unwrap(),
-            Value::Str(format!("TRIGSTR_^^{tag}^^7"))
+            Value::Str(format!("TRIGSTR_^^{tag}^^7").into())
         );
         assert!(vm.host().inner.tags.borrow().is_empty());
         assert_eq!(scripts.identity.source, "caller in-memory inputs");
@@ -107,7 +107,10 @@ fn null_empty_unicode_and_requested_table_failures_stay_distinct() {
     let source = "function Empty takes nothing returns string\nreturn \"\"\nendfunction\nfunction TableEmpty takes nothing returns string\nreturn \"TRIGSTR_0\"\nendfunction\nfunction Absent takes nothing returns string\nreturn null\nendfunction\nfunction Unicode takes nothing returns string\nreturn \"漢字|n|cffaabbccText|r\"\nendfunction\nfunction Missing takes nothing returns string\nreturn \"TRIGSTR_8\"\nendfunction\nfunction BadEncoding takes nothing returns string\nreturn \"TRIGSTR_9\"\nendfunction\nfunction Length takes string text returns integer\nreturn StringLength(text)\nendfunction\n";
     let scripts = scripts(source);
     let mut vm = scripts.vm(FixtureHost::new(None));
-    assert_eq!(vm.call("Empty", &[]).unwrap(), Value::Str(String::new()));
+    assert_eq!(
+        vm.call("Empty", &[]).unwrap(),
+        Value::Str(String::new().into())
+    );
     assert_eq!(
         vm.call("TableEmpty", &[]).unwrap(),
         Value::Str("TRIGSTR_0".into())

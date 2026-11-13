@@ -52,16 +52,13 @@ impl ObjectHost {
         self.inner.program.natives().get(name)?;
         Some(match args {
             [Value::Str(key)] => {
-                let key = key
-                    .split('\0')
-                    .next()
-                    .expect("C string has an initial segment");
+                let key = pcx_script::text::native_c_bytes(key.as_bytes());
                 if name == STRING {
                     if key.is_empty() {
                         return Some(Ok(Value::Null));
                     }
-                    pcx_script::text::native_map_string(key, strings)
-                        .and_then(|key| bank.localized_string_after_map_lookup(&key))
+                    pcx_script::text::native_map_bytes(key, strings)
+                        .and_then(|key| bank.localized_bytes_after_map_lookup(&key))
                         .map(|v| v.map_or(Value::Null, Value::Str))
                 } else {
                     bank.localized_hotkey(key).map(Value::Int)
@@ -153,6 +150,38 @@ mod tests {
             vm.call("dynamic", &[Value::Str("TRIGSTR_4".into())])
                 .unwrap(),
             Value::Str("Map authored |cffffff00text|r".into())
+        );
+    }
+    #[test]
+    fn localized_byte_results_run_through_vm_without_lossy_text_or_wts_fallback() {
+        let s = scripts(
+            &format!("{QUERIES}native StringLength takes string s returns integer\n"),
+            "function lookup takes string key returns string\nreturn GetLocalizedString(key)\nendfunction\nfunction size takes string key returns integer\nreturn StringLength(GetLocalizedString(key))\nendfunction\n",
+        );
+        let h = host(&s)
+            .with_localized_queries(crate::script_localization::tests::byte_bound_bank())
+            .unwrap();
+        let mut vm = s.owned_vm(h);
+        vm.init_globals().unwrap();
+        assert_eq!(
+            vm.call("lookup", &[Value::Str("UTF".into())]).unwrap(),
+            Value::Str(vec![0xc3].into())
+        );
+        assert_eq!(
+            vm.call("size", &[Value::Str("UTF".into())]).unwrap(),
+            Value::Int(1)
+        );
+        let raw = Value::Str(vec![0xff, 0xc3].into());
+        assert_eq!(vm.call("lookup", std::slice::from_ref(&raw)).unwrap(), raw);
+        assert_eq!(
+            vm.call("lookup", &[Value::Str(vec![0xff, 0, b'x'].into())])
+                .unwrap(),
+            Value::Str(vec![0xff].into())
+        );
+        assert_eq!(
+            vm.call("lookup", &[Value::Str("TRIGSTR_5".into())])
+                .unwrap(),
+            Value::Str("gameover_restart".into())
         );
     }
     #[test]

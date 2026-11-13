@@ -124,9 +124,10 @@ their requested repeat counts must not be treated as witnessed input lengths.
 StringCase's CRT entries test mutable locale state at `0x11b4454`; the zero
 branch uses encoded byte ranges, while the nonzero branch uses locale wrappers.
 Observed UTF-8 inputs follow the C-like ASCII path in this run. That does not
-qualify all locale states. Case can cut 1022 a bytes + é after byte C3. Current
-`Value::Str(String)` cannot preserve these outputs: Case/SubString stay refused
-until the byte value/consumer migration and locale/bounds policies are complete.
+qualify all locale states. Case can cut 1022 a bytes + é after byte C3. The earlier
+`Value::Str(String)` could not preserve these outputs. The byte payload migration
+below removes that representation limit; Case/SubString remain refused until
+their selected source policies are installed.
 No Rust Unicode or lossy UTF-8 substitution is supported.
 
 ### Hash validation (2026-11-13)
@@ -411,3 +412,90 @@ idle-script horizons. Orc02 and Human08 refuse earlier unsupported `ACcs` and
 frontiers, not completed missions or rendered/original-client string parity.
 Exact commands and executable identity remain in
 `/tmp/pc3-strings-construction-horizons/`.
+
+
+## Byte-valued VM strings and checked consumers
+
+`Value::Str` now owns `ScriptString`, whose raw constructor and byte accessors
+preserve every byte, including embedded NUL and invalid UTF-8. Source literals
+and identifiers remain UTF-8 and convert once at the evaluation boundary.
+Globals, arrays, parameters, returns, concatenation, equality, callbacks and
+parked continuations retain bytes. Null and an allocated empty string stay
+distinct. Textual diagnostic formatting does not become a game-data conversion.
+
+The native C-string boundary and one-level WTS resolution operate on bytes.
+`StringLength` counts the resolved C-prefix bytes, and StringHash still consumes
+raw bytes without WTS. Source WTS decoding remains checked, with absent source,
+absent entry and malformed source distinguished. No global native-argument
+conversion, Unicode case conversion or lossy decoding is introduced.
+
+UI text state retains the native byte result. Dictionary lookup compares against
+its admitted UTF-8 keys, preserving an unmatched raw key exactly. A found label
+is capped in bytes by the selected native output bound, even when that splits a
+UTF-8 sequence. Rich-text, paths, model selectors and source identifiers decode
+only at their actual textual consumer and report contextual encoding errors.
+Existing handle, local-recipient, admission and byte-budget checks retain their
+order. Message history retains raw bytes until its checked display projection.
+Rendered non-UTF-8 glyph behavior remains unqualified.
+
+The recreation-owned trace writer retains version 1 for UTF-8 values and uses
+version 2 when a value needs raw bytes; trace metadata remains checked UTF-8.
+The campaign cache similarly retains existing versions for representable data
+and uses version 3 for raw string payloads. Earlier versions continue to reject
+invalid text. Existing cache key and embedded-NUL refusals remain unchanged.
+These are private recreation formats, not original save or replay formats.
+The checkpoint codec and its wire admission are coordinated separately.
+
+### Remaining native policy qualification
+
+Selected-image static evidence traces the CRT locale-changed flag at `0x11b4454`
+from zero-filled image storage through normal startup. The callback at
+`0xa94fc7` installs the initial C locale object at `0x10ea118`; its lower/upper
+byte tables are reached through fields `+0x94`/`+0x98`. Their byte mappings and
+case-handler output cap must be read from that image. Two sticky flag writers
+were found, but indirect reachability and non-C operating-system locale mapping
+are not fully qualified. No host locale or Unicode substitute is admitted.
+
+For SubString, source assembly narrows start, end and C-prefix length to signed
+16-bit operands. An out-of-range start returns null before the pointer path.
+After the signed end clamp, a safe reversed positive range copies the suffix
+from start, because its temporary NUL is before the copied source. Effective
+negative pointer offsets remain refused; no unsigned clamp is invented. The
+native byte representation now supports these results, but those policies still
+require their real builtin, selected factory and host integration.
+
+### Byte migration validation (2026-11-13)
+
+The isolated worktree at control baseline `7c443b78` passes all three affected
+package suites with `pcx-play/test-fixtures`: 3,565 passed, zero failed, 170
+explicit ignores. Ten named new regressions execute: byte globals/arrays/concat/
+registered callbacks/park-resume, raw equality/native prefixes, one-level byte
+WTS demand, retained local messages and atomic budgets, dictionary byte caps,
+raw unit/order names, cache/trace version admission and atomic path refusal.
+
+The separately enabled selected-image gates execute all 38 original Hash
+expressions, all 194 formatter expressions and all 216 public timer-query bit
+comparisons. Strict native/WASM all-target/all-feature Clippy and explicit native
+and WASM library builds pass. Application all-target/all-feature compilation also
+passes. Frozen changed Rust hashes remain unchanged through these gates; local
+receipts are under `/tmp/sol01-byte-validation/`. Tests use verified private
+Xvfb and null audio. No original client, GPU window or playback is launched.
+
+The first full run found a valid-string diagnostic spelling regression. Restoring
+that existing debug spelling preserves its assertion; invalid bytes still have
+an explicit byte diagnostic. The complete successful rerun is retained alongside
+the failed run. The application message-history refusal/recovery test compiles;
+its execution and other application UI/session tests remain downstream gates.
+Case/SubString selected policies, non-C locales and rendered byte glyph behavior
+remain open; this validation does not establish full native string parity.
+
+
+### Combined application validation
+
+The current integration also executes the invalid-byte message-history
+refusal/recovery case, all nine message cases, five message-log cases and eight
+script-dialog cases. The extra application filters overlap the primary run.
+Native/WASM strict checks, library builds, source gates and ordinary package
+suites pass with unchanged source hashes; see the integration entry in TRACKER.
+This checks retained bytes and checked projection, not rendered native glyph
+parity.

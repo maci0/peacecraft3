@@ -1221,6 +1221,9 @@ impl Host for MapStartupHost {
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.world().real_ops()
     }
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.world_mut().checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.world_mut().suspend(name, args)
     }
@@ -1351,6 +1354,9 @@ impl MapStartupHost {
                 .filter_map(|slot| i32::try_from(slot).ok())
                 .find(|&slot| self.objects().player_identity(slot) == Some(*player))
                 .ok_or("StartCampaignAI: player is not a current identity")?;
+            let path = path
+                .as_utf8()
+                .map_err(|why| format!("StartCampaignAI: unsupported path UTF8: {why}"))?;
             self.ai.start(&mut self.inner, ordinal, path)?;
             return Ok(Value::Null);
         }
@@ -1417,13 +1423,19 @@ impl MapStartupHost {
         if name == "SetDayNightModels"
             && let [Value::Str(terrain), Value::Str(unit)] = args
         {
+            let terrain = terrain
+                .as_utf8()
+                .map_err(|why| format!("SetDayNightModels: terrain path UTF8: {why}"))?;
+            let unit = unit
+                .as_utf8()
+                .map_err(|why| format!("SetDayNightModels: unit path UTF8: {why}"))?;
             let loaded = self.objects().day_night_state().is_some_and(|state| {
                 [terrain, unit].iter().all(|path| {
                     state
                         .assets()
                         .models()
                         .iter()
-                        .any(|model| model.script_path() == path.as_str())
+                        .any(|model| model.script_path() == *path)
                 })
             });
             if !loaded && let Some(loader) = &mut self.day_night_loader {

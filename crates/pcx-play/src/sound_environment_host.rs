@@ -240,6 +240,15 @@ impl ObjectHost {
         };
         let state = self.sound_environments.as_mut()?;
         state.fire_due(now);
+        let text = match text.as_utf8() {
+            Ok(text) => text,
+            Err(why) => {
+                return Some(Err(self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("sound environment UTF8: {why}")),
+                )));
+            }
+        };
         state.call(text, now);
         Some(Ok(Value::Null))
     }

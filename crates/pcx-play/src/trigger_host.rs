@@ -643,6 +643,11 @@ impl ObjectHost {
         if name.is_empty() || name.as_bytes().contains(&0) {
             return Err(fail(Failure::TriggerState("variable event name is empty")));
         }
+        let name = name.as_utf8().map_err(|why| {
+            fail(Failure::ScriptString(format!(
+                "variable event identifier UTF8: {why}"
+            )))
+        })?;
         let global =
             self.inner.program.global(name).ok_or_else(|| {
                 fail(Failure::TriggerState("variable event name is not a global"))
@@ -680,7 +685,7 @@ impl ObjectHost {
         let id = self.inner.allocate(
             Entry::RegisteredVariableEvent {
                 trigger: *trigger,
-                name: name.clone(),
+                name: name.into(),
                 limitop_value,
                 limit: f64::from(limit),
                 last: None,

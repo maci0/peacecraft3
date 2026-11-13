@@ -62,15 +62,15 @@ pub fn project_quest(
         }
         items.push(ItemProjection {
             id: item,
-            description: session.item_description(item)?,
+            description: checked_text(session.item_description(item)?, "description")?,
             completed: session.item_completed(item)?,
         });
     }
     Ok(QuestProjection {
         id,
-        title: session.quest_title(id)?,
-        description: session.quest_description(id)?,
-        icon_path: session.quest_icon_path(id)?,
+        title: checked_text(session.quest_title(id)?, "title")?,
+        description: checked_text(session.quest_description(id)?, "description")?,
+        icon_path: checked_text(session.quest_icon_path(id)?, "icon_path")?,
         required: session.quest_flag(id, QuestFlag::Required)?,
         discovered: session.quest_flag(id, QuestFlag::Discovered)?,
         completed: session.quest_flag(id, QuestFlag::Completed)?,
@@ -78,6 +78,18 @@ pub fn project_quest(
         enabled: session.quest_flag(id, QuestFlag::Enabled)?,
         items,
     })
+}
+
+fn checked_text<'a>(
+    text: Option<&'a pcx_script::ScriptString>,
+    field: &str,
+) -> Result<Option<&'a str>, QuestFailure> {
+    text.map(|text| {
+        text.as_utf8().map_err(|why| {
+            QuestFailure::TextSource(format!("quest projection {field}: unsupported UTF8: {why}"))
+        })
+    })
+    .transpose()
 }
 
 #[cfg(test)]

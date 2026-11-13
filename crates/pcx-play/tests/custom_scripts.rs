@@ -239,7 +239,7 @@ fn compile_and_runtime_errors_name_the_actual_later_block() {
 #[test]
 fn custom_native_receives_raw_text_and_retains_selected_wts() {
     #[derive(Default)]
-    struct Capture(Vec<String>);
+    struct Capture(Vec<pcx_script::ScriptString>);
     impl Host for Capture {
         fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
             match (name, args) {
