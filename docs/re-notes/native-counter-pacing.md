@@ -32,7 +32,12 @@ Legacy error cleanup and hard-fault cleanup retain their existing behavior.
 
 `campaign_startup::install_native_counter` selects the platform after host
 creation and before VM globals, `config` and `main`. Generic `install` preserves
-its existing Fresh/Legacy contract. This bounded entry point is not yet selected
+its existing Fresh/Legacy contract: ordinary `CampaignRuntime` uses the legacy
+caller-time route unless the counter platform was explicitly selected. Merely
+admitting source clock rules must not promote it to the diagnostic GAME-only
+driver, whose callbacks cannot pump REAL map sleeps. The standalone
+`advance_paced_tick` API remains an explicit GAME-only diagnostic caller.
+This bounded counter entry point is not yet selected
 by the normal GUI or the shared original-map diagnostic helper: their caller
 migration and selected-source replays remain required before changing defaults.
 
