@@ -357,9 +357,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             error,
             TimerSessionError::QueueBudget(_) | TimerSessionError::WakeBudget
         ) && self.check_pending_projection().is_ok()
-            && self
-                .host()
-                .is_some_and(|host| host.objects().check_native_physics_fault().is_ok())
+            && self.host().is_some_and(|host| {
+                host.objects().native_clock_driving()
+                    && host.objects().check_native_physics_fault().is_ok()
+            })
     }
 
     /// Admit one independently supplied frame, or resume retained frame work.
@@ -547,7 +548,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     ) -> Result<usize, TimerSessionError> {
         self.check_pending_projection()?;
         let result = self.advance_timers_inner(until, budget, activity_work);
-        if result.is_err()
+        if let Err(error) = &result
+            && !self.native_pacing_can_resume(error)
             && let Some(host) = self.host()
         {
             host.objects_mut().discard_unit_activity_routes();

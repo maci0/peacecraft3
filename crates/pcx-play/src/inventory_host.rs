@@ -190,6 +190,12 @@ impl ObjectHost {
             self.source_constant_enumerand("EVENT_PLAYER_UNIT_PICKUP_ITEM", "playerunitevent")?;
         let drop =
             self.source_constant_enumerand("EVENT_PLAYER_UNIT_DROP_ITEM", "playerunitevent")?;
+        for (unit, _) in self
+            .executed_units()
+            .filter(|(unit, _)| self.pending_form_upgrade(*unit))
+        {
+            self.prepare_upgrade_inventory_rules(unit, &rules, budget.max_slots_per_unit)?;
+        }
         self.items.as_mut().expect("admitted").inventory = Some(State {
             rules,
             budget,
@@ -233,6 +239,57 @@ impl ObjectHost {
                     .error("inventory", Failure::ItemState("inventory not admitted"))
             })
     }
+    pub(in super::super) fn prepare_structure_upgrade_inventory(
+        &self,
+        unit: HandleId,
+    ) -> Result<(), Error> {
+        // An unadmitted inventory family has no public item-mutation path.
+        let Some(state) = self
+            .items
+            .as_ref()
+            .and_then(|items| items.inventory.as_ref())
+        else {
+            return Ok(());
+        };
+        self.prepare_upgrade_inventory_rules(unit, &state.rules, state.budget.max_slots_per_unit)
+    }
+
+    fn prepare_upgrade_inventory_rules(
+        &self,
+        unit: HandleId,
+        rules: &Rules,
+        budget: usize,
+    ) -> Result<(), Error> {
+        let fail = |detail: String| {
+            self.inner
+                .error("SetProduce", Failure::UnitActivity(detail))
+        };
+        let record = self.executed_unit(unit)?;
+        let abilities = record
+            .abilities
+            .as_ref()
+            .ok_or_else(|| fail("mode1 upgrade inventory ability state is not admitted".into()))?;
+        let policy = rules
+            .policy(
+                abilities
+                    .levels()
+                    .filter(|(alias, _)| Some(*alias) != self.unit_implicit_hero_alias()),
+                budget,
+            )
+            .map_err(fail)?;
+        if policy.slots != 0
+            || policy.get_items
+            || policy.use_items
+            || policy.drop_items
+            || policy.drop_on_death
+        {
+            return Err(fail(
+                "mode1 upgrade inventory capability is not qualified".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn inventory_policy(&self, unit: HandleId) -> Result<Policy, Error> {
         let unit = self.executed_unit(unit)?;
         self.inventory_policy_for(unit)

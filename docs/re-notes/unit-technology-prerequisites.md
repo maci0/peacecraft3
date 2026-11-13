@@ -11,7 +11,14 @@ and map overrides, not a table of stock buildings or named missions.
 `GetPlayerTechCount` and `GetPlayerTechResearched` use the same unit provider
 query when the admitted technology is a unit. Hidden and paused living units
 still count. Ownership changes and death affect the next query immediately.
-Pending training jobs are not living providers. All prerequisite data is checked
+Pending ordinary training jobs are not living providers. A structure-upgrade job
+is an incomplete provider only through the requested type's authored `Upgrade`
+relationship for nonspecific queries; it is not a completed provider for its
+original or target specific count. This uses the canonical job target in either
+pending-form mode. An early public target type therefore cannot satisfy its own
+production prerequisite. The matched original query pair and same-callback
+removal contract are recorded in
+[player production queues](player-production-queues.md#pending-upgrade-counters-and-same-callback-removal). All prerequisite data is checked
 before a replacement job spends resources, reserves food or publishes a start
 event; an unmet requirement waits for a later fill request.
 

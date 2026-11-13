@@ -72,6 +72,7 @@ impl ObjectCatalog for Geometry {
             ),
             (*b"P001", SlkId::UnitData, "pathTex", FieldKind::Token, "_"),
             (*b"S001", SlkId::UnitBalance, "spd", FieldKind::Unreal, "8"),
+            (*b"B001", SlkId::UnitBalance, "isbldg", FieldKind::Bool, "0"),
         ] {
             fields.insert(
                 id,
@@ -82,7 +83,9 @@ impl ObjectCatalog for Geometry {
                         field: column.into(),
                         slk: slk.name().into(),
                         index: -1,
-                        declared: if kind == FieldKind::Unreal {
+                        declared: if kind == FieldKind::Bool {
+                            "bool"
+                        } else if kind == FieldKind::Unreal {
                             "unreal"
                         } else if column == "pathTex" {
                             "pathingTexture"
@@ -272,7 +275,7 @@ pub(super) fn session_with_inputs(
         .extend_from_slice(super::timed_trigger_cases::COMMON.as_bytes());
     map.common.extend_from_slice(EXTRA.as_bytes());
     if activity {
-        map.common.extend_from_slice(b"\nconstant native OrderId takes string s returns integer\nconstant native OrderId2String takes integer i returns string\nnative IssuePointOrder takes unit u, string s, real x, real y returns boolean\nnative GetUnitCurrentOrder takes unit u returns integer\nconstant native GetUnitMoveSpeed takes unit u returns real\n");
+        map.common.extend_from_slice(b"\nconstant native OrderId takes string s returns integer\nconstant native OrderId2String takes integer i returns string\nnative IssuePointOrder takes unit u, string s, real x, real y returns boolean\nnative IssueTargetOrder takes unit u, string s, widget target returns boolean\nnative GetUnitCurrentOrder takes unit u returns integer\nconstant native GetUnitMoveSpeed takes unit u returns real\n");
     }
     map.rebuild();
     let reader = map.resolver();
@@ -596,6 +599,14 @@ pub(super) fn activity_rules() -> (
         },
         &registry,
         budget,
+    )
+    .unwrap()
+    .with_follow_profiles(
+        &[(
+            "synthetic follow routes",
+            b"[Misc]\nFollowRange=12\nStructureFollowRange=4\n",
+        )],
+        4096,
     )
     .unwrap();
     (registry, rules)

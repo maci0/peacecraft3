@@ -7536,3 +7536,46 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   explicit in `/tmp/pc3-module-volume-main-validation/acceptance.json`.
   Audible/native-amplitude parity, full music play/stop/fades, complete source
   registry restore, normal native clock adoption and full tick parity remain open.
+
+- 2026-11-13: Source-qualified pending structure upgrades now retain their
+  original form for cancellation, publish the selected pending form, and finish
+  the admitted positive-life/zero-mana class without a second form reset.
+  Research, handicap, ability, inventory and recipient-pool changes preflight
+  before they can strand a paid job. Canonical pending technology counts and
+  retained removal categories preserve incomplete providers without unlocking
+  their own target requirement. Food queries use the target's used amount and
+  original capacity; start/cancel enrollment and unsupported toggle/transfer
+  classes remain explicit. Construction refund/debit ordering is preserved.
+
+  Combined main validation passes 3,637 package tests, zero failures, 179
+  explicit ignores, twenty-seven selected source/witness gates and 368
+  application executions. Strict native/WASM checks, library builds, scoped
+  formatting and staged-source identity checks pass. The validation harness's
+  obsolete refusal-test name was corrected against its retained successful
+  package log; the original failed receipt remains intact. Receipt:
+  `/tmp/pc3-upgrade-mode1-main-validation/acceptance.json`.
+  Damage refunds, negative-life/mana/bonus/inventory classes, changed-food
+  transfers, generic same-callback food-removal timing, normal native clock
+  adoption, complete Save/root restore and full tick parity remain unfinished.
+
+- 2026-11-13: Called native clock components now retain distinct Game/Real
+  sleep domains, source-derived counter grants and speed consumption, and
+  ordered logical/callback/visual physics phases. Explicit counter startup
+  selects its transport before globals, config and main; generic application
+  startup retains caller-time behavior. Mandatory projection and physics
+  faults refuse retries before clock mutation. Safe preselection budget retries
+  retain blocked/follow route continuations. Slow's bounded negative filter
+  uses source-derived directed Help Response and refuses unknown state.
+
+  Combined validation passes 3,668 package tests, zero failures, 194 explicit
+  ignores, thirty-three source/witness gates and 449 application executions.
+  Strict native/WASM core/application checks and library builds pass, including
+  the retained heading witnesses and actual unchanged Human01 audio runs.
+  Generic runtime dispatch was restored after its real parked-sleep regression;
+  two inherited synthetic catalog overrides were corrected without relaxing
+  production ambiguity checks. Failed receipts and scoped reuse remain in
+  `/tmp/pc3-native-clock-main-validation/acceptance.json`.
+  Normal GUI counter adoption remains held. Complete timed turning, automatic
+  acquisition/retry, AI-to-map observer delivery, full Save/root restore,
+  browser runtime validation of this build and full native tick parity remain
+  unfinished.
