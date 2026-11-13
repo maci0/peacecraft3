@@ -1002,6 +1002,29 @@ impl ObjectHost {
     /// executed requests but leave the live maxima unchanged, matching the
     /// controlled native observations. True when the assignment leaves a
     /// living unit without life.
+    pub(super) fn unit_vital_assignment_is_lethal(
+        &self,
+        unit: HandleId,
+        enumerand: i32,
+        value: f32,
+    ) -> bool {
+        let Some(states) = self.unit_vitals.as_ref().map(|rules| rules.states) else {
+            return false;
+        };
+        let Ok(record) = self.executed_unit(unit) else {
+            return false;
+        };
+        let Some(vitals) = record.vitals else {
+            return false;
+        };
+        let life = if states[0] == enumerand {
+            value.min(vitals.max_life)
+        } else {
+            vitals.life
+        };
+        life <= 0. && record.combat.as_ref().is_some_and(|combat| !combat.dead)
+    }
+
     pub(super) fn assign_unit_vital(&mut self, unit: HandleId, enumerand: i32, value: f32) -> bool {
         let Some(states) = self.unit_vitals.as_ref().map(|r| r.states) else {
             return false;

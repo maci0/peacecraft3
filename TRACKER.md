@@ -7466,3 +7466,29 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   `/tmp/pc3-byte-strings-main-validation/acceptance.json` and
   `/tmp/pc3-byte-ui-corrected-validation/result.json`. Rendered invalid-byte glyph
   behavior and full-root save/load remain unverified.
+
+
+- 2026-11-13: Assistant membership changes use the selected image's integer-to-
+  real reconfiguration horizon. Near pending resource deadlines remain; absent
+  or distant requests can debit immediately. Bounded work/cost projection keeps
+  overdue phases, funding stops and prior producer refunds/food/event snapshots.
+  Combat, script life assignment and timed expiration prepare finances before
+  lethal mutation; failed expiration remains available for retry. Public partial
+  hosts retain the explicit paid-frontier requirement. No new saved state or
+  clock mode is introduced. Four original-client controls qualify the membership
+  debit distinction; finer automatic cost/work and reclamation cadence remains
+  open. See [construction](docs/re-notes/unit-construction.md).
+
+  Combined validation passes 3,596 package tests, zero failures, 173 explicit
+  ignores; twenty-one explicit source/witness gates and 352 application test
+  executions pass. Strict native/WASM checks and library builds pass with frozen
+  working/index hashes. The added source gate initially lacked an explicit
+  common source setting; the retained failed attempt is excluded and its
+  corrected selected common/Melee_V0 input gate executes one pass. Receipt:
+  `/tmp/pc3-assistant-debit-main-validation/acceptance.json`.
+
+  The unchanged HumanX03Secret replay remains blocked at Aslo acquisition. A
+  bounded diagnostic now records all-unit relation counts: all 96 observed units
+  have combat/position state and none has an attack target at that refusal. This
+  is recreation-state evidence, not native acquisition or a passing horizon.
+  `/tmp/pc3-slow-frontier-global-context-horizon/acceptance.json`.

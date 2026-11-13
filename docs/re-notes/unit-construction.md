@@ -395,3 +395,120 @@ It reproduced `WakeBudget` before the fix; afterward it reaches both requested
 times under budget eight, delivers one finish event, clears both worker orders
 and preserves both banks. This does not qualify the remaining native pooled
 cost-event phase or reclamation cadence.
+
+### Membership debit phase qualification
+
+Fresh bounded static analysis of the same selected image joins the resource
+timer's virtual slot `+0x18` through table `0xe6e238` to `0x7fc070`. That getter
+subtracts queue-clock time from the pending deadline; it returns zero without a
+retained timer record. Membership addition/removal reaches `0xb91630` through
+the build-in-progress virtual slot `+0x300`, then recomputes resource periods at
+`0xb925c0`. For each nonzero pooled resource contribution, this path calls the
+shared debit routine immediately when the timer is absent or its remaining time
+exceeds the comparison operand at `0x112d810`. An active nearer deadline skips
+that immediate call. The operand resides in uninitialized image storage;
+initializer `0x401460` writes it through the native integer-to-real helper.
+Its value must be derived from that initializer, not read as file-backed data or
+copied into a construction constant. The retained static receipt is
+`/tmp/pc3-sol06-phase4-qualification-receipt.json`.
+
+Four new private Wine reference runs preserve the supplied map terrain/main and
+authored Human workers, target and abilities. They add immediate pre/post-command
+bank reads, an independent 32-second reference timer and a bounded two-second
+sampling window. The diagnostic sampling interval is not a game scheduler rule.
+Two assistants receive the same enrollment requests before the compared command.
+
+| Controlled command | Immediate gold change | Immediate lumber change |
+| --- | --- | --- |
+| No STOP at reference time 12.0 | 0 | 0 |
+| First assistant STOP at 12.0 | 0 | -1 |
+| First assistant STOP at 12.25 | 0 | -1 |
+| Exact repeat of STOP at 12.0 | 0 | -1 |
+
+The no-STOP control and STOP-at-12 run have identical 121-record prefixes before
+the command. A pending lumber debit is already visible in the observation at
+11.984375; the STOP command then synchronously debits one more lumber. This
+resolves the earlier quarter-second sample's two-lumber difference without
+claiming two synchronous STOP charges. The next gold debit is observed at
+12.390625 in both control and STOP runs, supporting retention of the nearer
+pending event. These are observation bounds, not exact native callback deadlines.
+
+Each arm produced 199 records, and the repeated STOP arm matches all normalized
+records exactly. All four containers independently verified stopped, PID zero
+and no out-of-memory termination. Private Xvfb and a single Pulse null sink were
+verified; no host display/audio devices or network were exposed. Map/executable
+identities, stable raw-trace hashes and stopped-container receipts are retained
+in `/tmp/pc3-sol06-costphase-probes-1794527592197775816/runtime-evidence-receipt.json`.
+No original or generated map content is committed.
+
+The current recreation still preserves every pending assistant debit across
+membership changes. The source/runtime matrix above qualifies replacing that
+unconditional retention with the source-derived per-resource condition, through
+the existing enrollment/interruption/death/transfer callers. It does not yet
+implement that change or qualify simultaneous reclamation order, all funding
+failure phases, zero/tiny-rate native guards or finer work/event cadence.
+
+### Called membership cost-phase implementation
+
+The implementation now applies the qualified per-resource condition on assistant
+membership changes. The selected class's rate callback leads to both matching
+remaining-time comparisons and their shared debit handler. The rule reader
+retains the comparison global's initializer **integer**, joined to the same
+conversion helper used by the registered `I2R` wrapper. Actual preflight converts
+it with the admitted numeric policy after checking the image identity. Relocated
+synthetic fixtures use different initializer operands, including a wider integer;
+neither the observed horizon nor sampled callback times become game constants.
+
+Enrollment and interruption prepare the participant set, immediate charges,
+future debit deadlines and money-event updates before replacing canonical state.
+Death, removal and ownership transfer prepare that cleanup before liveness or
+owner changes, and commit at the existing cleanup points. A custom unit may both
+train and assist construction: its construction debit projects from the prepared
+ordinary training refund, including newly appended counter-row indices and each
+registration's intermediate observed snapshot. The construction plan changes
+money only, preserving the earlier plan's food release and event order. A failed
+new cost preflight commits neither refund nor participant/liveness changes.
+
+Public paid membership mutations require construction's work frontier to equal
+the current game clock. A partial host that advances only its timer clock must
+explicitly settle construction before public Kill/Remove/owner transfer or paid
+membership changes. That unsupported frontier refuses before work, banks,
+participants or liveness change. This is a recreation API contract, not evidence
+of a native timing quantum.
+
+Internal automatic deaths/removals have separate admission: combat, expiration
+and other mandatory work can run before the construction phase. They prepare a
+bounded prospective site and money plan before committing liveness. The shared
+arithmetic projects the surviving crew's work and cost clocks through the current
+time, clips assistance at the earliest funding failure, and preserves free
+participants. A retained overdue deadline uses bounded multi-charge arithmetic
+and keeps its phase; it is not collapsed into a newly created immediate debit.
+Only absent/distant clocks restart at the membership-change time. Training
+refunds precede this local cost projection, including food release and projected
+registration snapshots. This retains the recreation's surviving-crew work
+ordering; exact native automatic cost-event ordering remains unqualified.
+
+The prepared site commits at the existing cleanup point; completion events stay
+at the ordinary construction phase. Repeating advancement at the same time does
+not repeat work, charges or finish events, and a second loss after projected
+completion creates no extra construction charge. Combat and script life-state
+assignment prepare paired finances before lethal HP writes; the kill operation
+performs the lethal write. Expiration retires its pending entry only after a
+successful kill. No whole-world clone, new saved field, phase reordering or clock
+hook is introduced. `SetWidgetLife` has no implemented host path and gains none
+from this change.
+
+Regression coverage includes public STOP with one near and one distant resource,
+an exact nonstock horizon boundary, absent debit enrollment, paid/free cohorts,
+unaffordable STOP/death/removal/transfer, primary-only cleanup, and complete
+published-session progression. Legal producer/assistant death/removal/transfer
+tests retain the ordinary refund and food release, and observe both a refund and
+a subsequent debit even when the final bank equals its original snapshot.
+Combined-event reservation overflow and malformed cost preflight leave state
+unchanged; a subsequent ordinary state change still observes the original
+registration snapshot. Simultaneous reclamation order and finer native
+work/event cadence remain open. Additional published-session regressions cover
+lethal missile impact, script `SetUnitState` including nonlethal clamping, and
+timed-expiration failure/recovery. Internal future-near, future-distant,
+exactly-due and overdue clocks exercise different resource phases, low-bank work
+bounds and ordinary advancement after cleanup without duplicate settlement.

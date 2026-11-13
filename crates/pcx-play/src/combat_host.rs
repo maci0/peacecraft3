@@ -556,6 +556,11 @@ pub struct HeroAttributeStat {
     pub intelligence_bonus: f32,
 }
 
+pub(super) struct PreparedUnitLoss {
+    training: Option<super::unit_training::TrainingDeath>,
+    construction: Option<super::unit_construction::PreparedConstructionMembership>,
+}
+
 impl ObjectHost {
     pub(super) fn combat_step_eligible(&self, unit: HandleId, record: &ExecutedUnit) -> bool {
         self.combat_eligible(unit, record, |unit| {
@@ -1466,6 +1471,7 @@ impl ObjectHost {
                     [Value::Null] => Ok(Value::Null),
                     [Value::Handle(unit)] => {
                         if matches!(self.inner.entry(*unit)?, Entry::Unit { .. }) {
+                            self.require_construction_loss_frontier(*unit)?;
                             self.kill_unit(*unit, None)?;
                         }
                         Ok(Value::Null)
@@ -1589,12 +1595,26 @@ impl ObjectHost {
     /// path: eligibility checks combat death only and never reuses the visible
     /// combat-targeting filter (`weapon_target`/`live`), per the qualified
     /// hidden-unit observation.
+    pub(super) fn prepare_unit_loss_finances(
+        &mut self,
+        unit: HandleId,
+    ) -> Result<PreparedUnitLoss, Error> {
+        let training = self.prepare_training_death(unit)?;
+        let construction = self.prepare_internal_construction_loss(
+            unit,
+            training.as_ref().and_then(|plan| plan.credit()),
+        )?;
+        Ok(PreparedUnitLoss {
+            training,
+            construction,
+        })
+    }
+
     pub(crate) fn kill_unit(
         &mut self,
         unit: HandleId,
         killer: Option<HandleId>,
     ) -> Result<(), Error> {
-        let name = "unit death";
         let eligible = self
             .executed_unit(unit)
             .ok()
@@ -1602,7 +1622,21 @@ impl ObjectHost {
         if !eligible {
             return Ok(());
         }
-        let training = self.prepare_training_death(unit)?;
+        let prepared = self.prepare_unit_loss_finances(unit)?;
+        self.kill_unit_prepared(unit, killer, prepared)
+    }
+
+    pub(super) fn kill_unit_prepared(
+        &mut self,
+        unit: HandleId,
+        killer: Option<HandleId>,
+        prepared: PreparedUnitLoss,
+    ) -> Result<(), Error> {
+        let name = "unit death";
+        let PreparedUnitLoss {
+            training,
+            construction,
+        } = prepared;
         let upgrade_animation = training
             .as_ref()
             .and_then(|plan| plan.upgraded_death_animation());
@@ -1687,7 +1721,7 @@ impl ObjectHost {
         if let Some(blight) = &mut self.initial_blight {
             blight.remove_growth(unit);
         }
-        self.forget_construction_unit(unit)?;
+        self.forget_construction_unit(unit, construction)?;
         if exploded && !exploded_presented {
             self.note_unrendered_explosion(unit);
         }
@@ -1911,6 +1945,11 @@ impl ObjectHost {
         };
         let life_before = record.vitals.map(|v| v.life);
         let life = life_before.unwrap_or(0.0) - damage;
+        let loss = if life <= 0. {
+            Some(self.prepare_unit_loss_finances(target)?)
+        } else {
+            None
+        };
         if damage > 0.0 {
             self.wake_natural_sleep(target);
         }
@@ -1923,6 +1962,13 @@ impl ObjectHost {
                 clock: h.timer_game_time(),
             })
         });
+        if let Some(loss) = loss {
+            self.kill_unit_prepared(target, Some(source), loss)?;
+            if damage > 0. {
+                *applied = true;
+            }
+            return Ok(());
+        }
         if let Entry::Unit { record } = self.inner.entry_mut(target)? {
             let record = &mut **record;
             if let Some(vitals) = &mut record.vitals {
@@ -1936,10 +1982,6 @@ impl ObjectHost {
         }
         if damage > 0.0 {
             *applied = true;
-        }
-        if life <= 0.0 {
-            self.kill_unit(target, Some(source))?;
-            return Ok(());
         }
         if let Some(prepared) = retreat {
             self.commit_campaign_flee(target, prepared)?;
