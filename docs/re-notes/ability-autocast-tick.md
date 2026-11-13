@@ -18,7 +18,8 @@ A non-null acquisition result sets ability flags `0x220000`. Cast flags
 path `0xb2b080` for bit 4. The tick then clears `0x20000` and rearms with the
 greater of `+0x3e8` and `+0x474`. The retry getter `0xb9cbb0` reads global
 `0x112d7c8`; the minimum-after-cast getter `0xb9cbd0` reads `0x112d810`.
-Their values have not been bound to recreation rules.
+The getters and their integer-to-real initializers now bind `TickTiming` in
+`autocast_rules.rs`; the called retry route remains unfinished.
 
 `0xb4a4a0` also checks current-order state and ability flag 1, then returns
 whether virtual `+0x3e4` returns zero. The usual `+0x3e4`, `0xb4a530`, checks
@@ -27,6 +28,34 @@ ability `+0x3c`, owner flag `0x40000000`, virtual `+0x378`, ability flag
 the conditional order checks `0xb4b2c0` / `0xb4b230`. Identifying this entire
 function as just a mana/cooldown test is insufficient. The precise host mapping
 of these fields and virtuals remains open.
+
+### Suspend and reactivate are separate from ordinary retry
+
+Fresh selected-image Ghidra evidence confirms that `0xb9c750` sets ability
+flag `0x100000` and cancels the embedded timer at `+0x128` through `0x7fbbd0`.
+The cancellation clears the timer's retained request pointer. Its counterpart
+`0xb9c710` clears that flag, asks virtual `+0x43c` whether the ability is active,
+and only then schedules the source first-delay operand. The getter at
+`0xb81150` reads active flag `0x80000`. This is not a periodic retry through
+an inactive interval.
+
+The lifecycle is not qualified as cooldown-only. `0xb9c3d0` calls the suspend
+virtual before detaching its owner relationships. `0xb9c440` can set the same
+flag during attachment, depending on owner state. The event sink `0xb9c5f0`
+also dispatches suspend/reactivate virtuals for several internal event kinds;
+their complete canonical meanings remain open. A generic constructor's zero
+write at `0x46d0d0` does not establish the later attached instance's flag.
+An empty recreation cooldown map therefore cannot prove ordinary eligibility.
+
+Evidence IDs: suspend `ev_27a135bd769a8690da7db4243bcd6176567ca6ca86448c905841accee1361af0`,
+reactivate `ev_64002184cae7ef0128b1696ebc7b05e54f4b31bb5e001eaed29c48871e8df4e7`,
+detach `ev_9bbe6d7e08a1990b5ef6a931a3c470fea41e35fbcb0c10cb4e0b2804b26b4e80`,
+attach `ev_20e7a5e1b51ad7ca72c2bc2921d3a9f4c60d8eeadc471be925dba5ef1248160d`,
+event sink `ev_e36ff7aae68f41c68270ce3d99431b11befafa288a54be870f42927352e8178a`.
+Complete local evidence and a reusable analysis snapshot are retained at
+`/tmp/pc3-sol09-autocast-lifecycle-evidence-v1.json` and
+`/tmp/pc3-sol09-autocast-lifecycle-snapshot-v1.json`. This is native-code evidence,
+not a new original-client runtime comparison or a completed autocast loop.
 
 ## Scan and ranking
 
