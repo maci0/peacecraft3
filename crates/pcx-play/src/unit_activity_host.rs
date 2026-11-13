@@ -2460,6 +2460,12 @@ impl ObjectHost {
                     .and_then(|rules| rules.profile.as_ref())
                     .ok_or_else(|| fail("native timed-facing source profile missing"))?;
                 if duration > profile.timed_instant_limit {
+                    // shortcut: long relations stay diagnostic-only until automatic acquisition cancellation is qualified.
+                    if !cfg!(any(test, feature = "test-fixtures")) {
+                        return Err(fail(
+                            "long timed-facing relations are diagnostic-only: automatic acquisition interaction is not qualified",
+                        ));
+                    }
                     heading = self.prepare_native_timed_facing(unit, target, duration)?;
                 }
             }

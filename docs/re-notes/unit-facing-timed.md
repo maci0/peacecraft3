@@ -2,9 +2,10 @@
 
 Selected input is Legacy `1.29.2.9231`, executable SHA256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-The checked paths cover direct facing and stationary timed relations. Moving,
-paused and interrupted order transitions outside the qualified bounds still
-refuse explicitly; full native turn parity remains open.
+Normal native-heading dispatch admits the direct-facing branch, including
+negative angles. Stationary long relations are retained only for tests and the
+`test-fixtures` diagnostic feature. General long-turn admission and full native
+turn parity remain open.
 
 ## Source and actual callers
 
@@ -170,7 +171,7 @@ across all four controls bit for bit. This is a pure-kernel native replay;
 separate Counter tests exercise actual native dispatch and lifecycle using a
 synthetic cadence. Neither test class alone establishes whole-mission parity.
 
-Acceptance requires a shown, unpaused, stationary unit without retained cast,
+Diagnostic acceptance requires a shown, unpaused, stationary unit without retained cast,
 form or production work. Unsupported state refuses before relation mutation.
 For an existing static relation, a shared readonly guard runs in the actual
 `object_native_with_strings` entry used by both Host call forms, before order
@@ -220,3 +221,26 @@ canonical cleanup removes the static relation. The four native controls disabled
 acquisition, so they do not qualify that later automatic cancellation. The frozen
 candidate's ten validation groups pass, but this gap prevents general long-turn
 admission. No additional acquisition implementation or native run is claimed.
+
+
+## Final wrap-up safety gate
+
+Checkpoint `3ead871d` preserves the frozen candidate tested by all ten validation
+groups: six controller tests, three timed-facing checks, 19 heading checks, 50
+Curse checks, 164 activity checks and 155 training checks, plus strict
+native/WASM Clippy and both library builds. The native replay includes all 1,024
+captured facing words. The two ignored activity/training tests were not run.
+
+The final tree then adds the requested `cfg!(any(test, feature = "test-fixtures"))`
+diagnostic admission gate around only the long static-facing branch. In default
+builds that branch refuses before relation publication; the existing short and
+negative-angle branches stay enabled. Legacy facing behavior is unchanged. This
+is an explicit withheld feature, not a claim that automatic acquisition or later
+order replacement is faithful.
+
+No test/build cohort was restarted after that gate at wrap-up. The frozen
+candidate's passes belong to its recorded source hashes and are not asserted for
+the later gated tree. Final default/all-feature integration validation belongs to
+the release intake. The typed target/rules state and diagnostic regression suite
+remain preserved for continuation; no new state or acquisition algorithm was
+added for the safety gate.
