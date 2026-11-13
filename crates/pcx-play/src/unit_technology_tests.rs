@@ -73,13 +73,14 @@ fn source_alternatives_apply_to_specific_counts_and_upgrade_children_only_to_non
         .unwrap()
         .unwrap();
     assert_eq!(
-        all,
+        all.completed,
         HashSet::from([*b"a000", *b"a001", *b"a002", *b"a003", *b"a004"])
     );
     assert_eq!(
         provider_types(&source, *b"a000", true, 32)
             .unwrap()
-            .unwrap(),
+            .unwrap()
+            .completed,
         HashSet::from([*b"a000", *b"a003"])
     );
     let mut changed = source;
@@ -96,7 +97,8 @@ fn source_alternatives_apply_to_specific_counts_and_upgrade_children_only_to_non
     assert_eq!(
         provider_types(&changed, *b"a000", true, 32)
             .unwrap()
-            .unwrap(),
+            .unwrap()
+            .completed,
         HashSet::from([*b"a000", *b"a004"])
     );
 }
@@ -112,7 +114,8 @@ fn overlapping_relationships_form_one_bounded_union() {
     assert_eq!(
         provider_types(&source, *b"a000", false, 32)
             .unwrap()
-            .unwrap(),
+            .unwrap()
+            .completed,
         HashSet::from([*b"a000", *b"a001", *b"a002", *b"a003"])
     );
     assert!(
@@ -126,6 +129,7 @@ fn overlapping_relationships_form_one_bounded_union() {
         provider_types(&source, *b"a000", false, 3)
             .unwrap()
             .unwrap()
+            .completed
             .len(),
         2
     );
@@ -166,5 +170,35 @@ fn missing_malformed_indexed_and_mismatched_relationship_data_refuse() {
         provider_types(&source, *b"a000", false, 32)
             .unwrap_err()
             .contains("identity")
+    );
+}
+
+#[test]
+fn pending_providers_require_an_upgrade_edge_and_keep_alternative_path_state() {
+    let source = catalog(&[
+        (b"a000", "a001", "a001,a003"),
+        (b"a001", "a002", "a004"),
+        (b"a002", "", ""),
+        (b"a003", "", ""),
+        (b"a004", "", ""),
+    ]);
+    let providers = provider_types(&source, *b"a000", false, 64)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        providers.pending_upgrade,
+        HashSet::from([*b"a001", *b"a002", *b"a004"])
+    );
+    assert_eq!(
+        providers.completed,
+        HashSet::from([*b"a000", *b"a001", *b"a002", *b"a003", *b"a004"])
+    );
+    let specific = provider_types(&source, *b"a000", true, 64)
+        .unwrap()
+        .unwrap();
+    assert!(specific.pending_upgrade.is_empty());
+    assert_eq!(
+        specific.completed,
+        HashSet::from([*b"a000", *b"a001", *b"a003", *b"a004"])
     );
 }

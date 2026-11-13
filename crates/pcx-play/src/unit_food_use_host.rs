@@ -63,6 +63,12 @@ impl ObjectHost {
         Ok(self)
     }
 
+    pub(super) fn reenroll_structure_upgrade_food(&mut self, unit: HandleId) {
+        if let Some(admitted) = &mut self.unit_food_use {
+            admitted.disabled.remove(&unit);
+        }
+    }
+
     /// True when `SetUnitUseFood(unit, false)` cleared the unit's food bit.
     pub(super) fn unit_food_disabled(&self, unit: HandleId) -> bool {
         self.unit_food_use
@@ -107,6 +113,7 @@ impl ObjectHost {
                 ),
             ));
         }
+        self.prepare_upgrade_food_toggle(id, *enable)?;
         let admitted = self
             .unit_food_use
             .as_mut()
