@@ -7,7 +7,7 @@
 //! player's race section, then `[Default]`. Provenance and unverified points:
 //! `docs/re-notes/campaign-audio.md`.
 
-use crate::menu_audio::{AuthoredVolume, CampaignMusic};
+use crate::menu_audio::{AuthoredVolume, CampaignMusic, RegularMusicGain};
 use crate::menu_skin::SkinTable;
 use bevy::prelude::*;
 use pcx_assets::Resolver;
@@ -594,6 +594,7 @@ fn drive_music(
         &CampaignMusic,
         &mut PlaybackSettings,
         Option<&AudioSink>,
+        Option<&mut RegularMusicGain>,
     )>,
 ) {
     let witness = session.session_witness();
@@ -607,14 +608,14 @@ fn drive_music(
             session: witness.clone(),
             ..default()
         };
-        for (entity, _, _, _) in &music {
+        for (entity, _, _, _, _) in &music {
             commands.entity(entity).despawn();
         }
     }
     if witness.is_none() {
         return;
     }
-    let (thematic, map) = match session.host() {
+    let (thematic, map, regular) = match session.host() {
         Some(host) => {
             let objects = host.objects();
             (
@@ -624,6 +625,17 @@ fn drive_music(
                     random: selection.random,
                     index: selection.index,
                 }),
+                objects
+                    .regular_music_volume_request()
+                    .map(|request| {
+                        objects
+                            .volume_group_channel_gain(request.rules.channel())
+                            .map(|group| RegularMusicGain {
+                                request: request.clone(),
+                                group,
+                            })
+                    })
+                    .transpose(),
             )
         }
         None => return,
@@ -637,7 +649,7 @@ fn drive_music(
         && audio.playing == Some(Request::Thematic(request.path.clone()))
         && audio.thematic_position_revision != Some(request.position_revision)
     {
-        for (_, _, mut playback, sink) in &mut music {
+        for (_, _, mut playback, sink, _) in &mut music {
             if let Some(position) = request.position {
                 if let Some(sink) = sink {
                     use bevy::audio::AudioSinkPlayback;
@@ -656,10 +668,32 @@ fn drive_music(
         map,
         audible,
     );
+    let regular = if matches!(audio.playing, Some(Request::Map(_))) {
+        match regular {
+            Ok(gain) => gain,
+            Err(error) => {
+                audio.failed = audio.playing.take();
+                audio.report(error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
     match step {
-        Ok(Step::Keep) => {}
+        Ok(Step::Keep) => {
+            if let Some(gain) = regular {
+                for (entity, _, _, _, component) in &mut music {
+                    if let Some(mut component) = component {
+                        *component = gain.clone();
+                    } else {
+                        commands.entity(entity).insert(gain.clone());
+                    }
+                }
+            }
+        }
         Ok(Step::Stop) => {
-            for (entity, track, _, _) in &music {
+            for (entity, track, _, _, _) in &music {
                 debug!("campaign music stops {}", track.member);
                 commands.entity(entity).despawn();
             }
@@ -672,7 +706,19 @@ fn drive_music(
                 .and_then(|bank| bank.read(&member, MAX_TRACK_BYTES));
             match bytes {
                 Ok(bytes) => {
-                    let volume = sources.settings.audio.effective_music();
+                    let user = sources.settings.audio.effective_music();
+                    let volume = match regular
+                        .as_ref()
+                        .map(|gain| gain.with_user_gain(user))
+                        .transpose()
+                    {
+                        Ok(value) => value.unwrap_or(user),
+                        Err(error) => {
+                            audio.failed = audio.playing.take();
+                            audio.report(error);
+                            return;
+                        }
+                    };
                     let mut playback =
                         PlaybackSettings::DESPAWN.with_volume(bevy::audio::Volume::Linear(volume));
                     if let Some(request) = &thematic
@@ -681,7 +727,7 @@ fn drive_music(
                         playback.start_position = request.position;
                         audio.thematic_position_revision = Some(request.position_revision);
                     }
-                    commands.spawn((
+                    let mut entity = commands.spawn((
                         AudioPlayer(assets.add(AudioSource {
                             bytes: bytes.into(),
                         })),
@@ -689,6 +735,9 @@ fn drive_music(
                         CampaignMusic { member },
                         AuthoredVolume(1.0),
                     ));
+                    if let Some(gain) = regular {
+                        entity.insert(gain);
+                    }
                 }
                 Err(error) => {
                     audio.failed = audio.playing.take();

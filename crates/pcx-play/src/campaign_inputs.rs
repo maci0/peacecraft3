@@ -563,6 +563,7 @@ pub fn prepare(
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
         thematic_music_rules: Some(crate::playercolor_host::ThematicMusicRules::read(image)?),
+        regular_music_volume_rules: None,
         cached_unit_source_maps: cached_unit_source_maps(
             reader,
             &map_sources.map_label,
