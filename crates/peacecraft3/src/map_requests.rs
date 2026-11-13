@@ -175,7 +175,7 @@ impl MapRequests {
         input: crate::map_binding::BindingInputs<'_>,
         limits: crate::map_binding::BindingLimits,
     ) -> &MapOutcome {
-        self.replace_selected_with_campaign(sources, resolver, None, input, limits)
+        self.replace_selected_with_campaign(sources, resolver, None, None, input, limits)
     }
 
     pub(crate) fn replace_selected_with_campaign(
@@ -183,6 +183,7 @@ impl MapRequests {
         sources: &mut SelectedMapSources,
         resolver: Arc<pcx_assets::Resolver>,
         campaign: Option<Arc<pcx_play::campaign_data_set::CampaignRecipe>>,
+        client_sources: Option<Arc<pcx_play::client_module::ClientSources>>,
         input: crate::map_binding::BindingInputs<'_>,
         limits: crate::map_binding::BindingLimits,
     ) -> &MapOutcome {
@@ -223,7 +224,7 @@ impl MapRequests {
             self.bindings = candidate.bindings;
             self.admission = candidate.admission;
             self.published_receipts = candidate.published_receipts;
-            drop(sources.publish(receipts, resolver, campaign));
+            drop(sources.publish(receipts, resolver, campaign, client_sources));
         }
         self.last_outcome.as_ref().expect("delivered outcome")
     }
@@ -418,7 +419,8 @@ fn publish_retained_reader(state: &MapRequests, sources: &mut SelectedMapSources
         return;
     };
     let campaign = sources.campaign_for_receipts(&receipts);
-    drop(sources.publish(receipts, resolver, campaign));
+    let client_sources = sources.client_sources_for_receipts(&receipts);
+    drop(sources.publish(receipts, resolver, campaign, client_sources));
 }
 pub fn install(app: &mut App) {
     app.init_resource::<MapRequests>()

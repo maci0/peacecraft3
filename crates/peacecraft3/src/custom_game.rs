@@ -279,6 +279,7 @@ pub fn configuration(
     };
     Ok(Configuration {
         resolver,
+        client_sources: recipe.client_sources(),
         campaign: Some(recipe),
         map: map_member,
         common,
@@ -1019,6 +1020,7 @@ mod custom_game_synthetic_sys_fixture {
         Configuration {
             resolver,
             campaign: None,
+            client_sources: None,
             map: member("maps/scenario/synthetic.w3m"),
             common: member("Scripts\\common.j"),
             blizzard: member("Scripts\\Blizzard.j"),

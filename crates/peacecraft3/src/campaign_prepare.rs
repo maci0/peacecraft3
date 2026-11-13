@@ -101,12 +101,36 @@ fn prepare(
                 },
             )
         };
-        let inputs = if let Some(recipe) = sources.campaign_for_receipts(&bindings.receipts) {
+        let client_sources = sources.client_sources_for_receipts(&bindings.receipts);
+        let mut inputs = if let Some(bundle) = &client_sources {
+            let (origin, image) = bundle.main();
+            prepare(&origin.source, image)
+        } else if let Some(recipe) = sources.campaign_for_receipts(&bindings.receipts) {
             prepare(&recipe.rules().origin.source, recipe.image())
         } else {
             let install = std::path::Path::new(&bindings.receipts.common.provenance.source.origin);
             crate::menu_lighting::with_client_image(Some(install), prepare)
         }?;
+        inputs.regular_music_volume_rules = Some(match client_sources {
+            Some(bundle) => {
+                let (_, main) = bundle.main();
+                bundle
+                    .module(
+                        bundle.demand(),
+                        pcx_play::client_module::CLIENT_IMAGE_BYTES as u64,
+                    )
+                    .and_then(|module| {
+                        let module =
+                            module.ok_or("demanded auxiliary client module unavailable")?;
+                        pcx_play::playercolor_host::RegularMusicVolumeRules::read(
+                            main,
+                            &module.bytes,
+                            module.origin.clone(),
+                        )
+                    })
+            }
+            None => Err("admitted sources have no pinned auxiliary client generation".into()),
+        });
         Ok::<_, String>((inputs, chosen_seed))
     })();
     match result {

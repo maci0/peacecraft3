@@ -72,6 +72,7 @@ fn request(
     Configuration {
         resolver,
         campaign: None,
+        client_sources: None,
         map: member(),
         common: member(),
         blizzard: member(),

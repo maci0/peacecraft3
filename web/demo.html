@@ -49,6 +49,9 @@
         <p class="hint">Choose your local MPQ files. They are subject to the same local validation. You can also choose one optional client file. It is used for source display choices when that file is supported.</p>
         <label for="archives">Local MPQ archives</label>
         <input id="archives" type="file" multiple accept=".mpq,.MPQ,.exe,.EXE,.dll,.DLL" disabled>
+        <label for="client-module">Optional client module</label>
+        <input id="client-module" type="file" aria-describedby="client-module-request" disabled>
+        <output id="client-module-request" class="hint" role="status" aria-live="polite">Choose a main client file to identify its optional module.</output>
         <div class="actions">
           <button id="drop" type="button" disabled>Clear loaded archives</button>
           <button id="self" type="button" disabled>Archive status</button>
