@@ -21,6 +21,10 @@ pub enum ScriptSessionError {
     NoSession,
     #[error("script delivery cannot enter an unfinished timer projection")]
     PendingTimerProjection,
+    #[error("script delivery cannot enter an unfinished campaign AI map callback")]
+    PendingAiDelivery,
+    #[error("script delivery refused after a retained host fault: {0}")]
+    RetainedHostFault(String),
     #[error("{identity:?}: function id {id:?} is not declared in the admitted program")]
     UnknownFunction {
         identity: AssetIdentity,
@@ -49,7 +53,21 @@ struct ActiveSession<H: Host> {
     context: Arc<ParsedMapContext>,
     vm: OwnedVm<OwnedLocalizedHost<H>>,
     timer_delivery: Option<TimerDelivery>,
+    ai_delivery: Option<AiDelivery>,
 }
+
+struct AiDelivery {
+    phase: AiDeliveryPhase,
+    fault: Option<Arc<String>>,
+}
+enum AiDeliveryPhase {
+    Pending(pcx_script::ScriptCall),
+    Condition(FunctionId),
+    Actions(Vec<FunctionId>),
+    NativeReturn,
+}
+#[path = "map_session_ai_bridge.rs"]
+mod ai_bridge;
 
 struct TimerDelivery {
     expiry: crate::playercolor_host::TimerExpiry,
@@ -76,7 +94,21 @@ impl<H: Host + Send + Sync + 'static> Default for MapScriptSession<H> {
     }
 }
 impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
-    fn reject_unfinished_projection(&self) -> Result<(), ScriptSessionError> {
+    fn reject_unfinished_projection(&mut self) -> Result<(), ScriptSessionError> {
+        if let Some(error) = self
+            .active
+            .as_mut()
+            .and_then(|active| active.vm.host().script_entry_error())
+        {
+            return Err(ScriptSessionError::RetainedHostFault(error));
+        }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.ai_delivery.is_some())
+        {
+            return Err(ScriptSessionError::PendingAiDelivery);
+        }
         if self
             .active
             .as_ref()
@@ -180,6 +212,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
             context,
             vm,
             timer_delivery: None,
+            ai_delivery: None,
         });
         Ok(())
     }
@@ -269,6 +302,7 @@ fn execution_failure<H: Host>(
 ) -> ScriptSessionError {
     let source_label = vm.error_source().map(str::to_owned);
     let diagnostic = vm.host().diagnostic(source_label.as_deref(), &error);
+    vm.host().retain_script_failure(&diagnostic);
     ScriptSessionError::Execution(Box::new(ScriptExecutionFailure {
         identity: context.sources.map.clone(),
         function,
@@ -286,6 +320,8 @@ pub enum TimerSessionError {
     MandatoryProjection(#[source] Arc<crate::playercolor_host::Error>),
     #[error("campaign AI: {0}")]
     Ai(String),
+    #[error("campaign AI map callback failed: {0}")]
+    AiBridge(Arc<String>),
     #[error("native queue: {0}")]
     NativeQueue(String),
     #[error("range callback work budget exhausted")]
@@ -321,7 +357,7 @@ fn source_queue_error(error: crate::native_game_clock::QueueError) -> TimerSessi
 }
 
 impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
-    pub(crate) fn check_pending_projection(&self) -> Result<(), TimerSessionError> {
+    pub(crate) fn check_pending_projection(&mut self) -> Result<(), TimerSessionError> {
         if let Some(delivery) = self
             .active
             .as_ref()
@@ -331,6 +367,21 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 return Err(TimerSessionError::MandatoryProjection(Arc::clone(fault)));
             }
             return Err(TimerSessionError::PendingDelivery);
+        }
+        if let Some(active) = self.active.as_mut() {
+            if let Some(fault) = active
+                .ai_delivery
+                .as_ref()
+                .and_then(|delivery| delivery.fault.as_ref())
+            {
+                return Err(TimerSessionError::AiBridge(Arc::clone(fault)));
+            }
+            if let Some(fault) = active.vm.host().inner.ai_bridge_fault() {
+                return Err(TimerSessionError::AiBridge(fault));
+            }
+            if active.ai_delivery.is_some() || active.vm.host().inner.ai_bridge_pending() {
+                return Err(ScriptSessionError::PendingAiDelivery.into());
+            }
         }
         Ok(())
     }
@@ -803,8 +854,20 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                         .ok_or(ScriptSessionError::NoSession)?
                         .deliver_native_ai_wake(wake, activity_work)
                         .map_err(TimerSessionError::Ai)?;
-                    delivered +=
-                        usize::from(outcome == crate::campaign_ai::AiWakeDelivery::Resumed);
+                    if outcome == crate::campaign_ai::AiWakeDelivery::MapBridge {
+                        let call = self
+                            .host()
+                            .ok_or(ScriptSessionError::NoSession)?
+                            .begin_pending_ai_bridge(wake.player, true)
+                            .map_err(TimerSessionError::Ai)?;
+                        self.deliver_ai_map_bridge(call.ok_or_else(|| {
+                            TimerSessionError::Ai("AI wake lost its pending map callback".into())
+                        })?)?;
+                        delivered += 1;
+                    } else {
+                        delivered +=
+                            usize::from(outcome == crate::campaign_ai::AiWakeDelivery::Resumed);
+                    }
                     continue;
                 }
                 if paired && native_target != native_limit {
@@ -812,10 +875,14 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 }
                 if let Some((_, player, ticket)) = ai_wake {
                     *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
-                    self.host()
+                    let call = self
+                        .host()
                         .ok_or(ScriptSessionError::NoSession)?
                         .resume_ai(player, ticket)
                         .map_err(TimerSessionError::Ai)?;
+                    if let Some(call) = call {
+                        self.deliver_ai_map_bridge(call)?;
+                    }
                     delivered += 1;
                     continue;
                 }

@@ -2634,3 +2634,6 @@ fn generic_source_bound_runtime_keeps_legacy_map_sleep_and_explicit_counter_is_s
         );
     }
 }
+
+#[path = "ai_map_bridge_cases.rs"]
+mod ai_map_bridge;

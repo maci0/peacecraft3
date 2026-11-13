@@ -1809,6 +1809,7 @@ mod unit_removal;
 
 #[path = "thread_host.rs"]
 mod thread;
+pub(crate) use thread::AiCallbackBoundary;
 
 #[path = "time_of_day_host.rs"]
 mod time_of_day;

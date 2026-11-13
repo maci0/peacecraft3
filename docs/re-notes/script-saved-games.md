@@ -553,8 +553,8 @@ raw entry and complete extended epoch, including remaining count and the
 unchanged legacy expiry shadow. Source-bound synthetic regressions cover an
 internal entry and queue rebase without deriving time from a public `f64` view.
 These are component reconstruction checks. The whole clock/world/application
-graph, immediate AI-to-map observer bridge, complete checkpoint owner, durable
-storage and cold publication remain incomplete; SaveGame/LoadGame and menu
+graph, complete checkpoint owner, durable storage and cold publication remain
+incomplete; SaveGame/LoadGame and menu
 save/load remain unsupported.
 
 The native clock candidate section preserves both completed queue positions,
@@ -582,3 +582,44 @@ game-only segment, as the current producer API does. Real duration validation
 walks the exact source chunk-subtraction words, charging the codec item budget;
 a positive but unreachable remainder is refused. Exhausting that proof budget
 refuses the candidate rather than approximating or silently dropping time.
+
+
+The unfinished, fixture-only AI resource-observer bridge returns the canonical world loan
+and reinserts the paused AI VM before the owning map VM executes the captured
+`ScriptCall` batch. The AI native return resumes after that entire batch. A
+native Game wake retains its selected queue scope across map conditions,
+actions, nested ordinary triggers and the AI continuation; the Legacy path uses
+the same callback ownership. The initial map call uses its VM's resident native
+call boundary. Wake delivery retains a separate session phase before dispatch.
+
+Native-code evidence joins the player-state setter's immediate listener call;
+the local runtime witness for image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`,
+version 1.29.2.9231, records the AI's immediate read of the observer's resource
+write, including after Sleep, with disabled observers as a control. Synthetic
+published-session regressions exercise that contract in Native and Legacy
+paths. Their re-park and timer-query checks also test preservation of the
+selected Game scope. These are reconstruction checks against that bounded
+contract, not new original-client save observations.
+
+Sleeping observers, sound waits, reentrant AI starts and AI-global initializer
+writes requiring map callbacks remain explicitly refused before their effects.
+A callback error preserves its original map diagnostic, returns the world and
+attempts retirement once, retaining failed cleanup ownership; retained faults
+refuse script entry and producer retries before VM or queue mutation. Candidate AI sections preserve callback
+admission in internal version 2 and explicitly refuse active or faulted bridge
+ownership. Full active-AI disk projection, the whole root, storage and cold
+publication remain unfinished, and SaveGame/LoadGame remain unsupported.
+
+
+Wrap-up checkpoint: normal `StartCampaignAI` dispatch remains strict for map
+resource callbacks. The experimental bridge requires an explicit test-fixture
+builder; it has no production admission. The initial six diagnostic app cases
+and earlier entry/cause fix passed, but the subsequent broad clock run found an
+over-broad fault gate (42 passed, one existing ordinary-AI refusal case failed).
+The capture-attempt/scoped-cleanup refinement then stopped at compilation
+privacy errors before any focused tests ran. Those visibility paths and the
+production safety gate were corrected for this checkpoint without another build
+or test run. The current refinement, new no-capture/queue/boundary cases and
+final native/WASM checks therefore remain unvalidated. This work must not be
+reported as a completed observer bridge or full Save/Load implementation.

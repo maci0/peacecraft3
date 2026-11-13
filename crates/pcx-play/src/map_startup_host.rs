@@ -1,5 +1,7 @@
 //! Caller-qualified map host: one object arena and six neutral wrappers.
 //! Asset bytes, profiles, budgets and runtime observations stay with the caller.
+#[path = "map_startup_ai_bridge.rs"]
+mod ai_bridge;
 #[path = "map_startup_ai_checkpoint.rs"]
 mod ai_checkpoint;
 use crate::camera_margins::CameraMargins;
@@ -405,6 +407,10 @@ pub struct MapStartupHost {
     sound_playback: Option<sound_playback::Rules>,
     inner: Option<NeutralStack>,
     ai: crate::campaign_ai::Runtime<NeutralStack>,
+    ai_bridge: Option<ai_bridge::Frame>,
+    ai_bridge_fault: Option<Arc<String>>,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    ai_map_bridge_fixture: bool,
     research: Option<CurrentResearchInput>,
     day_night_loader: Option<DayNightLoader>,
     placement_rules: Option<crate::unit_placement::Rules>,
@@ -431,6 +437,10 @@ impl MapStartupHost {
             sound_playback: None,
             inner: Some(inner),
             ai: crate::campaign_ai::Runtime::default(),
+            ai_bridge: None,
+            ai_bridge_fault: None,
+            #[cfg(any(test, feature = "test-fixtures"))]
+            ai_map_bridge_fixture: false,
             research: None,
             day_night_loader: None,
             placement_rules: None,
@@ -508,14 +518,47 @@ impl MapStartupHost {
         wake: crate::campaign_ai::AiWake,
         work: &mut usize,
     ) -> Result<crate::campaign_ai::AiWakeDelivery, String> {
-        self.ai.deliver_native_wake(&mut self.inner, wake, work)
+        self.arm_ai_bridge(wake.player)?;
+        let mut captured = false;
+        let result = self
+            .ai
+            .deliver_native_wake(&mut self.inner, wake, work, &mut captured);
+        match &result {
+            Ok(crate::campaign_ai::AiWakeDelivery::MapBridge) => {
+                self.ai_bridge
+                    .as_mut()
+                    .expect("reserved AI bridge")
+                    .ends_game_scope = true;
+            }
+            Ok(_) => self.ai_bridge = None,
+            Err(error) if captured => self.abort_ai_bridge(error),
+            Err(_) => self.ai_bridge = None,
+        }
+        result
     }
     pub(crate) fn next_ai_wake(&mut self, until: f64) -> Option<(f64, i32, u64)> {
         self.ai.next_wake(until)
     }
 
-    pub(crate) fn resume_ai(&mut self, player: i32, ticket: u64) -> Result<(), String> {
-        self.ai.resume(&mut self.inner, player, ticket)
+    pub(crate) fn resume_ai(
+        &mut self,
+        player: i32,
+        ticket: u64,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.arm_ai_bridge(player)?;
+        let mut captured = false;
+        if let Err(error) =
+            self.ai
+                .resume_with_capture(&mut self.inner, player, ticket, &mut captured)
+        {
+            if captured {
+                self.abort_ai_bridge(&error);
+            } else {
+                self.ai_bridge = None;
+            }
+            return Err(error);
+        }
+        self.begin_pending_ai_bridge(player, false)
     }
 
     pub fn sound_playback(&self) -> Option<&sound_playback::Rules> {
@@ -1235,6 +1278,10 @@ fn assemble_inner(
         sound_playback,
         inner: Some(inner),
         ai: crate::campaign_ai::Runtime::default(),
+        ai_bridge: None,
+        ai_bridge_fault: None,
+        #[cfg(any(test, feature = "test-fixtures"))]
+        ai_map_bridge_fixture: false,
         research: current_research,
         day_night_loader: None,
         placement_tables: placement_rules.as_ref().map(|_| tables),
@@ -1248,6 +1295,20 @@ fn assemble_inner(
 }
 
 impl Host for MapStartupHost {
+    fn script_entry_error(&self) -> Option<String> {
+        self.ai_bridge_fault
+            .as_ref()
+            .map(|fault| (**fault).clone())
+            .or_else(|| self.inner.as_ref().and_then(Host::script_entry_error))
+    }
+    fn retain_script_failure(&mut self, diagnostic: &str) {
+        if self.ai_bridge.is_some() || self.ai_bridge_fault.is_some() {
+            self.retain_ai_bridge_failure(diagnostic.to_owned());
+        } else if let Some(world) = self.inner.as_mut() {
+            world.retain_script_failure(diagnostic);
+        }
+    }
+
     fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
         self.inner
             .as_ref()
@@ -1276,12 +1337,34 @@ impl Host for MapStartupHost {
         name: &str,
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.check_ai_observer_native(name)?;
+        if name == "StartCampaignAI" && self.ai_map_bridge_admitted() {
+            let (player, path) = self.campaign_ai_args(args)?;
+            self.arm_ai_bridge(player)?;
+            let mut captured = false;
+            if let Err(error) =
+                self.ai
+                    .start_with_bridge(&mut self.inner, player, path, true, &mut captured)
+            {
+                if captured {
+                    self.abort_ai_bridge(&error);
+                } else {
+                    self.ai_bridge = None;
+                }
+                return Err(error);
+            }
+            return self
+                .begin_pending_ai_bridge(player, false)
+                .map(|call| Some(call.unwrap_or(pcx_script::ScriptCall::Return(Value::Null))));
+        }
         self.world_mut().begin_script_call(name, args)
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
-        self.world_mut().continue_script_call(value)
+        let call = self.world_mut().continue_script_call(value)?;
+        self.finish_ai_map_call(call)
     }
     fn abort_script_calls(&mut self) {
+        self.abort_ai_bridge("map observer execution failed");
         self.world_mut().abort_script_calls();
     }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
@@ -1291,6 +1374,10 @@ impl Host for MapStartupHost {
         self.world_mut().checkpoint(name, args)
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
+        if self.ai_bridge.is_some() && matches!(name, "TriggerSleepAction" | "TriggerWaitForSound")
+        {
+            return false;
+        }
         self.world_mut().suspend(name, args)
     }
     fn park_thread(&mut self) -> Result<u64, String> {
@@ -1303,7 +1390,8 @@ impl Host for MapStartupHost {
         self.world_mut().leave_thread()
     }
     fn after_script_spawn(&mut self) -> Result<Option<pcx_script::ScriptCall>, String> {
-        self.world_mut().after_script_spawn()
+        let call = self.world_mut().after_script_spawn()?;
+        call.map(|call| self.finish_ai_map_call(call)).transpose()
     }
 
     fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
@@ -1343,6 +1431,7 @@ impl MapStartupHost {
         args: &[Value],
         strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Result<Value, String> {
+        self.check_ai_observer_native(name)?;
         if let Some(result) = self.preload_native(name, args) {
             return result;
         }
@@ -1392,37 +1481,7 @@ impl MapStartupHost {
             return Ok(Value::Null);
         }
         if name == "StartCampaignAI" {
-            let scripts = &self.context().scripts;
-            let declaration = scripts
-                .program()
-                .natives()
-                .get(name)
-                .ok_or("StartCampaignAI: selected common does not declare the native")?;
-            if scripts
-                .digests
-                .first()
-                .is_none_or(|common| declaration.source != common.label)
-                || declaration.params.len() != 2
-                || declaration.params[0].ty.kind.name() != "player"
-                || declaration.params[1].ty.kind.name() != "string"
-                || declaration.ret.kind.name() != "nothing"
-            {
-                return Err("StartCampaignAI: selected common declaration differs".into());
-            }
-            let [Value::Handle(player), Value::Str(path)] = args else {
-                return Err("StartCampaignAI: expected player and script path".into());
-            };
-            let slots = self
-                .objects()
-                .player_slots()
-                .ok_or("StartCampaignAI: players are not admitted")?;
-            let ordinal = (0..slots)
-                .filter_map(|slot| i32::try_from(slot).ok())
-                .find(|&slot| self.objects().player_identity(slot) == Some(*player))
-                .ok_or("StartCampaignAI: player is not a current identity")?;
-            let path = path
-                .as_utf8()
-                .map_err(|why| format!("StartCampaignAI: unsupported path UTF8: {why}"))?;
+            let (ordinal, path) = self.campaign_ai_args(args)?;
             self.ai.start(&mut self.inner, ordinal, path)?;
             return Ok(Value::Null);
         }

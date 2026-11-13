@@ -20,6 +20,20 @@ pub(super) struct Context {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) struct AiCallbackBoundary {
+    synchronous: usize,
+    callbacks: usize,
+    threads: usize,
+    previous: usize,
+    context: Context,
+}
+impl AiCallbackBoundary {
+    pub(crate) fn synchronous_depth(self) -> usize {
+        self.synchronous
+    }
+}
+
+#[derive(Clone, Copy)]
 struct Sleep {
     legacy_deadline: f64,
     native: Option<SleepRequest>,
@@ -56,6 +70,39 @@ pub(super) struct Threads {
 }
 
 impl ObjectHost {
+    pub(crate) fn capture_ai_callback_boundary(&self) -> AiCallbackBoundary {
+        AiCallbackBoundary {
+            synchronous: self.synchronous_frames.len(),
+            callbacks: self.callbacks.len(),
+            threads: self.threads.stack.len(),
+            previous: self.event_callback_depth(),
+            context: self.thread_context(),
+        }
+    }
+    pub(crate) fn abort_ai_callback_boundary(
+        &mut self,
+        boundary: AiCallbackBoundary,
+    ) -> Result<(), Error> {
+        let active = self
+            .synchronous_frames
+            .get(boundary.synchronous..)
+            .map(|frames| frames.iter().filter(|frame| frame.active).count());
+        if self.synchronous_frames.len() < boundary.synchronous
+            || self.callbacks.len() < boundary.callbacks
+            || self.threads.stack.len() < boundary.threads
+            || active != self.event_callback_depth().checked_sub(boundary.previous)
+        {
+            return Err(self.inner.error(
+                "AI map callback",
+                Failure::TriggerState("owned callback boundary changed"),
+            ));
+        }
+        self.abort_synchronous_delivery_to(boundary.synchronous);
+        self.callbacks.truncate(boundary.callbacks);
+        self.threads.stack.truncate(boundary.threads);
+        self.install_thread_context(boundary.context);
+        Ok(())
+    }
     /// Requires the trigger runtime and the declaration in `CreateTrigger`'s source.
     pub fn admit_thread_sleep(&mut self, max_parked: usize) -> Result<(), Error> {
         let fail = |reason| self.inner.error(SLEEP, Failure::TriggerState(reason));
@@ -426,3 +473,7 @@ impl ObjectHost {
         self.threads.stack.clear();
     }
 }
+
+#[cfg(test)]
+#[path = "thread_boundary_tests.rs"]
+mod boundary_tests;

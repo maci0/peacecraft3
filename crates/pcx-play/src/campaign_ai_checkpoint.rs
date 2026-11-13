@@ -107,6 +107,7 @@ impl<W: AiWorld> Runtime<W> {
         {
             return Err("checkpoint AI context ownership is incomplete".into());
         }
+        out.raw(b"PC3AI\0\x02")?;
         out.boolean(loader.is_some())?;
         out.u64(u64::try_from(*remaining_loads).map_err(|_| "checkpoint AI load budget")?)?;
         out.boolean(pause_rules.is_ok())?;
@@ -133,7 +134,12 @@ impl<W: AiWorld> Runtime<W> {
                 pause_depth,
                 sleepers,
                 next_ticket,
+                bridge_enabled,
+                pending_map,
             } = vm.host();
+            if pending_map.is_some() {
+                return Err("checkpoint AI map callback is active".into());
+            }
             if *host_player != player || lent.is_some() || sleepers.len() > MAX_SLEEPERS {
                 return Err("checkpoint AI world is lent or host identity differs".into());
             }
@@ -147,6 +153,10 @@ impl<W: AiWorld> Runtime<W> {
             let fingerprint = source.scripts.source_fingerprint();
             out.raw(&fingerprint)?;
             result_out(out, melee_difficulty)?;
+            if *bridge_enabled {
+                world.ai_synchronous_depth()?;
+            }
+            out.boolean(*bridge_enabled)?;
             out.boolean(pause_depth.is_some())?;
             if let Some(depth) = pause_depth {
                 out.i32(*depth)?;
@@ -192,6 +202,9 @@ impl<W: AiWorld> Runtime<W> {
     {
         if !self.active.is_empty() || !self.pending_retirement.is_empty() {
             return Err("checkpoint AI restoration requires a fresh candidate runtime".into());
+        }
+        if input.raw(7)? != b"PC3AI\0\x02" {
+            return Err("unsupported checkpoint AI section version".into());
         }
         let has_loader = input.boolean()?;
         if has_loader && self.loader.is_none() {
@@ -285,6 +298,10 @@ impl<W: AiWorld> Runtime<W> {
                 return Err("checkpoint AI source differs from its pinned context".into());
             }
             let captured = result_in(input)?;
+            let bridge_enabled = input.boolean()?;
+            if bridge_enabled {
+                world.ai_synchronous_depth()?;
+            }
             let pause_depth = if input.boolean()? {
                 Some(input.i32()?)
             } else {
@@ -330,6 +347,8 @@ impl<W: AiWorld> Runtime<W> {
                 pause_depth,
                 sleepers,
                 next_ticket,
+                bridge_enabled,
+                pending_map: None,
             };
             let mut vm = OwnedVm::new_owned(scripts.shared_program(), host);
             let mut seen = BTreeSet::new();

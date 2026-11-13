@@ -970,6 +970,7 @@ mod tests;
 
 #[path = "object_host.rs"]
 mod objects;
+pub(crate) use objects::AiCallbackBoundary;
 pub(crate) use objects::harvest_runtime;
 #[cfg(test)]
 pub(crate) use objects::unit_buff::{ActiveBuff, BuffTraits, MAX_BUFFS_PER_UNIT};

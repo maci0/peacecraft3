@@ -183,6 +183,13 @@ pub trait Host {
         false
     }
 
+    /// A retained delivery fault refuses a new externally initiated script entry.
+    fn script_entry_error(&self) -> Option<String> {
+        None
+    }
+    /// Preserve the caller's source diagnostic after host context cleanup.
+    fn retain_script_failure(&mut self, _diagnostic: &str) {}
+
     /// Stop at this native's return hole for the whole-world checkpoint owner.
     /// The host retains the request; this neither sleeps nor writes a save.
     fn checkpoint(&mut self, _name: &str, _args: &[Value]) -> Result<bool, String> {

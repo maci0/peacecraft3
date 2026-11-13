@@ -432,3 +432,158 @@ fn ai_root_section_retains_failed_retirement_and_host_errors_without_replaying_m
     assert!(restored.pending_retirement.is_empty());
     assert_eq!(restored_state.lock().unwrap().gold.get(&2), Some(&73));
 }
+
+#[test]
+fn ai_root_bridge_admission_roundtrip_and_pending_owner_refusal_are_explicit() {
+    let script = program(
+        "bridge.ai",
+        "function main takes nothing returns nothing\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()),null,17)\nendfunction\n",
+    );
+    let make = || {
+        let mut runtime = Runtime::<World>::default();
+        let script = Arc::clone(&script);
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        runtime
+    };
+    let mut live = make();
+    let data = Arc::new(Mutex::new(State {
+        map_owner: true,
+        ..State::default()
+    }));
+    let mut world = Some(World(Arc::clone(&data)));
+    live.start_with_bridge(&mut world, 1, "bridge.ai", true, &mut false)
+        .unwrap();
+    let bytes = encode(&mut live, &world);
+    assert!(bytes.starts_with(b"PC3AI\0\x02"));
+    let restored_data = Arc::new(Mutex::new(data.lock().unwrap().clone()));
+    let mut restored_world = Some(World(Arc::clone(&restored_data)));
+    let mut restored = make();
+    let mut input = Reader::new(&bytes, budget()).unwrap();
+    restored
+        .restore_checkpoint(
+            restored_world.as_ref().unwrap(),
+            &mut input,
+            budget(),
+            |_| Ok(Arc::clone(&script)),
+            (valid_player, valid_player, valid_reference),
+        )
+        .unwrap();
+    input.finish().unwrap();
+    assert!(restored.active.get_mut(&1).unwrap().host().bridge_enabled);
+    data.lock().unwrap().clock = 0.25;
+    restored_data.lock().unwrap().clock = 0.25;
+    live.resume(&mut world, 1, 1).unwrap();
+    restored.resume(&mut restored_world, 1, 1).unwrap();
+    assert_eq!(*data.lock().unwrap(), *restored_data.lock().unwrap());
+    restored.active.get_mut(&1).unwrap().host().pending_map = Some(super::super::AiMapCall {
+        base_depth: 0,
+        call: pcx_script::ScriptCall::Return(Value::Null),
+    });
+    let mut out = Writer::new(budget()).unwrap();
+    assert!(
+        restored
+            .write_checkpoint(restored_world.as_ref().unwrap(), &mut out, budget())
+            .unwrap_err()
+            .contains("map callback is active")
+    );
+    let missing_owner = World(Arc::new(Mutex::new(State::default())));
+    let mut candidate = make();
+    assert!(
+        candidate
+            .restore_checkpoint(
+                &missing_owner,
+                &mut Reader::new(&bytes, budget()).unwrap(),
+                budget(),
+                |_| Ok(Arc::clone(&script)),
+                (valid_player, valid_player, valid_reference)
+            )
+            .unwrap_err()
+            .contains("owner is not admitted")
+    );
+    assert!(candidate.active.is_empty());
+    let mut old = bytes;
+    old[6] = 1;
+    let mut candidate = make();
+    assert!(
+        candidate
+            .restore_checkpoint(
+                restored_world.as_ref().unwrap(),
+                &mut Reader::new(&old, budget()).unwrap(),
+                budget(),
+                |_| Ok(Arc::clone(&script)),
+                (valid_player, valid_player, valid_reference)
+            )
+            .unwrap_err()
+            .contains("version")
+    );
+    assert!(candidate.active.is_empty());
+}
+
+#[test]
+fn ai_map_bridge_failed_retirement_keeps_returned_world_and_never_repeats_cleanup() {
+    let script = program(
+        "retained.ai",
+        "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,7)\ncall SetPlayerState(Player(GetAiPlayer()),null,99)\nendfunction\n",
+    );
+    let mut runtime = Runtime::<World>::default();
+    runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+    let state = Arc::new(Mutex::new(State {
+        callbacks: true,
+        map_owner: true,
+        ..State::default()
+    }));
+    let mut world = Some(World(Arc::clone(&state)));
+    runtime
+        .start_with_bridge(&mut world, 1, "retained.ai", true, &mut false)
+        .unwrap();
+    assert!(world.is_some());
+    let batch = runtime.take_map_call(1).unwrap();
+    assert!(matches!(
+        batch.call,
+        pcx_script::ScriptCall::Return(Value::Null)
+    ));
+    assert_eq!(state.lock().unwrap().gold.get(&2), Some(&7));
+    state.lock().unwrap().retirement_blocked = true;
+    let error = runtime
+        .abort_map_call(&mut world, 1, "map exact failure")
+        .unwrap_err();
+    assert!(error.contains("route retirement refused"), "{error}");
+    assert!(world.is_some());
+    assert!(runtime.pending_retirement.contains(&1));
+    assert!(runtime.active.get_mut(&1).unwrap().host().world.is_none());
+    state.lock().unwrap().retirement_blocked = false;
+    let before = state.lock().unwrap().clone();
+    runtime
+        .abort_map_call(&mut world, 1, "later failure")
+        .unwrap();
+    assert_eq!(*state.lock().unwrap(), before);
+    assert!(runtime.pending_retirement.contains(&1));
+    assert_eq!(state.lock().unwrap().gold.get(&2), Some(&7));
+}
+
+#[test]
+fn ai_map_bridge_post_write_capture_failure_returns_attempt_status_without_replaying_tail() {
+    let script = program(
+        "capture.ai",
+        "function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),null,7)\ncall SetPlayerState(Player(GetAiPlayer()),null,99)\nendfunction\n",
+    );
+    let mut runtime = Runtime::<World>::default();
+    runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+    let state = Arc::new(Mutex::new(State {
+        callbacks: true,
+        map_owner: true,
+        capture_error: true,
+        ..State::default()
+    }));
+    let mut world = Some(World(Arc::clone(&state)));
+    let mut captured = false;
+    let error = runtime
+        .start_with_bridge(&mut world, 1, "capture.ai", true, &mut captured)
+        .unwrap_err();
+    assert!(captured);
+    assert!(error.contains("post-write capture failure"), "{error}");
+    assert!(world.is_some());
+    assert_eq!(state.lock().unwrap().gold.get(&2), Some(&7));
+    assert!(runtime.active.is_empty());
+    assert!(runtime.pending_retirement.is_empty());
+}

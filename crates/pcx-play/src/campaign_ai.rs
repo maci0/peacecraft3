@@ -192,6 +192,9 @@ pub(crate) trait AiWorld: Host {
         kind: i32,
         town: i32,
     ) -> Result<bool, String>;
+    fn ai_synchronous_depth(&self) -> Result<usize, String> {
+        Err("AI map callback owner is not admitted".into())
+    }
     fn has_map_player_state_callbacks(&self) -> bool;
     fn ai_debug_text(&mut self) -> Result<(), String>;
     fn ai_fill_guard_posts(&mut self, player: i32) -> Result<(), String>;
@@ -519,6 +522,16 @@ impl AiWorld for NeutralStack {
             .timer_game_time()
     }
 
+    fn ai_synchronous_depth(&self) -> Result<usize, String> {
+        Ok(self
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .synchronous_frame_depth())
+    }
     fn has_map_player_state_callbacks(&self) -> bool {
         self.inner()
             .inner()
@@ -886,6 +899,9 @@ impl AiWorld for NeutralStack {
     }
 }
 
+#[path = "campaign_ai_map_bridge.rs"]
+mod map_bridge;
+
 #[path = "campaign_ai_checkpoint.rs"]
 mod checkpoint;
 pub use checkpoint::CheckpointSource;
@@ -976,6 +992,18 @@ impl<W: AiWorld> Runtime<W> {
         player: i32,
         path: &str,
     ) -> Result<(), String> {
+        self.start_with_bridge(world, player, path, false, &mut false)
+    }
+
+    pub(crate) fn start_with_bridge(
+        &mut self,
+        world: &mut Option<W>,
+        player: i32,
+        path: &str,
+        bridge_enabled: bool,
+        captured: &mut bool,
+    ) -> Result<(), String> {
+        *captured = false;
         if path.len() > 16 << 10 {
             return Err("StartCampaignAI: script path exceeds 16 KiB".into());
         }
@@ -1043,9 +1071,11 @@ impl<W: AiWorld> Runtime<W> {
             .init_globals()
             .and_then(|()| {
                 let main = vm.program().function_id("main").expect("admitted AI main");
-                vm.run_thread(&[main])
+                vm.host().bridge_enabled = bridge_enabled;
+                vm.run_thread_until_checkpoint(&[main]).map(|_| ())
             })
             .map_err(|error| script_error(&mut vm, &error));
+        *captured = vm.host().pending_map.is_some();
         let mut borrowed = vm.host().world.take().expect("AI world is lent");
         let retirement = if result.is_err() && activated {
             borrowed.ai_deactivate_player(player)
@@ -1084,12 +1114,24 @@ impl<W: AiWorld> Runtime<W> {
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)))
     }
 
+    #[cfg(test)]
     pub(crate) fn resume(
         &mut self,
         world: &mut Option<W>,
         player: i32,
         ticket: u64,
     ) -> Result<(), String> {
+        self.resume_with_capture(world, player, ticket, &mut false)
+    }
+
+    pub(crate) fn resume_with_capture(
+        &mut self,
+        world: &mut Option<W>,
+        player: i32,
+        ticket: u64,
+        captured: &mut bool,
+    ) -> Result<(), String> {
+        *captured = false;
         if self.pending_retirement.contains(&player) {
             return Err("campaign AI context is pending retirement".into());
         }
@@ -1140,8 +1182,10 @@ impl<W: AiWorld> Runtime<W> {
         let mut vm = self.active.remove(&player).expect("checked AI player");
         vm.host().world = Some(borrowed);
         let result = vm
-            .resume_thread(ticket)
+            .resume_thread_until_checkpoint(ticket)
+            .map(|_| ())
             .map_err(|error| script_error(&mut vm, &error));
+        *captured = vm.host().pending_map.is_some();
         *world = vm.host().world.take();
         if result.is_ok() {
             self.active.insert(player, vm);
@@ -1401,6 +1445,12 @@ fn admit_ai_natives(scripts: &MapScripts) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub(crate) struct AiMapCall {
+    pub base_depth: usize,
+    pub call: ScriptCall,
+}
+
 pub(crate) struct AiHost<W: AiWorld> {
     player: i32,
     source: Option<AiSource>,
@@ -1410,6 +1460,8 @@ pub(crate) struct AiHost<W: AiWorld> {
     pause_depth: Option<i32>,
     sleepers: BTreeMap<u64, AiSleep>,
     next_ticket: u64,
+    bridge_enabled: bool,
+    pending_map: Option<AiMapCall>,
 }
 
 impl<W: AiWorld> AiHost<W> {
@@ -1423,6 +1475,8 @@ impl<W: AiWorld> AiHost<W> {
             pause_depth: None,
             sleepers: BTreeMap::new(),
             next_ticket: 0,
+            bridge_enabled: false,
+            pending_map: None,
         }
     }
 
@@ -1440,6 +1494,41 @@ impl<W: AiWorld> AiHost<W> {
 }
 
 impl<W: AiWorld> Host for AiHost<W> {
+    fn script_entry_error(&self) -> Option<String> {
+        self.world.as_ref().and_then(Host::script_entry_error)
+    }
+    fn retain_script_failure(&mut self, diagnostic: &str) {
+        if let Some(world) = self.world.as_mut() {
+            world.retain_script_failure(diagnostic);
+        }
+    }
+
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        if name != "SetPlayerState" || !self.world()?.has_map_player_state_callbacks() {
+            return Ok(false);
+        }
+        if !self.bridge_enabled || !cfg!(any(test, feature = "test-fixtures")) {
+            return Err("SetPlayerState: map callbacks from campaign AI initializer or direct host are not admitted".into());
+        }
+        if self.pending_map.is_some() {
+            return Err("campaign AI map callback is already pending".into());
+        }
+        let base_depth = self.world()?.ai_synchronous_depth()?;
+        self.pending_map = Some(AiMapCall {
+            base_depth,
+            call: ScriptCall::Return(Value::Null),
+        });
+        let call = self
+            .world_mut()?
+            .begin_script_call(name, args)?
+            .ok_or("campaign AI callback capture was not admitted")?;
+        self.pending_map
+            .as_mut()
+            .expect("reserved map callback")
+            .call = call;
+        Ok(true)
+    }
+
     fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
         self.world()?.string_case(bytes, upper)
     }
@@ -1944,6 +2033,8 @@ mod tests {
         ignored_counts: BTreeMap<(i32, i32), i32>,
         player_unit_counts: BTreeMap<(HandleId, i32), i32>,
         callbacks: bool,
+        map_owner: bool,
+        capture_error: bool,
         silent_debug: bool,
         active: BTreeMap<i32, bool>,
         target_heroes: BTreeMap<i32, bool>,
@@ -2145,6 +2236,13 @@ mod tests {
     struct World(Arc<Mutex<State>>);
 
     impl AiWorld for World {
+        fn ai_synchronous_depth(&self) -> Result<usize, String> {
+            if self.0.lock().unwrap().map_owner {
+                Ok(0)
+            } else {
+                Err("synthetic map callback owner is not admitted".into())
+            }
+        }
         fn ai_init_assault(&mut self, player: i32) -> Result<(), String> {
             self.0.lock().unwrap().assault_calls.push((player, "init"));
             Ok(())
@@ -2531,6 +2629,24 @@ mod tests {
     }
 
     impl Host for World {
+        fn begin_script_call(
+            &mut self,
+            name: &str,
+            args: &[Value],
+        ) -> Result<Option<ScriptCall>, String> {
+            let capture = {
+                let state = self.0.lock().unwrap();
+                state.map_owner && state.callbacks
+            };
+            if name == "SetPlayerState" && capture {
+                let value = self.native(name, args)?;
+                if self.0.lock().unwrap().capture_error {
+                    return Err("synthetic post-write capture failure".into());
+                }
+                return Ok(Some(ScriptCall::Return(value)));
+            }
+            Ok(None)
+        }
         fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
             match (name, args) {
                 ("GetPlayerNeutralPassive", []) => Ok(Value::Int(15)),
