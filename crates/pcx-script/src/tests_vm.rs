@@ -2712,7 +2712,7 @@ fn vm_wire_keeps_complete_values_and_never_reinitializes_globals() {
         Value::Str("é\0TRIGSTR_7^^tag^^".into())
     );
     assert_eq!(candidate.global("absent"), Value::Null);
-    assert_eq!(candidate.global("empty"), Value::Str(String::new()));
+    assert_eq!(candidate.global("empty"), Value::Str(String::new().into()));
     for value in [
         candidate.global("payload"),
         candidate.global_at("values", 37),
@@ -3344,4 +3344,106 @@ fn byte_strings_use_raw_equality_and_native_c_prefix_without_utf8_fallback() {
             .unwrap(),
         Value::Bool(false)
     );
+}
+
+#[test]
+fn raw_vm_wire_keeps_non_utf8_arrays_and_return_zipper_across_repark_and_refuses_v1() {
+    let script = format!(
+        "{SPAWN_PROBE}\
+globals
+string prefix=null
+string suffix=null
+string joined=null
+string copied=null
+endglobals
+function seed takes string first,string second returns nothing
+set prefix=first
+set suffix=second
+endfunction
+function waitString takes nothing returns string
+local string array rows
+set rows[4]=suffix
+call Sleep(1.0)
+return rows[4]
+endfunction
+function parked takes nothing returns nothing
+set joined=prefix+waitString()
+call Sleep(2.0)
+set copied=joined
+endfunction
+"
+    );
+    let program = program_of(&script);
+    let mut live = Vm::new(&program, SpawnProbe::default());
+    live.call(
+        "seed",
+        &[
+            Value::Str(vec![0xc3].into()),
+            Value::Str(vec![0xa9, 0, 0xff].into()),
+        ],
+    )
+    .unwrap();
+    let parked = program.function_id("parked").unwrap();
+    let tail = program.function_id("tail").unwrap();
+    live.run_thread(&[parked, tail]).unwrap();
+    let bytes = live
+        .checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::Idle,
+            VM_WIRE_BUDGET,
+        )
+        .unwrap();
+    assert_eq!(&bytes[..7], b"PC3VM\0\x02");
+    let mut legacy = bytes.clone();
+    legacy[6] = 1;
+    let mut candidate = Vm::new(&program, live.host().clone());
+    assert!(
+        candidate
+            .restore_checkpoint_state(
+                &legacy,
+                [7; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference
+            )
+            .unwrap_err()
+            .contains("header")
+    );
+    candidate
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+    candidate.resume_thread(1).unwrap();
+    let expected = Value::Str(vec![0xc3, 0xa9, 0, 0xff].into());
+    assert_eq!(candidate.global("joined"), expected);
+    assert_eq!(candidate.global("copied"), Value::Null);
+    assert_eq!(candidate.parked_threads().collect::<Vec<_>>(), [2]);
+    let bytes = candidate
+        .checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::Idle,
+            VM_WIRE_BUDGET,
+        )
+        .unwrap();
+    let mut loaded = Vm::new(&program, candidate.host().clone());
+    loaded
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+    loaded.resume_thread(2).unwrap();
+    assert_eq!(loaded.global("copied"), expected);
+    assert_eq!(loaded.global("prefix"), Value::Str(vec![0xc3].into()));
+    assert_eq!(
+        loaded.global("suffix"),
+        Value::Str(vec![0xa9, 0, 0xff].into())
+    );
+    assert_eq!(loaded.host().observed, [4]);
+    assert_eq!(loaded.parked_threads().count(), 0);
 }

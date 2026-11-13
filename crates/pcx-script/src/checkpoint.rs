@@ -1,5 +1,5 @@
 //! Bounded portable fields shared by the complete-world checkpoint codec.
-use crate::{HandleId, Value, value::FunctionId};
+use crate::{HandleId, ScriptString, Value, value::FunctionId};
 
 /// Allocation and work limits of the recreation's file format, not game rules.
 #[derive(Clone, Copy, Debug)]
@@ -255,9 +255,7 @@ impl<'a> Reader<'a> {
             1 => self.boolean().map(Value::Bool),
             2 => self.i32().map(Value::Int),
             3 => self.real().map(Value::Real),
-            4 => String::from_utf8(self.blob()?)
-                .map(Value::Str)
-                .map_err(|_| "checkpoint script string is not UTF-8 in value format 1".into()),
+            4 => self.blob().map(ScriptString::from).map(Value::Str),
             5 => {
                 let id = FunctionId(self.u32()?);
                 if id.index() >= functions {
@@ -289,8 +287,10 @@ mod tests {
     fn portable_values_keep_all_string_bytes_and_exact_real_payloads() {
         let values = [
             Value::Null,
-            Value::Str(String::new()),
+            Value::Str(String::new().into()),
             Value::Str("é\0TRIGSTR_7^^tag^^".into()),
+            Value::Str(vec![0xc3].into()),
+            Value::Str(vec![0xa9, 0, 0xff].into()),
             Value::Bool(true),
             Value::Int(i32::MIN),
             Value::Real(f32::from_bits(0x80000000)),
@@ -327,7 +327,6 @@ mod tests {
         for bytes in [
             vec![255],
             vec![1, 2],
-            vec![4, 1, 0, 0, 0, 255],
             vec![5, 2, 0, 0, 0],
             vec![6, 0, 0, 0, 0, 0, 0, 0, 0],
         ] {
@@ -353,6 +352,18 @@ mod tests {
                 .contains("foreign arena")
         );
         assert!(Reader::new(&[0, 0], BUDGET).unwrap().finish().is_err());
+    }
+    #[test]
+    fn raw_script_bytes_remain_distinct_from_utf8_metadata() {
+        let bytes = [4, 1, 0, 0, 0, 255];
+        let mut input = Reader::new(&bytes, BUDGET).unwrap();
+        assert_eq!(
+            input.value(0, |_| Ok(())).unwrap(),
+            Value::Str(vec![255].into())
+        );
+        input.finish().unwrap();
+        let mut metadata = Reader::new(&bytes[1..], BUDGET).unwrap();
+        assert!(metadata.text().unwrap_err().contains("metadata"));
     }
     #[test]
     fn counts_offsets_owned_expansion_and_nesting_have_independent_bounds() {

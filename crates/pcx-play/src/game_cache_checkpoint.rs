@@ -147,6 +147,8 @@ native InitGameCache takes string file returns gamecache
 native StoreInteger takes gamecache c,string mission,string key,integer value returns nothing
 native GetStoredInteger takes gamecache c,string mission,string key returns integer
 native SaveGameCache takes gamecache c returns boolean
+native StoreString takes gamecache c,string mission,string key,string value returns boolean
+native GetStoredString takes gamecache c,string mission,string key returns string
 ";
     const BUDGET: WireBudget = WireBudget {
         bytes: 1 << 20,
@@ -301,6 +303,25 @@ native SaveGameCache takes gamecache c returns boolean
             saved_disk,
             "restore rebinds the candidate backend"
         );
+    }
+    #[test]
+    fn world_cache_section_keeps_non_utf8_stored_string_bytes_through_profile_codec() {
+        let (mut live, cache) = open(Arc::new(Memory::default()), policy());
+        let value = Value::Str(vec![0xc3, 0xff, 0xa9].into());
+        let mut args = key(cache).to_vec();
+        args.push(value.clone());
+        assert_eq!(
+            live.native("StoreString", &args).unwrap(),
+            Value::Bool(true)
+        );
+        let bytes = encode(&live);
+        let (mut loaded, cache) = open(Arc::new(Memory::default()), policy());
+        decode(&mut loaded, &bytes).unwrap();
+        assert_eq!(
+            loaded.native("GetStoredString", &key(cache)).unwrap(),
+            value
+        );
+        assert_eq!(encode(&loaded), bytes);
     }
     #[test]
     fn world_cache_section_refuses_truncation_policy_and_arena_counter_mismatch_atomically() {

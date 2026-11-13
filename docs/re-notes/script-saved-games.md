@@ -515,3 +515,13 @@ storage provider without reading or replacing its external profile. A synthetic
 regression distinguishes saved disk value 37 from unsaved world value 93 and
 checks that a later native save uses the candidate provider. This is component
 reconstruction evidence, not original-client cache/full-save parity.
+
+The VM component now uses internal section version 2 for `ScriptString` byte
+payloads. It retains non-UTF-8 bytes and embedded NULs in values, arrays and
+parked expression continuations; metadata remains checked UTF-8. The provisional
+version-1 VM section is refused rather than reinterpreted. No durable whole-game
+format was published before this change. A combined byte/clock regression parks
+a string-returning call with a non-UTF-8 array value and a retained concatenation
+operand, reconstructs it, re-parks it and reconstructs it again. A cache-section
+regression also exercises the profile codec's raw stored strings. These checks
+do not establish original save-payload compatibility.

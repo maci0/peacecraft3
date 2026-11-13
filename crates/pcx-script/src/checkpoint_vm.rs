@@ -3,7 +3,7 @@ use super::*;
 use crate::HandleId;
 use crate::checkpoint::{Budget, Reader, Writer};
 
-const MAGIC: &[u8] = b"PC3VM\0\x01";
+const MAGIC: &[u8] = b"PC3VM\0\x02";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Projection {
