@@ -532,6 +532,13 @@ AI common, entry and raw optional WTS bytes. Diagnostic locations do not define
 that content identity. Initial and resumed errors use the retained source even
 after the future-context loader changes.
 
+Candidate source lookup receives each saved path, edition, version and content
+fingerprint independently of the loader used for future starts. A synthetic
+regression reconstructs fresh programs for two generations at the same path,
+resumes both old contexts and then starts a third with the future loader.
+Unavailable old content is refused. The outer source registry and complete
+cold-publication path still need to supply that lookup from pinned local inputs.
+
 Its candidate section preserves parked VM frames, captured difficulty results
 separately from future difficulty inputs, pause depth, pending sleep results,
 sleep tickets and deadlines, retirement ownership and remaining source-load

@@ -107,9 +107,8 @@ endfunction
             restored_world.as_ref().unwrap(),
             &mut input,
             budget(),
-            valid_player,
-            valid_player,
-            valid_reference,
+            |_| Ok(Arc::clone(&script)),
+            (valid_player, valid_player, valid_reference),
         )
         .unwrap();
     input.finish().unwrap();
@@ -186,9 +185,8 @@ fn ai_root_section_rejects_foreign_sources_truncation_and_lent_world_without_pub
                     world.as_ref().unwrap(),
                     &mut input,
                     budget(),
-                    valid_player,
-                    valid_player,
-                    valid_reference
+                    |_| Ok(Arc::clone(&script)),
+                    (valid_player, valid_player, valid_reference)
                 )
                 .is_err(),
             "cut {cut}"
@@ -202,16 +200,15 @@ fn ai_root_section_rejects_foreign_sources_truncation_and_lent_world_without_pub
         "synthetic:foreign.ai",
         "function main takes nothing returns nothing\ncall Sleep(0.5)\nendfunction\n",
     );
-    let mut candidate = make(foreign);
+    let mut candidate = make(Arc::clone(&foreign));
     let mut input = Reader::new(&bytes, budget()).unwrap();
     let error = candidate
         .restore_checkpoint(
             world.as_ref().unwrap(),
             &mut input,
             budget(),
-            valid_player,
-            valid_player,
-            valid_reference,
+            |_| Ok(Arc::clone(&foreign)),
+            (valid_player, valid_player, valid_reference),
         )
         .unwrap_err();
     assert!(error.contains("source differs"), "{error}");
@@ -237,6 +234,123 @@ fn ai_root_section_rejects_foreign_sources_truncation_and_lent_world_without_pub
         .unwrap_err()
         .contains("no pinned source")
     );
+}
+
+#[test]
+fn ai_root_rebinds_same_path_generations_independently_of_future_loader() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let body = |marker, increment| {
+        format!(
+            "globals\ninteger marker={marker}\ninteger runs=0\nendglobals\nfunction main takes nothing returns nothing\nset runs=runs+1\ncall SetPlayerState(Player(GetAiPlayer()),null,GetPlayerState(Player(GetAiPlayer()),null)+1)\ncall Sleep(0.25)\nset marker=marker+{increment}\ncall SetPlayerState(Player(GetAiPlayer()),null,GetPlayerState(Player(GetAiPlayer()),null)+marker)\nendfunction\n"
+        )
+    };
+    let original = program("live:generation-a.ai", &body(111, 1));
+    let replacement = program("live:generation-b.ai", &body(222, 2));
+    let mut live = Runtime::<World>::default();
+    let selected = Arc::clone(&original);
+    live.set_loader(move |_| Ok(Arc::clone(&selected)));
+    let state = Arc::new(Mutex::new(State::default()));
+    let mut world = Some(World(Arc::clone(&state)));
+    live.start(&mut world, 1, "shared.ai").unwrap();
+    let selected = Arc::clone(&replacement);
+    live.set_loader(move |_| Ok(Arc::clone(&selected)));
+    live.start(&mut world, 2, "shared.ai").unwrap();
+    let bytes = encode(&mut live, &world);
+
+    let restored_state = Arc::new(Mutex::new(state.lock().unwrap().clone()));
+    let mut restored_world = Some(World(Arc::clone(&restored_state)));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let future_reads = Arc::clone(&reads);
+    let selected = Arc::clone(&replacement);
+    let mut restored = Runtime::<World>::default();
+    restored.set_loader(move |path| {
+        assert_eq!(path, "shared.ai");
+        future_reads.fetch_add(1, Ordering::Relaxed);
+        Ok(Arc::clone(&selected))
+    });
+    let mut rebound = Vec::new();
+    let mut input = Reader::new(&bytes, budget()).unwrap();
+    restored
+        .restore_checkpoint(
+            restored_world.as_ref().unwrap(),
+            &mut input,
+            budget(),
+            |source: CheckpointSource<'_>| {
+                assert_eq!(source.requested, "shared.ai");
+                assert_eq!(source.edition, "synthetic");
+                assert_eq!(source.version, "ai-world");
+                rebound.push(source.fingerprint);
+                if source.fingerprint == original.source_fingerprint() {
+                    Ok(program("cold:generation-a.ai", &body(111, 1)))
+                } else if source.fingerprint == replacement.source_fingerprint() {
+                    Ok(program("cold:generation-b.ai", &body(222, 2)))
+                } else {
+                    Err("saved source generation is unavailable".into())
+                }
+            },
+            (valid_player, valid_player, valid_reference),
+        )
+        .unwrap();
+    input.finish().unwrap();
+    assert_eq!(
+        rebound,
+        [
+            original.source_fingerprint(),
+            replacement.source_fingerprint()
+        ]
+    );
+    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    assert_eq!(restored.remaining_loads, live.remaining_loads);
+    assert_eq!(*restored_state.lock().unwrap(), *state.lock().unwrap());
+    for (player, source) in [(1, &original), (2, &replacement)] {
+        let saved = restored
+            .active
+            .get_mut(&player)
+            .unwrap()
+            .host()
+            .source
+            .as_ref()
+            .unwrap();
+        assert!(!Arc::ptr_eq(&saved.scripts, source));
+        assert_eq!(
+            saved.scripts.source_fingerprint(),
+            source.source_fingerprint()
+        );
+        assert_eq!(restored.global(player, "runs"), Some(Value::Int(1)));
+    }
+    state.lock().unwrap().clock = 0.25;
+    restored_state.lock().unwrap().clock = 0.25;
+    while let Some((at, player, ticket)) = live.next_wake(0.25) {
+        assert_eq!(restored.next_wake(0.25), Some((at, player, ticket)));
+        live.resume(&mut world, player, ticket).unwrap();
+        restored
+            .resume(&mut restored_world, player, ticket)
+            .unwrap();
+        assert_eq!(*restored_state.lock().unwrap(), *state.lock().unwrap());
+    }
+    assert_eq!(restored.global(1, "marker"), Some(Value::Int(112)));
+    assert_eq!(restored.global(2, "marker"), Some(Value::Int(224)));
+    live.start(&mut world, 3, "shared.ai").unwrap();
+    restored.start(&mut restored_world, 3, "shared.ai").unwrap();
+    assert_eq!(restored.global(3, "marker"), Some(Value::Int(222)));
+    assert_eq!(reads.load(Ordering::Relaxed), 1);
+    assert_eq!(restored.remaining_loads, live.remaining_loads);
+    assert_eq!(*restored_state.lock().unwrap(), *state.lock().unwrap());
+
+    let mut missing = Runtime::<World>::default();
+    missing.set_loader(|_| Err("future loader must not supply an old context".into()));
+    let mut input = Reader::new(&bytes, budget()).unwrap();
+    let error = missing
+        .restore_checkpoint(
+            restored_world.as_ref().unwrap(),
+            &mut input,
+            budget(),
+            |_| Err("saved source generation is unavailable".into()),
+            (valid_player, valid_player, valid_reference),
+        )
+        .unwrap_err();
+    assert_eq!(error, "saved source generation is unavailable");
+    assert!(missing.active.is_empty());
 }
 
 #[test]
@@ -276,9 +390,8 @@ fn ai_root_section_retains_failed_retirement_and_host_errors_without_replaying_m
             restored_world.as_ref().unwrap(),
             &mut input,
             budget(),
-            valid_player,
-            valid_player,
-            valid_reference,
+            |_| Ok(Arc::clone(&script)),
+            (valid_player, valid_player, valid_reference),
         )
         .unwrap();
     input.finish().unwrap();

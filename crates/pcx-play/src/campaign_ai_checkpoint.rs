@@ -1,6 +1,7 @@
 //! Stable AI section; source readers and the canonical world are rebound by the candidate owner.
 use super::native_sleep::AiSleep;
 use super::{AiHost, AiSource, AiWorld, MAX_PLAYERS, MAX_SLEEPERS, Runtime};
+use crate::scripts::MapScripts;
 use pcx_assets::AssetPath;
 use pcx_script::checkpoint::{Budget, Reader, Writer};
 use pcx_script::{
@@ -12,6 +13,15 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+
+/// One saved context's source identity, independent of future AI source loads.
+#[derive(Clone, Copy, Debug)]
+pub struct CheckpointSource<'a> {
+    pub requested: &'a str,
+    pub edition: &'a str,
+    pub version: &'a str,
+    pub fingerprint: [u8; 32],
+}
 
 fn result_out(out: &mut Writer, result: &Result<i32, String>) -> Result<(), String> {
     out.boolean(result.is_ok())?;
@@ -166,19 +176,19 @@ impl<W: AiWorld> Runtime<W> {
     }
 
     /// Only an unpublished, fresh runtime may receive this section. No AI entrypoint runs.
-    pub(crate) fn restore_checkpoint<F, P, C>(
+    pub(crate) fn restore_checkpoint<F, P, C, S>(
         &mut self,
         world: &W,
         input: &mut Reader<'_>,
         vm_budget: Budget,
-        mut player_valid: P,
-        mut context_valid: C,
-        mut reference: F,
+        mut source: S,
+        (mut player_valid, mut context_valid, mut reference): (P, C, F),
     ) -> Result<(), String>
     where
         F: for<'a> FnMut(CheckpointReference<'a>) -> Result<(), String>,
         P: FnMut(i32) -> Result<(), String>,
         C: FnMut(i32) -> Result<(), String>,
+        S: for<'a> FnMut(CheckpointSource<'a>) -> Result<Arc<MapScripts>, String>,
     {
         if !self.active.is_empty() || !self.pending_retirement.is_empty() {
             return Err("checkpoint AI restoration requires a fresh candidate runtime".into());
@@ -261,12 +271,12 @@ impl<W: AiWorld> Runtime<W> {
                 .raw(32)?
                 .try_into()
                 .map_err(|_| "checkpoint AI source fingerprint")?;
-            let scripts = self
-                .loader
-                .as_mut()
-                .ok_or("checkpoint AI source reader is missing")?(
-                requested.as_str()
-            )?;
+            let scripts = source(CheckpointSource {
+                requested: requested.as_str(),
+                edition: &edition,
+                version: &version,
+                fingerprint,
+            })?;
             super::admit_ai_natives(&scripts)?;
             if scripts.source_fingerprint() != fingerprint
                 || scripts.identity.edition != edition

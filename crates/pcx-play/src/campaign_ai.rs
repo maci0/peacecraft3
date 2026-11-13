@@ -888,6 +888,7 @@ impl AiWorld for NeutralStack {
 
 #[path = "campaign_ai_checkpoint.rs"]
 mod checkpoint;
+pub use checkpoint::CheckpointSource;
 #[path = "campaign_ai_sleep.rs"]
 mod native_sleep;
 use native_sleep::AiSleep;
