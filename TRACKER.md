@@ -7424,3 +7424,12 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   `/tmp/pc3-leaderboard-parasite-upgrade-accepted-validation/`.
   Source-wide native pacing, byte-valued strings, full save/load, enabled upgrade
   pending forms/damage refunds and complete automatic casts remain unfinished.
+
+
+- 2026-11-13: Current post-integration unchanged selected-install replays retain
+  the 300-second idle passes for Human01 and Undead02. HumanX03Secret proceeds
+  past its leaderboard failure to Aslo acquisition at about game time 6.02.
+  HumanX03Interlude and UndeadX04 proceed past ANpa creation to Ahea and Anh2
+  acquisition at the first due callback. These are measured remaining blockers,
+  not passing mission horizons. Five isolated replay receipts with the current
+  binary identity: `/tmp/pc3-leaderboard-parasite-upgrade-accepted-horizons/`.
