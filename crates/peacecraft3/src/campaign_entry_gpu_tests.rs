@@ -1826,7 +1826,7 @@ fn structured_observation_bridge_before_after_one_real_order() {
     let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
     assert!(!output.exists(), "capture must be new");
     std::fs::create_dir_all(&output).unwrap();
-    let mut app = crate::native_campaign::tests::started_legacy_app();
+    let mut app = crate::native_campaign::tests::started_app();
     for _ in 0..300 {
         let controlled = app
             .world_mut()
@@ -2042,7 +2042,7 @@ fn step_driver_two_steps_with_one_real_order() {
     let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
     assert!(!output.exists(), "capture must be new");
     std::fs::create_dir_all(&output).unwrap();
-    let mut app = crate::native_campaign::tests::started_legacy_app();
+    let mut app = crate::native_campaign::tests::started_app();
     for _ in 0..300 {
         let controlled = app
             .world_mut()
@@ -2283,7 +2283,7 @@ fn canonical_persistent_session_order_step_cancel_stop() {
     let output = std::path::PathBuf::from(std::env::var("PCX_CAMPAIGN_CAPTURE_DIR").unwrap());
     assert!(!output.exists(), "capture must be new");
     std::fs::create_dir_all(&output).unwrap();
-    let mut app = crate::native_campaign::tests::started_legacy_app();
+    let mut app = crate::native_campaign::tests::started_app();
     for _ in 0..300 {
         let controlled = app
             .world_mut()

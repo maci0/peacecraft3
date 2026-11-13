@@ -1931,19 +1931,15 @@ pub(crate) mod tests {
         let mut session = app
             .world_mut()
             .resource_mut::<MapScriptSession<MapStartupHost>>();
-        let mut runtime = peacecraft3::campaign_runtime::CampaignRuntime::new(
-            std::time::Duration::from_millis(250),
-            1,
-            4096,
-        );
-        assert_eq!(runtime.advance_ticks(&mut session, 0).unwrap(), 0);
-        assert!(session.host().unwrap().objects().native_counter_platform());
+        let start = session.host().unwrap().objects().timer_game_time().unwrap();
         let mut cinematic = false;
         let mut controlled = false;
         let mut exit = None;
         // Diagnostic input schedule and work bound, not an authored cinematic duration.
-        for _ in 1..=120 {
-            assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+        for tick in 1..=120 {
+            session
+                .advance_timers(start + f64::from(tick) * 0.25, 4096)
+                .unwrap();
             session.advance_queued_events(4096).unwrap();
             let state = session.host().unwrap().objects().presentation().unwrap();
             cinematic |= state.control_enabled == Some(false);
@@ -1988,14 +1984,10 @@ pub(crate) mod tests {
                 .filter(|(_, item)| item.visible() == Some(true))
                 .count()
         );
-        // Diagnostic game-time horizon and finite counter-input bound, independent of authored speed.
-        let target = control_time + f64::from(gameplay_ticks) * 0.25;
-        for _ in 0..gameplay_ticks.checked_mul(16).unwrap() {
-            if session.host().unwrap().objects().timer_game_time().unwrap() >= target {
-                break;
-            }
-            let step = runtime.advance_ticks(&mut session, 1);
-            if let Err(ref error) = step {
+        // Diagnostic horizon: include delayed gameplay setup after control is restored.
+        for tick in 1..=gameplay_ticks {
+            if let Err(error) = session.advance_timers(control_time + f64::from(tick) * 0.25, 4096)
+            {
                 let dead = session
                     .host()
                     .unwrap()
@@ -2109,14 +2101,9 @@ pub(crate) mod tests {
                 }
                 panic!("post-control campaign advance: {error:?}");
             }
-            assert_eq!(step.unwrap(), 1, "the counter interval must commit");
             session.advance_queued_events(4096).unwrap();
         }
         let objects = session.host().unwrap().objects();
-        assert!(
-            objects.timer_game_time().unwrap() >= target,
-            "the admitted game clock must reach the diagnostic horizon"
-        );
         let corpses = objects
             .executed_units()
             .filter_map(|(_, unit)| {
@@ -2135,9 +2122,8 @@ pub(crate) mod tests {
             .take(8)
             .collect::<Vec<_>>();
         println!(
-            "campaign post-control horizon={}s counter_ticks={}; canonical corpse snapshot (at most8): {corpses:?}",
-            f64::from(gameplay_ticks) * 0.25,
-            runtime.tick(),
+            "campaign post-control horizon={}s; canonical corpse snapshot (at most8): {corpses:?}",
+            f64::from(gameplay_ticks) * 0.25
         );
     }
 
@@ -2282,7 +2268,7 @@ pub(crate) mod tests {
             .init_resource::<Assets<Font>>()
             .insert_resource(peacecraft3::map_ground::NoOcclusionPass);
         peacecraft3::map_requests::install(&mut app);
-        peacecraft3::campaign_startup::install_native_counter(&mut app);
+        peacecraft3::campaign_startup::install(&mut app);
         crate::campaign_prepare::install(&mut app);
         crate::button_actions::install(&mut app);
         super::install(&mut app);
@@ -2393,7 +2379,7 @@ pub(crate) mod tests {
             // The normal map-ground plugin declares this renderer capability too.
             .insert_resource(peacecraft3::map_ground::NoOcclusionPass);
         peacecraft3::map_requests::install(&mut app);
-        peacecraft3::campaign_startup::install_native_counter(&mut app);
+        peacecraft3::campaign_startup::install(&mut app);
         crate::campaign_prepare::install(&mut app);
         crate::button_actions::install(&mut app);
         install(&mut app);
@@ -2438,10 +2424,7 @@ pub(crate) mod tests {
         map: &str,
         expansion: bool,
     ) -> (App, Arc<CampaignRecipe>) {
-        enqueue_selected_chapter(chapter_app(install_dir, expansion), map)
-    }
-
-    fn enqueue_selected_chapter(mut app: App, map: &str) -> (App, Arc<CampaignRecipe>) {
+        let mut app = chapter_app(install_dir, expansion);
         let (campaign, mission, indexed_recipe) = locate_chapter(&app, map);
         app.world_mut()
             .run_system_once(
@@ -2476,27 +2459,15 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn started_app() -> App {
-        started_app_with_clock(true)
-    }
-
-    /// Protocol-1 observation fixtures retain their explicit f64 driver.
-    pub(crate) fn started_legacy_app() -> App {
-        started_app_with_clock(false)
-    }
-
-    fn started_app_with_clock(counter: bool) -> App {
         let (install_dir, map, expansion) = selected_chapter_env();
         let mut app = chapter_app(install_dir, expansion);
-        if !counter {
-            app.world_mut()
-                .remove_resource::<peacecraft3::campaign_startup::NativeCounterStartup>();
-        }
         let (campaign, mission, indexed_recipe) = locate_chapter(&app, &map);
         // A fresh profile opens only the default_open campaign, and launch_mission skips the
         // buttons of the rest. Test-only: those chapters are enqueued as the locked startup
         // probe does, so every chapter can be driven past its launch.
         if !app.world().resource::<Chapters>().campaigns[campaign].default_open {
-            return enqueue_selected_chapter(app, &map).0;
+            drop(app);
+            return enqueued_chapter_app(selected_chapter_env().0, &map, expansion).0;
         }
         // Activate is the widget's keyboard/pointer boundary; physical picking is
         // a separate gate. The mission button is the only launch trigger; merely
