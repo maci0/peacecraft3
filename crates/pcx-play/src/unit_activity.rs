@@ -7,6 +7,9 @@ use crate::{
     scripts::AssetIdentity,
 };
 
+#[path = "unit_heading.rs"]
+pub mod heading;
+
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub origin: AssetIdentity,
@@ -28,6 +31,7 @@ pub struct Rules {
     pub(crate) move_speed: Option<pcx_objects::editor::misc::MoveSpeedLimits>,
     /// `Misc/AgiMoveBonus` (a missing key reads 0), read with the move speed limits.
     pub(crate) agi_move_bonus: Option<f32>,
+    pub(crate) heading: Option<heading::Rules>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,7 +102,43 @@ impl Rules {
             follow: None,
             move_speed: None,
             agi_move_bonus: None,
+            heading: None,
         })
+    }
+
+    pub fn with_heading(
+        mut self,
+        image: &[u8],
+        numeric: &crate::script_numeric::NumericPolicy,
+        budget: RuleInputBudget,
+    ) -> Result<Self, String> {
+        if image.len() > budget.image_bytes
+            || sha256(image) != self.binding.image_sha256
+            || numeric.image_sha256() != &self.binding.image_sha256
+        {
+            return Err("unit heading client identity or input budget".into());
+        }
+        let pe = Pe::parse(image, budget).map_err(|e| e.to_string())?;
+        let mut remaining = budget.profile_bytes;
+        let mut read = |va, n, code| {
+            remaining = remaining
+                .checked_sub(n)
+                .ok_or("unit heading source read budget")?;
+            pe.read_from(va, code)
+                .map_err(|e| e.to_string())?
+                .get(..n)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| "unit heading truncated source window".into())
+        };
+        let mut heading = heading::Rules::read(&mut read, numeric)?;
+        heading.visual = Some(heading::visual::Rules::read(&mut read, numeric)?);
+        heading.profile = Some(heading::profile::Rules::read(&mut read, numeric)?);
+        self.heading = Some(heading);
+        Ok(self)
+    }
+
+    pub fn heading_rules(&self) -> Option<&heading::Rules> {
+        self.heading.as_ref()
     }
 
     pub fn with_follow_profiles(

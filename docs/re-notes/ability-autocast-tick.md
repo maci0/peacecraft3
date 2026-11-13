@@ -38,7 +38,7 @@ through `0x68ea00`, callback `0xb9ce00`, and virtual `+0x454`. Enumeration
 order is not yet established, including equal-distance ordering.
 
 The ordinary `+0x454` implementation `0xb9c980` applies `0x67fb80`, rejects
-nonzero `+0x3f4`, performs alliance/visibility checks with `0x696a90` and
+nonzero `+0x3f4`, performs alliance checks with `0x696a90` and
 `0x69df20`, then requires `+0x458`. It obtains a candidate metric through
 `0x7ff1e0` and compares against the incumbent through `+0x460`.
 The metric's coordinate transformation and enumeration range remain unbound;
@@ -71,8 +71,9 @@ are separate from the ordinary spell's authored `targs`.
 
 The former nonzero-DataC description was reversed. The selected instruction
 branch and decompilation (`ev_e9dcd1079529fac94010a7c184f236580704a43cbe956974964894b80055ca9b`)
-accept a nonzero DataC after the preceding gates. The relation test's meaning
-must be established independently; it is not identified here as hostility.
+accept a nonzero DataC after the preceding gates. The relation test reads the
+caster's `ALLIANCE_HELP_RESPONSE` mask for the resolved attack victim's owner;
+it is distinct from passive alliance and hostility.
 See [the bounded Slow observations](slow-autocast-qualification.md).
 
 `0x67eca0` delegates unit `+0x3f8` to `0xb66f10`. That function checks an
@@ -81,7 +82,8 @@ and exceptions involving `BUsl` and another looked-up ability. A missing
 component returns false. Its complete movement-eligibility mapping is open.
 `0x67ea50` delegates unit `+0x3f4` to `0xb1e150`: it requires a nonpositive
 `+0x3c` counter and a nonzero `flags & 0x180000`. Mapping those attack flags
-to canonical host states remains open. Visibility `0x69df20` is also unbound.
+to canonical host states remains open. The `0x69df20` relationship is shared
+spells, not fog visibility; its full predicate mapping remains open.
 
 ## Recreation status
 
@@ -134,7 +136,7 @@ These are concrete recreation frontiers, not original-client observations. Undea
 
 The reviewed image's Heal and Neutral Heal classes share candidate filter `0xbed1a0` and
 comparator `0xbed270`. The filter calls the common `0xb9ca70`, applies a configuration-dependent
-target-flag check, explicitly calls visibility predicate `0x69df20`, tests a player-property
+target-flag check, explicitly calls shared-spells relationship `0x69df20`, tests a player-property
 query `0x697030`, and excludes a target carrying `Bhea` from a different source caster. The
 ordinary target check `0xbed0c0` compares maximum minus current life against global `0x112d810`
 and applies its own configuration and existing-heal-source checks.
@@ -153,3 +155,27 @@ and creates or refreshes `Bhea` with source-caster identity. A one-shot call to 
 helper would omit this retained effect/timing state. Actual acquisition, cost/effect execution,
 channels and cancellation therefore remain open; no guessed target selection or silent no-op
 was added by the Neutral Heal class correction.
+
+## Alliance field-role correction (2026-11-13)
+
+Selected native-code evidence distinguishes two relationships previously left
+ambiguous here. `0x69bd70 -> 0x47d060` reads player mask `+0x58`. The public
+alliance getter/setter agree on a `+0x38` base and a 16-byte stride; resolving
+the resulting index against the selected `common.j` identifies
+`ALLIANCE_HELP_RESPONSE`. Public `IsUnitAlly` reads `+0x38` instead.
+
+`0x69df20 -> 0x47fb00 -> 0x47faa0` reads `+0x78`, which the same derivation
+identifies as `ALLIANCE_SHARED_SPELLS`. It must not be implemented using a
+fog-visibility query. The earlier `0x67fb80` gate remains separate. These
+field roles do not establish the full common target predicate, default masks
+or automatic Heal acquisition.
+
+The local verification receipt is
+`/tmp/pc3-sol09-autocast-relations-receipt.json`: all 31 bounded image windows
+match their selected instruction relationships, two nonstock field layouts
+resolve correctly and a misaligned layout refuses. Inputs are image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`,
+version 1.29.2.9231, and local `common.j` SHA-256
+`3c21e998bf80d1e04718bd3f2ee7ef2bf1b83359e5b303a56cf59cd61a2afdcd`.
+This is native-code and shipped-script evidence; no new casting behavior is
+implemented by this correction.

@@ -177,8 +177,9 @@ impl ObjectHost {
                 let Some(damage_point) = weapon.damage_point else {
                     return Err(self.ground_fail(ABSENT_DAMAGE_POINT));
                 };
+                let heading = self.prepare_native_unit_look_at(unit, position, point)?;
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                    record.face = facing;
+                    Self::commit_native_unit_facing(record, facing, heading);
                     let combat = record.combat.as_mut().expect("combat");
                     combat.ground_swing = Some(now + f64::from(damage_point / speed));
                     combat.ready_at = now + f64::from(weapon.cooldown / speed);

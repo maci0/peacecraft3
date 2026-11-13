@@ -97,7 +97,7 @@ pub(super) enum FormChange {
 
 pub(super) struct PreparedUnit {
     pub(super) record: ExecutedUnit,
-    autocast: Vec<([u8; 4], f32)>,
+    autocast: Vec<super::PreparedDefaultAutocast>,
     placement: Option<crate::unit_placement::Prepared>,
     guard: Option<super::unit_guards::UnitGuard>,
     inventory: Option<super::item_creation::CachedInventory>,
@@ -2734,7 +2734,7 @@ impl ObjectHost {
             self.restore_cached_abilities(abilities, saved)?;
             record.permanent_strength = saved.permanent_strength;
         }
-        record.activity = self.prepare_unit_activity(&record.definition)?;
+        record.activity = self.prepare_unit_activity(&record.definition, record.face)?;
         if let Some(saved) = saved
             && let Some(point) = saved.rally
         {
@@ -2924,12 +2924,8 @@ impl ObjectHost {
             },
             NATIVE,
         )?;
-        for (alias, delay) in autocast {
-            self.autocast_ticks.push((
-                id,
-                alias,
-                birth.game_time.expect("autocast clock") + f64::from(delay),
-            ));
+        for (alias, at, native) in autocast {
+            self.autocast_ticks.push((id, alias, at, native));
         }
         self.publish_unit_guard(id, guard);
         if let Some(prepared) = placement {
@@ -3510,7 +3506,8 @@ impl ObjectHost {
                 ));
             }
         }
-        let activity = self.prepare_unit_activity(&definition)?;
+        let activity = self.prepare_unit_activity(&definition, source.face)?;
+        self.validate_form_activity(unit, activity.as_ref())?;
         let combat = self.prepare_unit_combat(&definition)?;
         let rules = self
             .admitted_units()?

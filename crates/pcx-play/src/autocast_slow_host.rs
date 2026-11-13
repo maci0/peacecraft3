@@ -82,6 +82,7 @@ impl ObjectHost {
         if rules.class != SLOW_CLASS {
             return Err(self.curse_error("Slow acquisition class differs"));
         }
+        let victim_alliance = rules.attack_victim_alliance;
         let rank = self
             .executed_unit(caster)?
             .abilities
@@ -112,11 +113,45 @@ impl ObjectHost {
                 .combat
                 .as_ref()
                 .ok_or_else(|| self.curse_error("Slow candidate attack state is not admitted"))?;
-            if combat.target.is_some() {
+            if let Some(victim) = combat.target
+                && self.slow_attack_victim_response(caster, victim, victim_alliance, work)?
+            {
                 return Err(self.curse_error("Slow has a potential attacking candidate; positive selection and turning are unqualified"));
             }
         }
         Ok(Some(crate::autocast_rules::Outcome::Retry))
+    }
+
+    fn slow_attack_victim_response(
+        &self,
+        caster: HandleId,
+        victim: HandleId,
+        kind: i32,
+        work: &mut usize,
+    ) -> Result<bool, Error> {
+        let caster = self.player_settings(self.executed_unit(caster)?.owner)?;
+        let victim = self.player_settings(self.executed_unit(victim)?.owner)?;
+        let mut explicit = None;
+        for (other, setting, value) in &caster.alliances {
+            *work = work
+                .checked_sub(1)
+                .ok_or_else(|| self.curse_error("Slow acquisition work budget exhausted"))?;
+            if *other == victim.identity
+                && self.inner.symbolic_value(*setting, "alliancetype")? == kind
+            {
+                if explicit.is_some_and(|old| old != *value) {
+                    return Err(self.curse_error("Slow victim Help Response assignments conflict"));
+                }
+                explicit = Some(*value);
+            }
+        }
+        if let Some(value) = explicit {
+            return Ok(value);
+        }
+        if caster.identity == victim.identity {
+            return Ok(true);
+        }
+        Err(self.curse_error("Slow victim Help Response initial state is unqualified"))
     }
 
     fn slow_mana_minimum(&self) -> Result<f32, Error> {
@@ -267,7 +302,7 @@ impl ObjectHost {
             }
         }
         self.autocast_ticks
-            .retain(|(unit, ability, _)| *unit != caster || *ability != alias);
+            .retain(|(unit, ability, _, _)| *unit != caster || *ability != alias);
     }
 
     pub(super) fn step_slow_cast(&mut self, caster: HandleId, now: f64) -> Result<(), Error> {

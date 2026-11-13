@@ -50,7 +50,9 @@ fn cells(headers: &[&str], values: &[(&str, &str)]) -> Vec<String> {
 
 #[derive(Clone)]
 struct Config {
+    map: &'static str,
     script: &'static str,
+    heading: bool,
     mana_minimum: Option<f32>,
     /// `abilList` of every fixture unit.
     abilities: &'static str,
@@ -71,7 +73,9 @@ struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            map: HOLY_MAP,
             script: "",
+            heading: false,
             mana_minimum: Some(0.),
             abilities: "Aslo",
             slow: Vec::new(),
@@ -316,9 +320,54 @@ impl ObjectCatalog for Sheep {
 
 fn host_with(config: &Config) -> ObjectHost {
     let (registry, activity) = super::activity::rules_with_darkconversion();
-    let activity = activity
+    let mut activity = activity
         .with_move_speed_profiles(&[("synthetic game misc", MISC.as_bytes())], 4096)
         .unwrap();
+    let heading_numeric = config.heading.then(|| {
+        let (image, origin, numeric, budget) =
+            crate::unit_activity::heading::tests::selected_numeric_image();
+        let orders = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
+        let admitted = crate::campaign_client::unit_activity(&image, origin, &orders)
+            .unwrap()
+            .with_heading(&image, &numeric, budget)
+            .unwrap();
+        let mut heading = admitted.heading.unwrap();
+        // Synthetic request cadence and readiness window exercise the called route without fitting native phase.
+        heading.period = 0.125;
+        heading.window = 0.1875;
+        activity.heading = Some(heading);
+        numeric.with_native_game_clock_fixture(crate::native_game_clock::Rules {
+            simple: crate::autocast_rules::clock::Rules {
+                origin: 0.,
+                cycle: 2.,
+                minimum: 0.00390625,
+                epsilon: 0.0078125,
+            },
+            numerator: 1,
+            denominator: 32,
+            step: 0.03125_f32.to_bits(),
+            wrap_tolerance: 0.00001_f32.to_bits(),
+            frame: crate::native_game_clock::frame::Rules {
+                unsigned_correction: [0f64.to_bits(), 4294967296f64.to_bits()],
+                scale: 0.125f32.to_bits(),
+                chunk: 1f32.to_bits(),
+            },
+            sleep: crate::native_game_clock::sleep::Rules {
+                script: crate::native_game_clock::Domain::Real,
+                ai: crate::native_game_clock::Domain::Game,
+            },
+            turn: crate::native_game_clock::turn::Rules {
+                quantum_ms: 25,
+                credit_cap: 4000,
+                speed_steps: Arc::from([1, 2, 3]),
+                scale: 1f32.to_bits(),
+                modifier: 1,
+                elapsed_numerator: 1,
+                elapsed_denominator: 1,
+                initial_carry: 0,
+            },
+        })
+    });
     let (mut hero_rules, combat_rules) = hero_rules();
     hero_rules.autocast = Ok(Arc::new(crate::autocast_rules::Rules {
         origin: hero_rules.binding.origin.clone(),
@@ -332,9 +381,33 @@ fn host_with(config: &Config) -> ObjectHost {
             class: *b"Aslo",
             data_column: "DataC".into(),
             empty_data: 0.,
+            attack_victim_alliance: 47,
         }),
     }));
     let mut fields = hero_fields("STR");
+    if let Some(profile) = activity.heading.as_ref().and_then(|h| h.profile.as_ref()) {
+        fields.push(column(
+            b"Shtn",
+            SlkId::UnitData,
+            &profile.turn_column,
+            FieldKind::Real,
+            "0.5",
+        ));
+        fields.push(column(
+            b"Shwn",
+            SlkId::UnitData,
+            &profile.window_column,
+            FieldKind::Real,
+            "53",
+        ));
+        fields.push(column(
+            b"Shsi",
+            SlkId::UnitData,
+            &profile.selector_column,
+            FieldKind::Int,
+            "5",
+        ));
+    }
     fields.push(column(
         b"ubdg",
         SlkId::UnitBalance,
@@ -454,7 +527,7 @@ fn host_with(config: &Config) -> ObjectHost {
         edition: "fixture".into(),
         version: "fixture".into(),
     };
-    let mut h = position_host_admitting(1000, 16, HOLY_MAP, &extra, &fields, |h| h)
+    let mut h = position_host_admitting(1000, 16, config.map, &extra, &fields, |h| h)
         .with_player_abilities(16)
         .unwrap()
         .with_locations()
@@ -476,6 +549,10 @@ fn host_with(config: &Config) -> ObjectHost {
         .with_hero_skills(tables(config), origin, overlay, hero_rules, hero_budget)
         .unwrap();
     h.admit_unit_activity(activity, 65536).unwrap();
+    if let Some(numeric) = heading_numeric {
+        h = h.with_script_numeric(numeric);
+        h.admit_native_game_clock().unwrap();
+    }
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_unit_vitals(HeroVitals {
         life_per_strength: 25.0,
@@ -529,6 +606,546 @@ fn open_with(config: Config) -> (Vm, [HandleId; 4]) {
 
 fn open() -> (Vm, [HandleId; 4]) {
     open_with(Config::default())
+}
+
+const HEADING_CALLBACKS: &str = r#"
+native GetPlayerNeutralPassive takes nothing returns integer
+native GetPlayerNeutralAggressive takes nothing returns integer
+native GetBJMaxPlayers takes nothing returns integer
+native GetBJPlayerNeutralVictim takes nothing returns integer
+native GetBJPlayerNeutralExtra takes nothing returns integer
+native SetUnitPosition takes unit u, real x, real y returns nothing
+constant native GetUnitFacing takes unit u returns real
+native PauseTimer takes timer t returns nothing
+native ResumeTimer takes timer t returns nothing
+native StartCampaignAI takes player p, string path returns nothing
+globals
+integer HeadingEvents=0
+real HeadingChannelFace=-1.0
+real HeadingEffectMana=-1.0
+integer HeadingEffectBuff=-1
+boolean HeadingFail=false
+timer HeadingPaused=null
+timer HeadingOneShot=null
+integer HeadingPausedCalls=0
+integer HeadingOneShotCalls=0
+integer HeadingTimedCalls=0
+endglobals
+function HeadingArbitrationSetup takes nothing returns nothing
+set HeadingPaused=CreateTimer()
+call TimerStart(HeadingPaused,4.0,false,null)
+set HeadingOneShot=CreateTimer()
+endfunction
+function HeadingObserve takes nothing returns nothing
+set HeadingChannelFace=TimerGetElapsed(HeadingPaused)
+set HeadingFail=GetExpiredTimer()==HeadingOneShot
+endfunction
+function HeadingStartAi takes nothing returns nothing
+call StartCampaignAI(Player(0),"heading.ai")
+endfunction
+function HeadingPausedFire takes nothing returns nothing
+set HeadingPausedCalls=HeadingPausedCalls+1
+endfunction
+function HeadingOneShotFire takes nothing returns nothing
+set HeadingOneShotCalls=HeadingOneShotCalls+1
+endfunction
+function HeadingTimedFire takes nothing returns nothing
+set HeadingTimedCalls=HeadingTimedCalls+1
+endfunction
+function HeadingTimersStart takes nothing returns nothing
+local trigger t=CreateTrigger()
+set HeadingPaused=CreateTimer()
+call TimerStart(HeadingPaused,0.5,false,function HeadingPausedFire)
+call PauseTimer(HeadingPaused)
+set HeadingOneShot=CreateTimer()
+call TimerStart(HeadingOneShot,0.1875,false,function HeadingOneShotFire)
+call TriggerRegisterTimerEvent(t,0.25,false)
+call TriggerAddAction(t,function HeadingTimedFire)
+endfunction
+function HeadingTimersResume takes nothing returns nothing
+call ResumeTimer(HeadingPaused)
+endfunction
+function HeadingKillTarget takes nothing returns nothing
+call KillUnit(E)
+endfunction
+function HeadingChannel takes nothing returns nothing
+set HeadingEvents=HeadingEvents*10+1
+set HeadingChannelFace=GetUnitFacing(H)
+if HeadingFail then
+call HeadingUnsupported()
+endif
+endfunction
+function HeadingFaultOn takes nothing returns nothing
+set HeadingFail=true
+endfunction
+function HeadingCast takes nothing returns nothing
+set HeadingEvents=HeadingEvents*10+2
+endfunction
+function HeadingEffect takes nothing returns nothing
+set HeadingEvents=HeadingEvents*10+3
+set HeadingEffectMana=GetUnitState(H,UNIT_STATE_MANA)
+set HeadingEffectBuff=GetUnitAbilityLevel(E,'Bslo')
+endfunction
+function HeadingFinish takes nothing returns nothing
+set HeadingEvents=HeadingEvents*10+4
+endfunction
+function HeadingEnd takes nothing returns nothing
+set HeadingEvents=HeadingEvents*10+5
+endfunction
+function HeadingWatch takes nothing returns nothing
+local trigger t=CreateTrigger()
+call SetUnitPosition(E,16.0,112.0)
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_CHANNEL)
+call TriggerAddAction(t,function HeadingChannel)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_CAST)
+call TriggerAddAction(t,function HeadingCast)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_EFFECT)
+call TriggerAddAction(t,function HeadingEffect)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_FINISH)
+call TriggerAddAction(t,function HeadingFinish)
+set t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,H,EVENT_UNIT_SPELL_ENDCAST)
+call TriggerAddAction(t,function HeadingEnd)
+endfunction
+function HeadingIssue takes nothing returns boolean
+return IssueTargetOrder(H,"alpha",E)
+endfunction
+function HeadingStop takes nothing returns boolean
+return IssueImmediateOrder(H,"beta")
+endfunction
+"#;
+
+fn heading_session() -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
+    heading_session_with(|host| host)
+}
+
+fn heading_session_with(
+    prepare: impl FnOnce(
+        crate::map_startup_host::MapStartupHost,
+    ) -> crate::map_startup_host::MapStartupHost,
+) -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
+    use crate::{
+        map_script_session::MapScriptSession,
+        map_startup_host::MapStartupHost,
+        neutral_player::{SelectedMapNeutralHost, tests as neutral},
+    };
+    let mut host = host_with(&Config {
+        heading: true,
+        script: HEADING_CALLBACKS,
+        ..Config::default()
+    });
+    host.admit_unit_curses().unwrap();
+    let context = Arc::clone(host.player_context().unwrap());
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::slots_rule(301, -3, 9), host)
+            .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::extra_rule(301, -3, 9), world)
+            .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::victim_rule(301, -3, 9), world)
+            .unwrap();
+    let world = SelectedMapNeutralHost::try_new(
+        context.clone(),
+        neutral::bj_max_players_rule(301, -3, 9),
+        world,
+    )
+    .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::aggressive_rules(301), world)
+            .unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), neutral::rules(), world).unwrap();
+    let mut session = MapScriptSession::default();
+    let entrypoints = ["setup", "prime", "HeadingWatch"]
+        .map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            context,
+            |_| {
+                Ok::<_, std::convert::Infallible>(prepare(MapStartupHost::timer_session_fixture(
+                    world,
+                )))
+            },
+            &entrypoints,
+        )
+        .unwrap();
+    crate::campaign_host::advance_paced_tick(&mut session, std::time::Duration::ZERO, 0., 100)
+        .unwrap();
+    let Value::Handle(caster) = session.global("H").unwrap() else {
+        panic!("caster")
+    };
+    let Value::Handle(target) = session.global("E").unwrap() else {
+        panic!("target")
+    };
+    (session, caster, target)
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic unit properties and queue cadence"]
+fn published_native_slow_turn_resumes_order_before_visual_phase_and_settles_canonical_effect() {
+    let (mut session, caster, target) = heading_session();
+    let issue = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("HeadingIssue")
+        .unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(375),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    let before = session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .native("GetUnitFacing", &[Value::Handle(caster)])
+        .unwrap();
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(125),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(12)));
+    assert_eq!(session.global("HeadingChannelFace"), Some(before.clone()));
+    let Value::Real(after) = session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .native("GetUnitFacing", &[Value::Handle(caster)])
+        .unwrap()
+    else {
+        panic!("facing")
+    };
+    assert!(
+        after > before.as_real().unwrap(),
+        "visual phase must run after CHANNEL/CAST callbacks"
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(250),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(123)));
+    assert_eq!(session.global("HeadingEffectMana"), Some(Value::Real(200.)));
+    assert_eq!(session.global("HeadingEffectBuff"), Some(Value::Int(0)));
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 150.);
+    assert!(
+        objects
+            .unit_buffs(target)
+            .unwrap()
+            .iter()
+            .any(|b| b.rawcode() == *b"Bslo")
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(375),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(12345)));
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic unit properties and queue cadence"]
+fn published_native_slow_stop_during_turn_discards_order_without_spell_events_or_payment() {
+    let (mut session, caster, target) = heading_session();
+    let script = session.context().unwrap().scripts.program();
+    let issue = script.function_id("HeadingIssue").unwrap();
+    let stop = script.function_id("HeadingStop").unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(250),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.call_function(stop, &[]).unwrap(), Value::Bool(true));
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_secs(1),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
+    assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic unit properties and queue cadence"]
+fn published_native_slow_heading_callback_fault_retains_phase_without_replay_or_payment() {
+    let (mut session, caster, target) = heading_session();
+    let script = session.context().unwrap().scripts.program();
+    let issue = script.function_id("HeadingIssue").unwrap();
+    let fault = script.function_id("HeadingFaultOn").unwrap();
+    session.call_function(fault, &[]).unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    let error = crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("HeadingUnsupported"), "{error}");
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(1)));
+    let facing = session.global("HeadingChannelFace").unwrap();
+    let objects = session.host().unwrap().objects_mut();
+    assert!(objects.pending_native_physics().is_some());
+    assert_eq!(
+        objects
+            .native("GetUnitFacing", &[Value::Handle(caster)])
+            .unwrap(),
+        facing
+    );
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
+    let state = format!("{:?}", objects.test_native_clock_state());
+    for producer in 0..4 {
+        let retry = match producer {
+            0 => crate::campaign_host::advance_paced_tick(
+                &mut session,
+                std::time::Duration::ZERO,
+                0.,
+                100,
+            ),
+            1 => crate::campaign_host::advance_paced_tick(
+                &mut session,
+                std::time::Duration::from_millis(333),
+                1.,
+                100,
+            ),
+            2 => session
+                .advance_native_counter_frame(Some(std::time::Duration::from_millis(333)), 100),
+            _ => session.advance_native_counter_frame(None, 100),
+        }
+        .unwrap_err();
+        assert!(
+            retry.to_string().contains("HeadingUnsupported"),
+            "producer {producer}: {retry}"
+        );
+        assert_eq!(session.global("HeadingEvents"), Some(Value::Int(1)));
+        let objects = session.host().unwrap().objects_mut();
+        assert_eq!(
+            format!("{:?}", objects.test_native_clock_state()),
+            state,
+            "producer {producer} changed source pacing before refusing the retained fault"
+        );
+        assert!(objects.pending_native_physics().is_some());
+        assert_eq!(
+            objects
+                .native("GetUnitFacing", &[Value::Handle(caster)])
+                .unwrap(),
+            facing
+        );
+        assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+        assert!(objects.unit_buffs(target).unwrap().is_empty());
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; synthetic two-second queue cycle and physics cadence"]
+fn published_native_physics_wrap_rebases_retained_request_without_duplicate_spell_events() {
+    use crate::native_game_clock::Point;
+    let (mut session, caster, target) = heading_session();
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_secs(4),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    let objects = session.host().unwrap().objects_mut();
+    let now = Point { cycle: 2, local: 0 };
+    assert_eq!(objects.native_game_point(), Some(now));
+    assert_eq!(objects.next_native_physics_boundary(now).unwrap(), None);
+    let next = Point {
+        cycle: 2,
+        local: 0.125_f32.to_bits(),
+    };
+    assert_eq!(
+        objects.next_native_physics_boundary(next).unwrap(),
+        Some(next)
+    );
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(125),
+        0.,
+        100,
+    )
+    .unwrap();
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(objects.native_game_point(), Some(next));
+    assert_eq!(objects.next_native_physics_boundary(next).unwrap(), None);
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic timers and physics cadence"]
+fn published_native_physics_skips_paused_and_consumed_timer_requests_across_resume_rearm() {
+    let (mut session, caster, _) = heading_session();
+    let script = session.context().unwrap().scripts.program();
+    let start = script.function_id("HeadingTimersStart").unwrap();
+    let resume = script.function_id("HeadingTimersResume").unwrap();
+    let issue = script.function_id("HeadingIssue").unwrap();
+    session.call_function(start, &[]).unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(375),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingOneShotCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingTimedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(0)));
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    session.call_function(resume, &[]).unwrap();
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(123)));
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingOneShotCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingTimedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(2)));
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(500),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingPausedCalls"), Some(Value::Int(2)));
+    assert_eq!(session.global("HeadingOneShotCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingTimedCalls"), Some(Value::Int(1)));
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(12345)));
+    let objects = session.host().unwrap().objects_mut();
+    assert_eq!(
+        objects.native_game_point().unwrap().local,
+        1.875_f32.to_bits()
+    );
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 150.);
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with synthetic unit properties and physics cadence"]
+fn published_native_slow_target_death_during_turn_clears_retained_heading_relation() {
+    let (mut session, caster, target) = heading_session();
+    let script = session.context().unwrap().scripts.program();
+    let issue = script.function_id("HeadingIssue").unwrap();
+    let kill = script.function_id("HeadingKillTarget").unwrap();
+    assert_eq!(
+        session.call_function(issue, &[]).unwrap(),
+        Value::Bool(true)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(125),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_heading_waiting(caster)
+    );
+    session.call_function(kill, &[]).unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .executed_unit(target)
+            .unwrap()
+            .position
+            .is_some()
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_millis(125),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert!(
+        !session
+            .host()
+            .unwrap()
+            .objects()
+            .native_heading_waiting(caster)
+    );
+    crate::campaign_host::advance_paced_tick(
+        &mut session,
+        std::time::Duration::from_secs(1),
+        0.,
+        100,
+    )
+    .unwrap();
+    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(0)));
+    let objects = session.host().unwrap().objects_mut();
+    assert!(!objects.native_heading_waiting(caster));
+    assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
 }
 
 fn order(vm: &mut Vm, caster: HandleId, name: &str, target: HandleId) -> bool {
@@ -1811,6 +2428,101 @@ fn slow_no_target_evaluation_charges_every_unit_and_refuses_a_potential_attacker
 }
 
 #[test]
+fn slow_negative_filter_uses_directed_help_response_and_preserves_unknown_state() {
+    let (mut vm, [caster, friend, enemy, _]) = open_with(Config {
+        script: "globals\nconstant alliancetype SLOW_FIXTURE_RESPONSE=ConvertAllianceType(47)\nendglobals\n",
+        ..Config::default()
+    });
+    let victim = spawn(&mut vm, 3, b"u001", 80.);
+    let host = &mut vm.host().inner;
+    let now = host.timer_game_time().unwrap();
+    let attack = |host: &mut ObjectHost, target| {
+        assert_eq!(
+            host.native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(enemy),
+                    Value::Str("beta".into()),
+                    Value::Handle(target)
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+    };
+    let owner = host.executed_unit(caster).unwrap().owner;
+    let other = host.executed_unit(victim).unwrap().owner;
+    let response = host
+        .native("ConvertAllianceType", &[Value::Int(47)])
+        .unwrap();
+    let passive = host
+        .native("ConvertAllianceType", &[Value::Int(0)])
+        .unwrap();
+    let alliance = |host: &mut ObjectHost, a, b, setting: Value, value| {
+        host.native(
+            "SetPlayerAlliance",
+            &[
+                Value::Handle(a),
+                Value::Handle(b),
+                setting,
+                Value::Bool(value),
+            ],
+        )
+        .unwrap();
+    };
+    attack(host, victim);
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Help Response initial state"), "{error}");
+    alliance(host, owner, other, passive, true);
+    alliance(host, other, owner, response.clone(), true);
+    alliance(host, owner, other, response.clone(), false);
+    let before: Vec<_> = host
+        .executed_units()
+        .map(|(id, unit)| (id, unit.clone()))
+        .collect();
+    let mut work = before.len() + 2;
+    assert_eq!(
+        host.advance_slow_autocast(caster, *b"Aslo", now, &mut work)
+            .unwrap(),
+        Some(crate::autocast_rules::Outcome::Retry)
+    );
+    assert_eq!(work, 0);
+    assert_eq!(
+        host.executed_units()
+            .map(|(id, unit)| (id, unit.clone()))
+            .collect::<Vec<_>>(),
+        before
+    );
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut (before.len() + 1))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("work budget"), "{error}");
+    alliance(host, owner, other, response.clone(), true);
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("potential attacking candidate"), "{error}");
+    attack(host, friend);
+    let error = host
+        .advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("potential attacking candidate"), "{error}");
+    alliance(host, owner, owner, response, false);
+    assert_eq!(
+        host.advance_slow_autocast(caster, *b"Aslo", now, &mut 100)
+            .unwrap(),
+        Some(crate::autocast_rules::Outcome::Retry)
+    );
+    assert!(host.take_fired_event().is_none());
+}
+
+#[test]
 fn slow_effect_ability_replacement_refuses_the_unqualified_cost_read_point() {
     let (mut vm, caster, enemy, _) = slow_callbacks(9);
     step(&mut vm, CAST_POINT);
@@ -1839,4 +2551,310 @@ fn slow_effect_ability_replacement_refuses_the_unqualified_cost_read_point() {
     assert!(buffs(&mut vm, enemy).is_empty());
     assert_eq!(vm.global("SlowEvents"), Value::Int(1235));
     assert!(vm.host().inner.take_fired_event().is_none());
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic with nonstock physics and paired queue cadence"]
+fn paired_native_physics_arbitrates_timer_ai_and_equal_deadlines_before_entering_a_scope() {
+    use crate::{
+        native_game_clock::{Domain, FrameInput, Point},
+        scripts::{AssetIdentity, MapScripts, ScriptAsset},
+    };
+    for (timer_at, ai_at, physics_first) in [
+        (0.0625, 0.1875, false),
+        (0.1875, 0.0625, false),
+        (0.21875, 0.1875, true),
+        (0.125, 0.125, true),
+    ] {
+        let (mut session, _, _) = heading_session_with(|mut host| {
+            let context = Arc::clone(host.context());
+            host.objects_mut()
+                .admit_campaign_mode(
+                    &context,
+                    crate::campaign_mode_policy::CampaignModePolicy::fixture(),
+                )
+                .unwrap();
+            let common = &context.scripts.digests[0].label;
+            let entry = format!(
+                "globals\nunit H=null\nunit E=null\nendglobals\nfunction main takes nothing returns nothing\nlocal real retained=0.25\ncall Sleep({ai_at})\ncall Sleep(retained)\nendfunction\n"
+            );
+            let program = Arc::new(
+                MapScripts::compile(
+                    AssetIdentity {
+                        source: "heading.ai".into(),
+                        edition: "synthetic".into(),
+                        version: "paired-physics".into(),
+                    },
+                    ScriptAsset {
+                        label: common,
+                        bytes: context.scripts.source(common).unwrap().as_bytes(),
+                    },
+                    ScriptAsset {
+                        label: "synthetic:heading-ai-common",
+                        bytes: b"native GetAiPlayer takes nothing returns integer\nnative Sleep takes real seconds returns nothing\nnative StartThread takes code callback returns nothing\nnative GetUpgradeLevel takes integer id returns integer\nnative GetUnitGoldCost takes integer unitid returns integer\nnative GetUnitWoodCost takes integer unitid returns integer\n",
+                    },
+                    ScriptAsset {
+                        label: "synthetic:heading-ai",
+                        bytes: entry.as_bytes(),
+                    },
+                    None,
+                )
+                .unwrap(),
+            );
+            host.with_ai_pause_rules(Ok(crate::campaign_ai_pause_policy::Rules {
+                initial: 0,
+                retry_seconds: 1.,
+                retry_word: 1f32.to_bits(),
+            }))
+            .with_ai_loader(move |_| Ok(Arc::clone(&program)))
+        });
+        let setup = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("HeadingArbitrationSetup")
+            .unwrap();
+        let start = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("HeadingStartAi")
+            .unwrap();
+        let callback = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("HeadingObserve")
+            .unwrap();
+        session.call_function(setup, &[]).unwrap();
+        let timer = session.global("HeadingOneShot").unwrap();
+        session
+            .host()
+            .unwrap()
+            .native(
+                "TimerStart",
+                &[
+                    timer,
+                    Value::Real(timer_at),
+                    Value::Bool(false),
+                    Value::Code(callback),
+                ],
+            )
+            .unwrap();
+        session.call_function(start, &[]).unwrap();
+        let until = Point {
+            cycle: 0,
+            local: 0.5f32.to_bits(),
+        };
+        let error = session
+            .advance_native_frame(
+                Some(FrameInput {
+                    game_elapsed: std::time::Duration::from_millis(250),
+                    real_elapsed_ms: 0,
+                }),
+                1,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                crate::map_script_session::TimerSessionError::WakeBudget
+                    | crate::map_script_session::TimerSessionError::QueueBudget(_)
+            ),
+            "{error}"
+        );
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .pending_native_physics()
+                .is_none()
+        );
+        let next_physics = session
+            .host()
+            .unwrap()
+            .objects()
+            .next_native_physics_boundary(until)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            f32::from_bits(next_physics.local),
+            if physics_first { 0.25 } else { 0.125 }
+        );
+        let next_ai = session
+            .host()
+            .unwrap()
+            .next_native_ai_wake(until, &mut 1024)
+            .unwrap()
+            .unwrap();
+        let ai_resumed = ai_at < 0.125;
+        assert_eq!(
+            f32::from_bits(next_ai.point.local),
+            if ai_resumed { ai_at + 0.25 } else { ai_at }
+        );
+        assert_eq!(
+            session.global("HeadingChannelFace"),
+            Some(Value::Real(if timer_at < 0.125 { timer_at } else { -1. }))
+        );
+        session.advance_native_frame(None, 100).unwrap();
+        assert_eq!(
+            session.global("HeadingChannelFace"),
+            Some(Value::Real(timer_at))
+        );
+        assert_eq!(session.global("HeadingFail"), Some(Value::Bool(true)));
+        let next_ai = session
+            .host()
+            .unwrap()
+            .next_native_ai_wake(until, &mut 1024)
+            .unwrap()
+            .unwrap();
+        assert_eq!(f32::from_bits(next_ai.point.local), ai_at + 0.25);
+        let objects = session.host().unwrap().objects();
+        assert_eq!(
+            objects.native_game_point(),
+            Some(Point {
+                cycle: 0,
+                local: 0.25f32.to_bits()
+            })
+        );
+        assert_eq!(
+            objects.native_queue_point(Domain::Real),
+            Some(Point { cycle: 0, local: 0 })
+        );
+        assert_eq!(
+            objects
+                .next_native_physics_boundary(until)
+                .unwrap()
+                .unwrap()
+                .local,
+            0.375f32.to_bits()
+        );
+        session.advance_native_frame(None, 100).unwrap();
+        assert_eq!(
+            session.global("HeadingChannelFace"),
+            Some(Value::Real(timer_at))
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic and nonstock physics admission"]
+fn native_physics_counter_admission_retains_fresh_state_on_zero_work_and_arms_once_before_globals()
+{
+    use crate::native_game_clock::{Domain, FrameInput, Input, Point};
+    let mut host = host_with(&Config {
+        heading: true,
+        ..Config::default()
+    });
+    let before = format!("{:?}", host.test_native_clock_state());
+    assert!(
+        host.enqueue_native_input(
+            Input::Independent(FrameInput {
+                game_elapsed: std::time::Duration::ZERO,
+                real_elapsed_ms: 0
+            }),
+            &mut 0
+        )
+        .is_err()
+    );
+    assert_eq!(format!("{:?}", host.test_native_clock_state()), before);
+    let until = Point {
+        cycle: 0,
+        local: 0.5f32.to_bits(),
+    };
+    assert_eq!(host.next_native_physics_boundary(until).unwrap(), None);
+    assert!(host.select_native_counter_platform().unwrap());
+    let next = host.next_native_physics_boundary(until).unwrap().unwrap();
+    assert_eq!(next.local, 0.125f32.to_bits());
+    assert!(host.native_counter_platform());
+    assert!(host.select_native_counter_platform().unwrap());
+    assert_eq!(
+        host.next_native_physics_boundary(until).unwrap(),
+        Some(next)
+    );
+    assert_eq!(
+        host.native_queue_point(Domain::Game),
+        Some(Point { cycle: 0, local: 0 })
+    );
+    assert_eq!(
+        host.native_queue_point(Domain::Real),
+        Some(Point { cycle: 0, local: 0 })
+    );
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source arithmetic and synthetic pre-entry cast properties"]
+fn counter_preentry_selection_keeps_global_config_and_main_slow_orders_in_native_heading() {
+    const MAP: &str = r#"
+globals
+unit H=null
+unit E=null
+real GlobalFace=-1.0
+real ConfigFace=-1.0
+real MainFace=-1.0
+boolean GlobalAccepted=false
+boolean ConfigAccepted=false
+boolean MainAccepted=false
+boolean Ready=SpawnGlobal()
+endglobals
+function SpawnGlobal takes nothing returns boolean
+set H=CreateUnit(Player(4),'H001',16.0,16.0,0.0)
+set E=CreateUnit(Player(5),'u001',16.0,112.0,180.0)
+call SetUnitState(H,UNIT_STATE_MANA,200.0)
+call HeadingWatch()
+call SetUnitFacing(H,45.0)
+set GlobalAccepted=IssueTargetOrder(H,"alpha",E)
+set GlobalFace=GetUnitFacing(H)
+return true
+endfunction
+function config takes nothing returns nothing
+call SetUnitFacing(H,180.0)
+set ConfigAccepted=IssueTargetOrder(H,"alpha",E)
+set ConfigFace=GetUnitFacing(H)
+endfunction
+function main takes nothing returns nothing
+call SetUnitFacing(H,270.0)
+set MainAccepted=IssueTargetOrder(H,"alpha",E)
+set MainFace=GetUnitFacing(H)
+endfunction
+"#;
+    let mut host = host_with(&Config {
+        map: MAP,
+        script: HEADING_CALLBACKS,
+        heading: true,
+        ..Config::default()
+    });
+    host.admit_unit_curses().unwrap();
+    assert!(host.select_native_counter_platform().unwrap());
+    let context = Arc::clone(host.player_context().unwrap());
+    let mut vm = context.scripts.clone().owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("config", &[]).unwrap();
+    vm.call("main", &[]).unwrap();
+    for name in ["Ready", "GlobalAccepted", "ConfigAccepted", "MainAccepted"] {
+        assert_eq!(vm.global(name), Value::Bool(true), "{name}");
+    }
+    for name in ["GlobalFace", "ConfigFace", "MainFace"] {
+        assert_eq!(
+            vm.global(name),
+            Value::Real(0.),
+            "{name} must precede visual publication"
+        );
+    }
+    let Value::Handle(caster) = vm.global("H") else {
+        panic!("caster")
+    };
+    let Value::Handle(target) = vm.global("E") else {
+        panic!("target")
+    };
+    let objects = &mut vm.host().inner;
+    assert!(objects.native_counter_platform());
+    assert!(objects.native_heading_waiting(caster));
+    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+    assert!(objects.unit_buffs(target).unwrap().is_empty());
+    assert_eq!(vm.global("HeadingEvents"), Value::Int(0));
 }

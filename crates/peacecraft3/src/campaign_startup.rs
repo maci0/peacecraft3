@@ -61,6 +61,15 @@ pub enum StartupError {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CampaignStartupSet;
 
+/// Select the source counter platform before the VM evaluates startup scripts.
+#[derive(Resource)]
+pub struct NativeCounterStartup;
+
+pub fn install_native_counter(app: &mut App) {
+    app.insert_resource(NativeCounterStartup);
+    install(app);
+}
+
 pub fn install(app: &mut App) {
     app.init_resource::<CampaignStartup>()
         .init_resource::<CampaignHostSupply>()
@@ -92,6 +101,7 @@ fn start_admitted_map(
     sources: Res<SelectedMapSources>,
     mut supply: ResMut<CampaignHostSupply>,
     no_occlusion: Option<Res<crate::map_ground::NoOcclusionPass>>,
+    counter: Option<Res<NativeCounterStartup>>,
     mut startup: ResMut<CampaignStartup>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
 ) {
@@ -167,20 +177,29 @@ fn start_admitted_map(
     };
     let post = inputs.post_config.clone();
     let no_occlusion = no_occlusion.is_some();
+    let counter = counter.is_some();
     let reader = sources.for_receipts(&bindings.receipts);
     let admitted = Arc::clone(&context);
     let placement_map = Arc::clone(&bindings.catalog_map_bytes);
     let result = session.replace_sequenced(
         Arc::clone(&context),
         move |ctx| {
-            pcx_play::campaign_host::create_host(
+            let mut host = pcx_play::campaign_host::create_host(
                 ctx,
                 inputs,
                 reader,
                 placement_map,
                 no_occlusion,
                 pcx_play::campaign_cache::local_storage(),
-            )
+            )?;
+            if counter {
+                host.objects_mut()
+                    .select_native_counter_platform()
+                    .map_err(|error| {
+                        pcx_play::map_startup_host::MapStartupError::Observation(error.to_string())
+                    })?;
+            }
+            Ok::<_, pcx_play::map_startup_host::MapStartupError>(host)
         },
         &[config, main],
         move |vm, completed| {

@@ -2385,7 +2385,9 @@ impl ObjectHost {
                 super::unit_creation::FormChange::Replacement,
             )?
         } else {
-            let activity = self.prepare_unit_activity(&definition)?;
+            let activity =
+                self.prepare_unit_activity(&definition, self.executed_unit(producer)?.face)?;
+            self.validate_form_activity(producer, activity.as_ref())?;
             let combat = self.prepare_unit_combat(&definition)?;
             super::unit_morph::Form {
                 definition,

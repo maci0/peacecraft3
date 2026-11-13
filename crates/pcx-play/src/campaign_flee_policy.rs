@@ -1306,6 +1306,7 @@ pub(crate) mod tests {
             follow: None,
             move_speed: None,
             agi_move_bonus: None,
+            heading: None,
         };
 
         assert!(

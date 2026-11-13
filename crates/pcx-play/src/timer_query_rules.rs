@@ -36,17 +36,24 @@ pub(crate) struct Rules {
 }
 
 /// A separate query epoch preserves the source's arithmetic order and readpoints.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Epoch {
     image: Sha256Digest,
     period: u32,
     whole: u16,
+    remaining_count: u16,
     remainder: u32,
     first: u32,
+    /// Fallback projection, never the canonical queue entry.
+    /// Legacy final projection; sleep epochs retain the first entry and never read this field.
     pub(crate) expiry: f32,
 }
 
 impl Epoch {
+    pub(crate) fn entry_deadline(self) -> f32 {
+        f32::from_bits(self.first)
+    }
+
     pub(crate) fn segmented(self) -> bool {
         self.whole > 0
     }
@@ -222,6 +229,32 @@ impl Rules {
         f32::from_bits(self.zero)
     }
 
+    /// Sleep retains only the current entry; future entries consume work when due.
+    pub(crate) fn begin_sleep(
+        &self,
+        n: &NumericPolicy,
+        now: f32,
+        delay: f32,
+        work: usize,
+    ) -> Result<Epoch, String> {
+        if work == 0 {
+            return Err(n.runtime_error("sleep preparation requires one current entry"));
+        }
+        real::from_f32(delay).map_err(|e| n.runtime_error(e))?;
+        if delay <= -f32::from_bits(self.segment) {
+            return Err(n.runtime_error("negative segmented sleep is unqualified"));
+        }
+        self.begin_entry(
+            n,
+            now,
+            if delay < 0.0 {
+                f32::from_bits(self.zero)
+            } else {
+                delay
+            },
+        )
+    }
+
     pub(crate) fn begin(
         &self,
         n: &NumericPolicy,
@@ -229,6 +262,25 @@ impl Rules {
         timeout: f32,
         work: usize,
     ) -> Result<Epoch, String> {
+        let mut epoch = self.begin_entry(n, now, timeout)?;
+        if usize::from(epoch.whole) > work {
+            return Err(n.runtime_error(real::MathError::Unsupported));
+        }
+        let project = || {
+            let mut expiry = epoch.first;
+            for _ in 1..epoch.whole {
+                expiry = real::add(expiry, self.segment)?;
+            }
+            if epoch.whole > 0 {
+                expiry = real::add(expiry, self.clamp(epoch.remainder))?;
+            }
+            Ok(expiry)
+        };
+        epoch.expiry = f32::from_bits(project().map_err(|e: real::MathError| n.runtime_error(e))?);
+        Ok(epoch)
+    }
+
+    fn begin_entry(&self, n: &NumericPolicy, now: f32, timeout: f32) -> Result<Epoch, String> {
         let calculate = || {
             let now = real::from_f32(now)?;
             let t = real::from_f32(timeout)?;
@@ -237,39 +289,70 @@ impl Rules {
             }
             let count = real::truncate(t)? / real::truncate(self.segment)?;
             let whole = u16::try_from(count).map_err(|_| real::MathError::Unsupported)?;
-            if usize::from(whole) > work {
-                return Err(real::MathError::Unsupported);
-            }
-            // The remainder uses the fractional reciprocal product, not host `%`.
-            let q = real::mul(t, n.reciprocal(self.segment))?;
-            let fractional = real::sub(q, real::from_i32(real::truncate(q)?)?)?;
-            let mut remainder = real::mul(fractional, self.segment)?;
-            if f32::from_bits(remainder) >= f32::from_bits(self.segment) {
-                remainder = real::sub(remainder, self.segment)?;
-            }
+            let remainder = n.positive_remainder(t, self.segment)?;
             let period = if whole > 0 {
                 self.segment
             } else {
                 self.clamp(remainder)
             };
             let first = real::add(now, period)?;
-            let mut expiry = first;
-            for _ in 1..whole {
-                expiry = real::add(expiry, self.segment)?;
-            }
-            if whole > 0 {
-                expiry = real::add(expiry, self.clamp(remainder))?;
-            }
             Ok(Epoch {
                 image: self.image,
                 period,
                 whole,
+                remaining_count: whole,
                 remainder,
                 first,
-                expiry: f32::from_bits(expiry),
+                expiry: f32::from_bits(first),
             })
         };
         calculate().map_err(|e: real::MathError| n.runtime_error(e))
+    }
+
+    /// Consume exactly one due native entry. `true` means the script expiry is due.
+    /// The caller drains internal entries before dispatching or rebasing the queue.
+    pub(crate) fn advance_entry(
+        &self,
+        n: &NumericPolicy,
+        epoch: &mut Epoch,
+    ) -> Result<bool, String> {
+        if !self.check_epoch(*epoch) {
+            return Err(n.runtime_error("timer query image changed during run"));
+        }
+        if epoch.remaining_count == 0 {
+            return Ok(true);
+        }
+        let mut next = *epoch;
+        next.remaining_count -= 1;
+        let delay = if next.remaining_count > 0 {
+            self.segment
+        } else {
+            self.clamp(next.remainder)
+        };
+        next.first = real::add(next.first, delay).map_err(|e| n.runtime_error(e))?;
+        *epoch = next;
+        Ok(false)
+    }
+
+    /// Rebase only the actual pending entry, after all entries due at the boundary drain.
+    /// Keep the authored whole count for full-timeout queries; callers preflight copies.
+    pub(crate) fn rebase_epoch(
+        &self,
+        n: &NumericPolicy,
+        epoch: &mut Epoch,
+        cycle_limit_bits: u32,
+    ) -> Result<(), String> {
+        if !self.check_epoch(*epoch) {
+            return Err(n.runtime_error("timer query image changed during run"));
+        }
+        let cycle = f32::from_bits(cycle_limit_bits);
+        real::from_f32(cycle).map_err(|e| n.runtime_error(e))?;
+        if cycle <= 0.0 {
+            return Err(n.runtime_error("invalid native timer cycle"));
+        }
+        let first = real::sub(epoch.first, cycle_limit_bits).map_err(|e| n.runtime_error(e))?;
+        epoch.first = first;
+        Ok(())
     }
 
     /// Preserve ordinary caller deadlines; apply only the qualified residual/minimum edges.
@@ -299,21 +382,28 @@ impl Rules {
         if !self.check_epoch(epoch) {
             return Err(n.runtime_error("timer query image changed during run"));
         }
+        let now_bits = real::from_f32(now).map_err(|e| n.runtime_error(e))?;
+        let mut projected = epoch;
+        while projected.remaining_count > 0 && real::below_or_equal(projected.first, now_bits) {
+            self.advance_entry(n, &mut projected)?;
+        }
+        self.remaining_current(n, projected, now)
+    }
+
+    /// Read the actual pending entry/count; canonical queues advance entries explicitly.
+    pub(crate) fn remaining_current(
+        &self,
+        n: &NumericPolicy,
+        epoch: Epoch,
+        now: f32,
+    ) -> Result<f32, String> {
+        if !self.check_epoch(epoch) {
+            return Err(n.runtime_error("timer query image changed during run"));
+        }
         let calculate = || {
             let now = real::from_f32(now)?;
-            let mut count = epoch.whole;
-            let mut at = epoch.first;
-            while count > 0 && real::below_or_equal(at, now) {
-                count -= 1;
-                at = real::add(
-                    at,
-                    if count > 0 {
-                        self.segment
-                    } else {
-                        self.clamp(epoch.remainder)
-                    },
-                )?;
-            }
+            let count = epoch.remaining_count;
+            let at = epoch.entry_deadline().to_bits();
             if epoch.whole == 0 {
                 return real::sub(at, now);
             }

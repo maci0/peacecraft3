@@ -237,6 +237,7 @@ pub mod campaign_assault_policy;
 
 pub mod autocast_rules;
 pub mod mirror_image_rules;
+pub mod native_game_clock;
 pub mod texture_quality_policy;
 pub mod unit_morph_rules;
 pub mod unit_root_rules;

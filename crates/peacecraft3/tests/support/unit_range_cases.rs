@@ -72,6 +72,7 @@ impl ObjectCatalog for Geometry {
             ),
             (*b"P001", SlkId::UnitData, "pathTex", FieldKind::Token, "_"),
             (*b"S001", SlkId::UnitBalance, "spd", FieldKind::Unreal, "8"),
+            (*b"B001", SlkId::UnitBalance, "isbldg", FieldKind::Bool, "0"),
         ] {
             fields.insert(
                 id,
@@ -82,7 +83,9 @@ impl ObjectCatalog for Geometry {
                         field: column.into(),
                         slk: slk.name().into(),
                         index: -1,
-                        declared: if kind == FieldKind::Unreal {
+                        declared: if kind == FieldKind::Bool {
+                            "bool"
+                        } else if kind == FieldKind::Unreal {
                             "unreal"
                         } else if column == "pathTex" {
                             "pathingTexture"
@@ -258,6 +261,13 @@ fn session(script: &str) -> MapScriptSession<MapStartupHost> {
     session_with_activity(script, false)
 }
 fn session_with_activity(script: &str, activity: bool) -> MapScriptSession<MapStartupHost> {
+    session_with_inputs(script, activity, |_| {})
+}
+pub(super) fn session_with_inputs(
+    script: &str,
+    activity: bool,
+    configure: impl FnOnce(&mut pcx_play::map_startup_host::MapStartupInputs),
+) -> MapScriptSession<MapStartupHost> {
     let mut map = fixture(script);
     map.common
         .extend_from_slice(super::script_timer_cases::TIMER_COMMON.as_bytes());
@@ -265,7 +275,7 @@ fn session_with_activity(script: &str, activity: bool) -> MapScriptSession<MapSt
         .extend_from_slice(super::timed_trigger_cases::COMMON.as_bytes());
     map.common.extend_from_slice(EXTRA.as_bytes());
     if activity {
-        map.common.extend_from_slice(b"\nconstant native OrderId takes string s returns integer\nconstant native OrderId2String takes integer i returns string\nnative IssuePointOrder takes unit u, string s, real x, real y returns boolean\nnative GetUnitCurrentOrder takes unit u returns integer\nconstant native GetUnitMoveSpeed takes unit u returns real\n");
+        map.common.extend_from_slice(b"\nconstant native OrderId takes string s returns integer\nconstant native OrderId2String takes integer i returns string\nnative IssuePointOrder takes unit u, string s, real x, real y returns boolean\nnative IssueTargetOrder takes unit u, string s, widget target returns boolean\nnative GetUnitCurrentOrder takes unit u returns integer\nconstant native GetUnitMoveSpeed takes unit u returns real\n");
     }
     map.rebuild();
     let reader = map.resolver();
@@ -285,6 +295,7 @@ fn session_with_activity(script: &str, activity: bool) -> MapScriptSession<MapSt
         max_timed_events: 8,
         max_parked_threads: 8,
     });
+    configure(&mut inputs);
     let payload = Arc::clone(&bindings.catalog_map_bytes);
     let mut app = App::new();
     peacecraft3::map_requests::install(&mut app);
@@ -589,6 +600,14 @@ pub(super) fn activity_rules() -> (
         &registry,
         budget,
     )
+    .unwrap()
+    .with_follow_profiles(
+        &[(
+            "synthetic follow routes",
+            b"[Misc]\nFollowRange=12\nStructureFollowRange=4\n",
+        )],
+        4096,
+    )
     .unwrap();
     (registry, rules)
 }
@@ -733,4 +752,105 @@ endfunction
 pub fn browser_unit_visibility_gate() -> u32 {
     visibility_excludes_candidates_but_preserves_hidden_anchor_range_delivery();
     1
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn selected_timer_projection_fault_keeps_expiry_and_blocks_retry_without_running_a_callback() {
+    use peacecraft3::map_script_session::{ScriptSessionError, TimerSessionError};
+    const SCRIPT: &str = r#"
+globals
+unit A=null
+timer T=CreateTimer()
+integer fired=0
+integer unrelated=0
+endglobals
+function fire takes nothing returns nothing
+set fired=fired+1
+endfunction
+function sample takes nothing returns nothing
+set unrelated=unrelated+1
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+set A=CreateUnit(Player(0),'UNIT',16.0,16.0,0.0)
+call IssuePointOrder(A,"gamma",72.0,16.0)
+call TimerStart(T,0.25,false,function fire)
+endfunction
+"#;
+    for periodic in [false, true] {
+        let script = if periodic {
+            SCRIPT.replace("0.25,false", "0.25,true")
+        } else {
+            SCRIPT.into()
+        };
+        let mut session = session_with_activity(&script, true);
+        let timer = session.global("T").unwrap();
+        let sample = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("sample")
+            .unwrap();
+        let ticket = session.callback_ticket(sample).unwrap();
+        let error = session
+            .test_advance_timers_with_projection_work(10.25, 8, 0)
+            .unwrap_err();
+        assert!(
+            matches!(&error, TimerSessionError::MandatoryProjection(_)),
+            "{error}"
+        );
+        assert_eq!(session.global("fired"), Some(Value::Int(0)));
+        assert_eq!(
+            session.host().unwrap().objects().timer_game_time(),
+            Some(10.25)
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .native("GetExpiredTimer", &[])
+                .unwrap(),
+            timer
+        );
+        assert!(matches!(
+            session.call_callback(&ticket, &[]),
+            Err(ScriptSessionError::PendingTimerProjection)
+        ));
+        assert_eq!(session.global("unrelated"), Some(Value::Int(0)));
+        for _ in 0..2 {
+            let retry = session
+                .test_advance_timers_with_projection_work(11., 8, 65536)
+                .unwrap_err();
+            assert!(matches!(retry, TimerSessionError::MandatoryProjection(_)));
+            assert_eq!(
+                session.host().unwrap().objects().timer_game_time(),
+                Some(10.25)
+            );
+            assert_eq!(
+                session
+                    .host()
+                    .unwrap()
+                    .native("GetExpiredTimer", &[])
+                    .unwrap(),
+                timer
+            );
+            assert_eq!(session.global("fired"), Some(Value::Int(0)));
+        }
+        assert!(matches!(
+            session.advance_queued_events(1000),
+            Err(TimerSessionError::MandatoryProjection(_))
+        ));
+        assert!(matches!(
+            session.advance_unit_ranges(1000),
+            Err(TimerSessionError::MandatoryProjection(_))
+        ));
+        session.clear();
+        assert!(matches!(
+            session.call_callback(&ticket, &[]),
+            Err(ScriptSessionError::StaleCallback { .. })
+        ));
+    }
 }

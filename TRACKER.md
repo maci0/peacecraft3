@@ -7557,3 +7557,25 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Damage refunds, negative-life/mana/bonus/inventory classes, changed-food
   transfers, generic same-callback food-removal timing, normal native clock
   adoption, complete Save/root restore and full tick parity remain unfinished.
+
+- 2026-11-13: Called native clock components now retain distinct Game/Real
+  sleep domains, source-derived counter grants and speed consumption, and
+  ordered logical/callback/visual physics phases. Explicit counter startup
+  selects its transport before globals, config and main; generic application
+  startup retains caller-time behavior. Mandatory projection and physics
+  faults refuse retries before clock mutation. Safe preselection budget retries
+  retain blocked/follow route continuations. Slow's bounded negative filter
+  uses source-derived directed Help Response and refuses unknown state.
+
+  Combined validation passes 3,668 package tests, zero failures, 194 explicit
+  ignores, thirty-three source/witness gates and 449 application executions.
+  Strict native/WASM core/application checks and library builds pass, including
+  the retained heading witnesses and actual unchanged Human01 audio runs.
+  Generic runtime dispatch was restored after its real parked-sleep regression;
+  two inherited synthetic catalog overrides were corrected without relaxing
+  production ambiguity checks. Failed receipts and scoped reuse remain in
+  `/tmp/pc3-native-clock-main-validation/acceptance.json`.
+  Normal GUI counter adoption remains held. Complete timed turning, automatic
+  acquisition/retry, AI-to-map observer delivery, full Save/root restore,
+  browser runtime validation of this build and full native tick parity remain
+  unfinished.

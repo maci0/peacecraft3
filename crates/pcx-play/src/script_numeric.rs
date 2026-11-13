@@ -48,6 +48,8 @@ pub enum Problem {
     Image(#[source] NeutralError),
     #[error("unsupported selected numeric encoding or call relationship")]
     Shape,
+    #[error("native game clock: {0}")]
+    GameClock(String),
 }
 
 #[derive(Debug)]
@@ -60,6 +62,7 @@ pub struct NumericPolicy {
     math: Option<crate::script_math::ScriptMath>,
     formatting: Option<formatting::Formatter>,
     timer_queries: Option<timer_query::Rules>,
+    native_clock: Option<crate::native_game_clock::Rules>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -209,6 +212,7 @@ impl NumericPolicy {
             math: None,
             formatting: None,
             timer_queries: None,
+            native_clock: None,
         })
     }
 
@@ -277,6 +281,33 @@ impl NumericPolicy {
     pub(crate) fn timer_queries(&self) -> Option<&timer_query::Rules> {
         self.timer_queries.as_ref()
     }
+    /// Bind the general game-queue producer independently of ability admission.
+    pub fn with_native_game_clock(
+        mut self,
+        image: &[u8],
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        self.native_clock = Some(
+            crate::native_game_clock::Rules::read(image, &self, budget).map_err(|problem| {
+                Error {
+                    source_context: self.origin().source.clone(),
+                    problem: Problem::GameClock(problem),
+                }
+            })?,
+        );
+        Ok(self)
+    }
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_native_game_clock_fixture(
+        mut self,
+        rules: crate::native_game_clock::Rules,
+    ) -> Self {
+        self.native_clock = Some(rules);
+        self
+    }
+    pub(crate) fn native_game_clock(&self) -> Option<crate::native_game_clock::Rules> {
+        self.native_clock.clone()
+    }
     pub(crate) fn equality_threshold(&self) -> f32 {
         self.equality_threshold
     }
@@ -293,6 +324,53 @@ impl NumericPolicy {
             return Ok(1.0f32.to_bits());
         }
         real::mul(left, self.reciprocal(right))
+    }
+
+    pub(crate) fn positive_remainder_shape(&self, bytes: &[u8], base: u32) -> bool {
+        word(bytes, 0x33) == Some(self.binding.reciprocal_table.va)
+            && word(bytes, 0x3e) == self.binding.reciprocal_table.va.checked_add(4)
+            && at(bytes, 0x8b, &[0x83, 0xe9, 0x7f])
+            && at(bytes, 0x95, &[0x83, 0xf9, 0x17])
+            && at(
+                bytes,
+                0x9a,
+                &[0x83, 0xc1, 8, 0xb8, 0, 0, 0, 0x80, 0xd3, 0xf8, 0x23, 0xc2],
+            )
+            && [
+                (0x79, self.binding.math_mul.va),
+                (0xb2, self.binding.math_sub.va),
+                (0xcf, self.binding.math_mul.va),
+                (0xfb, self.binding.math_sub.va),
+            ]
+            .iter()
+            .all(|&(offset, target)| call(bytes, base, offset) == Some(target))
+    }
+
+    /// The admitted nonnegative branch of the native fractional reciprocal product.
+    pub(crate) fn positive_remainder(&self, left: u32, right: u32) -> Result<u32, real::MathError> {
+        let l = f32::from_bits(left);
+        let r = f32::from_bits(right);
+        real::from_f32(l)?;
+        real::from_f32(r)?;
+        if l < 0.0 || r <= 0.0 {
+            return Err(real::MathError::Unsupported);
+        }
+        let q = real::mul(left, self.reciprocal(right))?;
+        let exponent = ((q >> 23) & 0xff) as i32 - 127;
+        let fractional = if exponent < 0 {
+            q
+        } else if exponent < 23 {
+            let integer = q & ((i32::MIN >> (exponent + 8)) as u32);
+            real::sub(q, integer)?
+        } else {
+            0
+        };
+        let remainder = real::mul(fractional, right)?;
+        if f32::from_bits(remainder) >= r {
+            real::sub(remainder, right)
+        } else {
+            Ok(remainder)
+        }
     }
 
     pub(crate) fn reciprocal(&self, right: u32) -> u32 {

@@ -1,7 +1,8 @@
 //! Script threads: per-thread trigger context and `TriggerSleepAction` parking.
-//! Sleeps run on the owned game clock. Ordering against timers is a recreation
-//! policy: earlier deadline first, a timer before a sleeper at the same time.
+//! Legacy sleeps use caller game time; native sleeps use the real queue.
+//! Equal deadlines retain the explicit recreation tie policy.
 use super::{Error, Failure, ObjectHost};
+use crate::native_game_clock::{Domain, Point, SleepRequest};
 use pcx_script::{HandleId, Value};
 use std::collections::BTreeMap;
 
@@ -18,13 +19,35 @@ pub(super) struct Context {
     expired_timer: Option<Option<HandleId>>,
 }
 
+#[derive(Clone, Copy)]
+struct Sleep {
+    legacy_deadline: f64,
+    native: Option<SleepRequest>,
+}
+struct Sleeper {
+    sleep: Sleep,
+    context: Context,
+}
+
+pub(crate) struct PreparedNativeThreadRows {
+    rows: Vec<(u64, SleepRequest, SleepRequest)>,
+}
+#[derive(Clone, Copy)]
+pub(crate) struct NativeThreadWake {
+    pub ticket: u64,
+    pub point: Point,
+    pub terminal: bool,
+    request: SleepRequest,
+    advanced: SleepRequest,
+}
+
 #[derive(Default)]
 pub(super) struct Threads {
     /// Caller contexts of running spawned/resumed threads, with the callback depth
     /// each thread started at. A park must happen at that depth.
     stack: Vec<(Context, usize)>,
-    sleepers: BTreeMap<u64, (f64, Context)>,
-    pending: Option<f64>,
+    sleepers: BTreeMap<u64, Sleeper>,
+    pending: Option<Result<Sleep, String>>,
     next: u64,
     /// None inherits native delivery; Some(None) retains a null event response.
     expired_timer: Option<Option<HandleId>>,
@@ -56,7 +79,7 @@ impl ObjectHost {
         {
             return Err(self.inner.error(SLEEP, Failure::Source));
         }
-        std::alloc::Layout::array::<(u64, f64, Context)>(max_parked)
+        std::alloc::Layout::array::<(u64, Sleeper)>(max_parked)
             .map_err(|_| self.inner.error(SLEEP, Failure::Capacity))?;
         self.threads.limit = Some(max_parked);
         Ok(())
@@ -69,25 +92,176 @@ impl ObjectHost {
     /// The parked thread due first at or before `until`, unless a timer is due
     /// no later. Advances the game clock to that deadline; resume it next.
     pub fn next_thread_wake(&mut self, until: f64) -> Result<Option<u64>, Error> {
-        let Some((&ticket, &(deadline, _))) = self
+        let Some((&ticket, sleeper)) = self
             .threads
             .sleepers
             .iter()
-            .filter(|(_, (at, _))| *at <= until)
-            .min_by(|a, b| a.1.0.total_cmp(&b.1.0).then(a.0.cmp(b.0)))
+            .filter(|(_, sleeper)| sleeper.sleep.legacy_deadline <= until)
+            .min_by(|a, b| {
+                a.1.sleep
+                    .legacy_deadline
+                    .total_cmp(&b.1.sleep.legacy_deadline)
+                    .then(a.0.cmp(b.0))
+            })
         else {
             return Ok(None);
         };
+        let deadline = sleeper.sleep.legacy_deadline;
         if self.next_timer_deadline().is_some_and(|at| at <= deadline) {
             return Ok(None);
+        }
+        // shortcut: legacy sleep deadlines do not identify native real-queue entries; bind that queue before resuming them.
+        if self.native_clock_driving() {
+            return Err(self.inner.error(
+                SLEEP,
+                Failure::GameClock("parked map wake has no native real-queue entry".into()),
+            ));
         }
         self.set_timer_game_time(deadline)?;
         Ok(Some(ticket))
     }
 
+    pub(crate) fn prepare_native_thread_admission(
+        &self,
+        work: &mut usize,
+    ) -> Result<PreparedNativeThreadRows, Error> {
+        self.prepare_native_thread_rows(None, work)
+    }
+    pub(crate) fn prepare_native_thread_rebase(
+        &self,
+        domain: Domain,
+        work: &mut usize,
+    ) -> Result<PreparedNativeThreadRows, Error> {
+        if domain != Domain::Real {
+            return Ok(PreparedNativeThreadRows { rows: Vec::new() });
+        }
+        self.prepare_native_thread_rows(Some(domain), work)
+    }
+    fn prepare_native_thread_rows(
+        &self,
+        rebase: Option<Domain>,
+        work: &mut usize,
+    ) -> Result<PreparedNativeThreadRows, Error> {
+        let fail = |error: String| self.inner.error(SLEEP, Failure::GameClock(error));
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(self.threads.sleepers.len())
+            .map_err(|_| fail("script sleep admission allocation failed".into()))?;
+        for (&ticket, sleeper) in &self.threads.sleepers {
+            *work = work
+                .checked_sub(1)
+                .ok_or_else(|| fail("script sleep admission work exhausted".into()))?;
+            let before = sleeper.sleep.native.ok_or_else(|| {
+                fail("parked script sleep has no qualified REAL queue request".into())
+            })?;
+            if before.domain() != Domain::Real {
+                return Err(fail(
+                    "script sleep request has a foreign queue family".into(),
+                ));
+            }
+            let mut after = before;
+            if rebase.is_some() {
+                self.rebase_native_sleep(&mut after)?;
+            } else {
+                after = self.activate_native_sleep(before, work)?;
+            }
+            rows.push((ticket, before, after));
+        }
+        Ok(PreparedNativeThreadRows { rows })
+    }
+    /// No script, source refresh or queue mutation may run between preflight and commit.
+    pub(crate) fn commit_native_thread_rows(&mut self, prepared: PreparedNativeThreadRows) {
+        for (ticket, before, after) in prepared.rows {
+            let sleeper = self
+                .threads
+                .sleepers
+                .get_mut(&ticket)
+                .expect("unchanged preflighted script sleeper");
+            debug_assert_eq!(sleeper.sleep.native, Some(before));
+            sleeper.sleep.native = Some(after);
+        }
+    }
+    pub(crate) fn next_native_thread_wake(
+        &self,
+        until: Point,
+        work: &mut usize,
+    ) -> Result<Option<NativeThreadWake>, Error> {
+        let fail = |error: &str| self.inner.error(SLEEP, Failure::GameClock(error.into()));
+        let mut selected: Option<(u64, Point, SleepRequest)> = None;
+        for (&ticket, sleeper) in &self.threads.sleepers {
+            *work = work.checked_sub(1).ok_or_else(|| {
+                self.inner
+                    .error(SLEEP, Failure::Budget("native thread selection"))
+            })?;
+            let request = sleeper
+                .sleep
+                .native
+                .ok_or_else(|| fail("parked script sleep lacks a native REAL request"))?;
+            if request.domain() != Domain::Real {
+                return Err(fail("script sleep request has a foreign queue family"));
+            }
+            let point = request
+                .boundary()
+                .ok_or_else(|| fail("script sleep request has not been natively admitted"))?;
+            // Valid queue locals are nonnegative finite source words; ticket ties retain the reconstruction policy.
+            let key = (point.cycle, point.local, ticket);
+            if (point.cycle, point.local) > (until.cycle, until.local) {
+                continue;
+            }
+            if selected.is_none_or(|(previous, old, _)| key < (old.cycle, old.local, previous)) {
+                selected = Some((ticket, point, request));
+            }
+        }
+        let Some((ticket, point, request)) = selected else {
+            return Ok(None);
+        };
+        let mut advanced = request;
+        let terminal = self.advance_native_sleep(&mut advanced)?;
+        Ok(Some(NativeThreadWake {
+            ticket,
+            point,
+            terminal,
+            request,
+            advanced,
+        }))
+    }
+    pub(crate) fn validate_native_thread_wake(&self, wake: &NativeThreadWake) -> Result<(), Error> {
+        let sleeper = self.threads.sleepers.get(&wake.ticket).ok_or_else(|| {
+            self.inner.error(
+                SLEEP,
+                Failure::GameClock("selected script sleeper is absent".into()),
+            )
+        })?;
+        if sleeper.sleep.native != Some(wake.request) || wake.request.boundary() != Some(wake.point)
+        {
+            return Err(self.inner.error(
+                SLEEP,
+                Failure::GameClock("selected script sleep request changed".into()),
+            ));
+        }
+        Ok(())
+    }
+    /// Final rows remain owned until Host::resume_thread installs their retained context.
+    pub(crate) fn commit_native_thread_wake(
+        &mut self,
+        wake: NativeThreadWake,
+    ) -> Result<bool, Error> {
+        self.validate_native_thread_wake(&wake)?;
+        if !wake.terminal {
+            self.threads
+                .sleepers
+                .get_mut(&wake.ticket)
+                .expect("validated script sleeper")
+                .sleep
+                .native = Some(wake.advanced);
+        }
+        Ok(wake.terminal)
+    }
+
     pub(super) fn thread_sleep_requested(&mut self, name: &str, args: &[Value]) -> bool {
+        if name == SLEEP || name == WAIT_FOR_SOUND {
+            self.threads.pending = None;
+        }
         if name == WAIT_FOR_SOUND && self.threads.limit.is_some() {
-            // Park only while the sound has playback left beyond the offset.
             let (Some(now), [Value::Handle(sound), offset]) = (self.timer_game_time(), args) else {
                 return false;
             };
@@ -99,8 +273,15 @@ impl ObjectHost {
             if wait.is_nan() || wait <= 0.0 {
                 return false;
             }
-            self.threads.pending = Some(now + wait);
-            return true;
+            self.threads.pending = Some(if self.native_clock_driving() {
+                Err("TriggerWaitForSound native queue family is not qualified".into())
+            } else {
+                Ok(Sleep {
+                    legacy_deadline: now + wait,
+                    native: None,
+                })
+            });
+            return self.threads.pending.as_ref().is_some_and(Result::is_ok);
         }
         if name != SLEEP || self.threads.limit.is_none() {
             return false;
@@ -111,13 +292,30 @@ impl ObjectHost {
         if !seconds.is_finite() {
             return false;
         }
-        self.threads.pending = Some(now + f64::from(seconds.max(0.0)));
-        true
+        // One request admission is bounded; actual internal queue entries spend the drain budget.
+        let mut work = 1;
+        let prepared = self
+            .prepare_native_sleep(Domain::Real, *seconds, &mut work)
+            .map(|native| Sleep {
+                legacy_deadline: now + f64::from(seconds.max(0.0)),
+                native,
+            })
+            .map_err(|error| error.to_string());
+        let accepted = prepared.is_ok();
+        self.threads.pending = Some(prepared);
+        accepted
     }
 
     /// Reached only when a sleep could not park: invalid input or no runtime.
     /// A sound wait that needs no park returns at once.
     pub(super) fn thread_sleep_native(&self, name: &str) -> Option<Result<Value, Error>> {
+        if matches!(name, SLEEP | WAIT_FOR_SOUND)
+            && let Some(Err(error)) = &self.threads.pending
+        {
+            return Some(Err(self
+                .inner
+                .error(name, Failure::GameClock(error.clone()))));
+        }
         if name == WAIT_FOR_SOUND && self.threads.limit.is_some() {
             self.inner.program.natives().get(name)?;
             return Some(Ok(Value::Null));
@@ -167,11 +365,12 @@ impl ObjectHost {
 
     pub(super) fn park_thread_now(&mut self) -> Result<u64, Error> {
         let fail = |reason| self.inner.error(SLEEP, Failure::TriggerState(reason));
-        let deadline = self
+        let sleep = self
             .threads
             .pending
             .take()
-            .ok_or_else(|| fail("no pending sleep"))?;
+            .ok_or_else(|| fail("no pending sleep"))?
+            .map_err(|error| self.inner.error(SLEEP, Failure::GameClock(error)))?;
         let base = self.threads.stack.last().map_or(0, |(_, base)| *base);
         if self.callbacks.len() != base {
             return Err(fail("sleep inside a native callback"));
@@ -193,17 +392,19 @@ impl ObjectHost {
         context.expired_timer = context
             .expired_timer
             .or_else(|| self.active_expired_timer());
-        self.threads.sleepers.insert(ticket, (deadline, context));
+        self.threads
+            .sleepers
+            .insert(ticket, Sleeper { sleep, context });
         Ok(ticket)
     }
 
     pub(super) fn resume_thread_now(&mut self, ticket: u64) -> Result<(), Error> {
-        let (_, context) = self.threads.sleepers.remove(&ticket).ok_or_else(|| {
+        let sleeper = self.threads.sleepers.remove(&ticket).ok_or_else(|| {
             self.inner
                 .error(SLEEP, Failure::TriggerState("unknown thread ticket"))
         })?;
         self.enter_spawned_thread();
-        self.install_thread_context(context);
+        self.install_thread_context(sleeper.context);
         Ok(())
     }
 

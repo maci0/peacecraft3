@@ -1,5 +1,6 @@
 //! Ordinary source-bound autocast ON and OFF transitions on canonical ability instances.
 use super::*;
+use crate::playercolor_host::objects::PreparedDefaultAutocast;
 use pcx_script::ScriptCall;
 
 struct PreparedToggle {
@@ -7,7 +8,11 @@ struct PreparedToggle {
     alias: [u8; 4],
     revision: u64,
     /// `Some` for an ON order: the decoded ON behaviour and the game time of the first tick.
-    on: Option<(crate::autocast_rules::Enable, f64)>,
+    on: Option<(
+        crate::autocast_rules::Enable,
+        f64,
+        Option<crate::native_game_clock::Point>,
+    )>,
     /// Same-group abilities of the unit that are ON and are switched OFF by this ON.
     peers: Vec<[u8; 4]>,
 }
@@ -37,7 +42,7 @@ impl ObjectHost {
     pub(in super::super) fn prepare_default_autocast(
         &self,
         record: &ExecutedUnit,
-    ) -> Result<Vec<([u8; 4], f32)>, Error> {
+    ) -> Result<Vec<PreparedDefaultAutocast>, Error> {
         let fail = |detail| {
             self.inner
                 .error("CreateUnit", Failure::UnitActivity(detail))
@@ -86,7 +91,11 @@ impl ObjectHost {
             ticks
                 .try_reserve(1)
                 .map_err(|_| fail("default autocast allocation failed".into()))?;
-            ticks.push((alias, enable.first_tick));
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| fail("default autocast needs the game clock".into()))?;
+            let native = self.prepare_native_autocast_delay(enable.first_tick)?;
+            ticks.push((alias, now + f64::from(enable.first_tick), native));
         }
         if !ticks.is_empty() && self.timer_game_time().is_none() {
             return Err(fail("default autocast needs the game clock".into()));
@@ -332,7 +341,14 @@ impl ObjectHost {
                     .ok_or_else(|| fail("autocast ON needs the game clock".into()))?;
                 let peers =
                     self.autocast_group_peers(record, alias, enable.group, &rules.groups)?;
-                (Some((enable, now + f64::from(enable.first_tick))), peers)
+                (
+                    Some((
+                        enable,
+                        now + f64::from(enable.first_tick),
+                        self.prepare_native_autocast_delay(enable.first_tick)?,
+                    )),
+                    peers,
+                )
             }
             None => (None, Vec::new()),
         };
@@ -401,9 +417,9 @@ impl ObjectHost {
             abilities.autocast_order = (!events.is_empty()).then_some((revision, order));
         }
         self.autocast_ticks
-            .retain(|&(u, a, _)| u != unit || !(a == alias || peers.contains(&a)));
-        if let Some((_, first_tick)) = on {
-            self.autocast_ticks.push((unit, alias, first_tick));
+            .retain(|&(u, a, _, _)| u != unit || !(a == alias || peers.contains(&a)));
+        if let Some((_, first_tick, native)) = on {
+            self.autocast_ticks.push((unit, alias, first_tick, native));
         }
         self.commit_ability_events(
             events,
@@ -416,12 +432,48 @@ impl ObjectHost {
         );
         Ok(())
     }
+    fn prepare_native_autocast_delay(
+        &self,
+        delay: f32,
+    ) -> Result<Option<crate::native_game_clock::Point>, Error> {
+        self.native_game_point()
+            .map(|now| {
+                self.native_game_clock
+                    .as_ref()
+                    .expect("native clock")
+                    .rules()
+                    .simple_deadline(now, delay)
+            })
+            .transpose()
+            .map_err(|e| self.inner.error("autocast", Failure::GameClock(e)))
+    }
+    fn autocast_deadline(
+        &self,
+        tick: &(
+            HandleId,
+            [u8; 4],
+            f64,
+            Option<crate::native_game_clock::Point>,
+        ),
+    ) -> f64 {
+        if self.native_clock_driving() {
+            tick.3.map_or(tick.2, |point| {
+                self.native_game_clock
+                    .as_ref()
+                    .expect("native clock")
+                    .rules()
+                    .seconds(point)
+            })
+        } else {
+            tick.2
+        }
+    }
     pub(crate) fn next_autocast_boundary(&self, until: f64) -> Option<f64> {
         let now = self.timer_game_time()?;
         self.autocast_ticks
             .iter()
-            .filter(|(unit, _, _)| matches!(self.inner.entry(*unit), Ok(Entry::Unit { .. })))
-            .map(|(_, _, due)| due.max(now))
+            .filter(|(unit, _, _, _)| matches!(self.inner.entry(*unit), Ok(Entry::Unit { .. })))
+            .map(|tick| self.autocast_deadline(tick).max(now))
             .filter(|due| *due <= until)
             .min_by(f64::total_cmp)
     }
@@ -431,8 +483,12 @@ impl ObjectHost {
     pub(crate) fn advance_autocast(&mut self, now: f64) -> Result<(), Error> {
         let inner = &self.inner;
         self.autocast_ticks
-            .retain(|&(unit, _, _)| matches!(inner.entry(unit), Ok(Entry::Unit { .. })));
-        let Some(&(unit, alias, due)) = self.autocast_ticks.iter().find(|t| t.2 <= now) else {
+            .retain(|&(unit, _, _, _)| matches!(inner.entry(unit), Ok(Entry::Unit { .. })));
+        let Some(&(unit, alias, due, _)) = self
+            .autocast_ticks
+            .iter()
+            .find(|t| self.autocast_deadline(t) <= now)
+        else {
             return Ok(());
         };
         Err(self.inner.error(
