@@ -1603,6 +1603,7 @@ impl ObjectHost {
                 let Some(producer) = chosen else {
                     return Ok(false);
                 };
+                self.require_no_static_heading(producer, "structure upgrade")?;
                 let [gold, lumber] = self.structure_upgrade_costs(
                     &self.executed_unit(producer)?.definition,
                     [gold, lumber],
@@ -1711,6 +1712,7 @@ impl ObjectHost {
         kind: i32,
         definition: Definition,
     ) -> Result<bool, Error> {
+        self.require_no_static_heading(producer, "training")?;
         self.require_ordinary_training(kind)?;
         if self.producer_is_upgrading(producer) {
             return Err(self.training_error("training during a structure upgrade is not qualified"));
@@ -1940,6 +1942,7 @@ impl ObjectHost {
         let Some(producer) = chosen else {
             return Ok(());
         };
+        self.require_no_static_heading(producer, "research")?;
         if self.training.jobs.len() >= self.inner.max_handles {
             return Err(self.research_error("training job budget exhausted"));
         }

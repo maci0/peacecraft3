@@ -756,6 +756,9 @@ impl ObjectHost {
         {
             return Ok(false);
         }
+        if kind != Kind::Slow {
+            self.require_no_static_heading(target, NATIVE)?;
+        }
         let acceptance = if kind == Kind::Slow {
             self.prepare_native_heading_target(caster, target)?;
             Some(self.prepare_slow_acceptance(caster)?)
@@ -791,6 +794,17 @@ impl ObjectHost {
             .iter()
             .find(|(_, bound)| bound.iter().any(|(alias, _)| *alias == cast.alias))
             .map(|(order, _)| *order)
+    }
+
+    pub(crate) fn curse_has_form_relation(&self, unit: HandleId) -> bool {
+        self.curses.as_ref().is_some_and(|state| {
+            state.polymorphs.contains_key(&unit)
+                || state.conversions.contains_key(&unit)
+                || state
+                    .pending
+                    .values()
+                    .any(|cast| cast.target == unit && cast.kind != Kind::Slow)
+        })
     }
 
     /// Drops a pending cast when its caster takes another order, dies or is removed.

@@ -261,13 +261,70 @@ These error/lifecycle checks add no native parity claim.
 
 ## Selected-code findings and remaining gates
 
+The four attack-target ownership controls in
+`/tmp/pc3-sol04-autotarget-verified.json` passed 512 ordered snapshots. Idle enemy
+workers emit no spell events. An enemy worker explicitly attacking the caster,
+or a paused friendly unit owned by the caster's player, triggers automatic Slow:
+CHANNEL/CAST at short-clock `0.020000`, EFFECT at `0.490000`, FINISH/END at
+`1.050000`. The otherwise matched worker attacking a paused unrelated player's
+unit emits no spell events, despite an accepted attack order and observed victim
+damage. No arm issues a manual Slow order. All four private containers independently
+validate stopped/PID zero, no OOM and display/audio isolation in
+`/tmp/pc3-sol04-autotarget-cleanup.json`.
+
+The selected assembly resolves the candidate's current attack target into a
+temporary reference, then reads that victim's owner. At `0xbf7d22`, ECX is the
+ability owner (caster), not the temporary victim: `0x69bd70` calls `0x47d060`
+with caster owner first and victim owner second. This reads the caster's
+`ALLIANCE_HELP_RESPONSE` relation toward the victim's owner. The earlier claim
+that this was equivalent to `IsUnitAlly(victim, casterPlayer)` was incorrect:
+that native reads the passive-alliance mask instead. The four controls use a
+same-owner victim or an unrelated player's victim; they do not distinguish
+these relation kinds or qualify a general passive-ally predicate. Common
+readiness, visibility, multi-candidate selection and enumeration order still
+need independent admission before positive automatic execution is enabled.
+
+The selected-code role join is independently checked in
+`/tmp/pc3-sol04-help-response-source-receipt.json`. `0x47d060` reads the mask at
+player-data offset `+0x58`; `IsUnitAlly` at `0x499980` reads `+0x38`.
+`GetPlayerAlliance` at `0x4944c0` and its setter path `0x4c1f70` both address
+`+0x38 + (kind << 4)`, identifying the former field as the supplied common.j
+`ALLIANCE_HELP_RESPONSE` enumerand. The verifier checks both addressing paths,
+the caster/victim receiver chain, input hashes, two nonstock layouts and an
+unaligned-field refusal. Startup `0x47ce82` enables that relation toward the same
+player-slot index used to initialize its row. This is native-code evidence, not
+a runtime observation of asymmetric alliances. Cross-player defaults, later
+alliance setup and overrides still need qualification; absent host alliance
+state must not become a false result.
+
+Four subsequent controls independently vary the caster-to-victim passive and
+Help Response relations, and the reverse Help Response relation. Every arm has
+the same idle caster, enemy attacker and paused third-player victim. All attack
+orders are accepted and all victims lose life. Passive-only produces no Slow
+despite `IsUnitAlly` returning true; forward-Help-Response-only produces CHANNEL,
+CAST, EFFECT, FINISH and ENDCAST despite `IsUnitAlly` returning false. Neither
+the all-disabled control nor reverse-Help-Response-only produces a cast. No arm
+issues a manual Slow order. This distinguishes both the relation kind and its
+direction without relying on nearest-unit or handle ordering.
+
+All four arms captured 128 ordered script samples without overflow. Their
+before-write queries report self Help Response enabled and both cross-player
+directions disabled in this controlled starting setup. These observations do
+not establish defaults after every force/controller setup or later lifecycle.
+Receipt: `/tmp/pc3-sol04-help-response-verified.json`; all four containers are
+independently stopped/PID zero with no OOM, private Xvfb/null audio and a fresh
+empty original-client queue in
+`/tmp/pc3-sol04-help-response-stop-receipt.json`. This is runtime evidence for
+the bounded filter relation, not a completed positive host selector.
+
 Slow candidate filter `0xbf7c20`, evidence
 `ev_e9dcd1079529fac94010a7c184f236580704a43cbe956974964894b80055ca9b`,
 first applies the common filter, mobility gate and existing Slow-class check.
 A nonzero DataC accepts after those gates; equality with the selected zero
 requires attack-component state and its current-target owner relation. The old
-autocast note reversed the DataC branch. The complete owner-relation and
-disabled-component mapping remains to be qualified.
+autocast note reversed the DataC branch. The owner relation's field role is
+qualified above; its initialization/lifecycle and the disabled-component mapping
+remain open.
 
 The shared comparator's strict-smaller branch retains the incumbent at equal
 metrics (`0xb9cb20`, evidence
@@ -305,6 +362,37 @@ default; malformed authored numeric values remain explicit errors. Automatic
 positive selection, common visibility/readiness, equal-metric enumeration,
 complete moving/idle turning and full mission behavior remain open. Parser and synthetic tests alone
 do not establish native parity.
+
+### Partial current-order and memory capture
+
+The current-order experiment is incomplete. Its original status is retained in
+`/tmp/pc3-sol04-slow-state-native-status.json`; the independent stream receipt is
+`/tmp/pc3-sol04-slow-state-partial-receipt.json`. The idle arm captured 512 script
+samples and 2,400 memory samples with stable field brackets. The attack-labelled
+arm has a complete 512-sample script stream but an empty memory stream, so its
+combined admission failed. The earlier description of an absent final script
+trace or a client hang was too strong. The memory sampler's failure cause is
+unknown; move and hold arms were never launched. These results do not qualify
+current-order eligibility. Both launched clients are independently stopped.
+
+The idle capture records ordinary ability flags `+0x8` as zero. Selected
+readiness `0xb4a4a0` consults the current order conditionally on that field;
+this does not qualify every moving, item, disabled or retained-order state.
+The raw field labelled `cooldown` in the immutable JSON is actually the
+unqualified counter at `+0x44`. It remains zero while the public cooldown query
+is positive and must not be mapped to the cooldown duration. Captured flag
+`+0x20` and autocast-request cancellation/rearming correlate with the observed
+cooldown lifecycle; the full notification-caller mapping remains open.
+
+The source timing writers distinguish ranked `Cast` (`+0x88`), unit cast point
+(`+0x90`) and unit backswing (`+0x98`). The post-order getter `0xb4a600` compares
+the lead-plus-cast-point plus cooldown against the corresponding backswing end,
+with a separately bound sentinel branch. An offline check using the existing
+software-real implementation matches one captured accepted period and two
+consecutive retry additions exactly:
+`native_slow_postcast_period_and_retry_deadlines_match_shared_software_real`.
+Inputs remain in `/tmp/pc3-sol04-slow-real-witness-inputs.json`. This narrow
+arithmetic witness does not establish full queue timing or callback readpoints.
 
 ## Bounded implementation receipt
 

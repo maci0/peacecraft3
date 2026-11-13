@@ -504,6 +504,7 @@ mod tests {
             full_turn: 12.,
             visual: None,
             profile: None,
+            timed: None,
         };
         let state = State {
             logical: 1.,

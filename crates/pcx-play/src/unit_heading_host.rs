@@ -8,7 +8,13 @@ pub(crate) struct Heading {
     pub(crate) speed: f32,
     pub(crate) window: f32,
     pub(crate) selector: usize,
-    pub(crate) target: Option<HandleId>,
+    pub(crate) target: Option<Target>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Target {
+    Unit(HandleId),
+    Static(heading::timed::Target),
 }
 
 #[derive(Clone, Copy)]
@@ -199,6 +205,198 @@ impl ObjectHost {
         Ok(Some(current))
     }
 
+    pub(super) fn prepare_native_timed_facing(
+        &self,
+        unit: HandleId,
+        face: f32,
+        duration: f32,
+    ) -> Result<Heading, Error> {
+        let record = self.executed_unit(unit)?;
+        let mut heading = record
+            .activity
+            .as_ref()
+            .and_then(|a| a.heading)
+            .ok_or_else(|| self.heading_error("timed heading state missing"))?;
+        let rules = self
+            .unit_activity
+            .as_ref()
+            .and_then(|s| s.rules.heading_rules())
+            .ok_or_else(|| self.heading_error("timed heading rules missing"))?;
+        let profile = rules
+            .profile
+            .as_ref()
+            .ok_or_else(|| self.heading_error("timed heading profile missing"))?;
+        let timed = rules
+            .timed
+            .as_ref()
+            .ok_or_else(|| self.heading_error("timed heading controller source missing"))?;
+        let numeric = self
+            .numeric
+            .as_ref()
+            .ok_or_else(|| self.heading_error("timed heading numeric source missing"))?;
+        let position = record
+            .position
+            .ok_or_else(|| self.heading_error("timed heading position missing"))?;
+        let angle = profile.radians(face).map_err(|e| self.heading_error(e))?;
+        let Some(target) = timed
+            .prepare(
+                rules,
+                numeric,
+                position,
+                heading.state.angle,
+                angle,
+                duration,
+            )
+            .map_err(|e| self.heading_error(e))?
+        else {
+            return Ok(heading);
+        };
+        let activity = record.activity.as_ref().expect("timed activity");
+        // shortcut: movement and paused relations need qualification before those transitions are admitted.
+        if !record.shown
+            || self.current_unit_order(unit)? != 0
+            || self.curse_has_form_relation(unit)
+            || record.morph.is_some()
+            || record.construction.is_some()
+            || record.paused_since.is_some()
+            || record.combat.as_ref().is_some_and(|c| {
+                c.dead
+                    || c.target.is_some()
+                    || c.attack_destination.is_some()
+                    || c.ground_target.is_some()
+                    || c.swing.is_some()
+            })
+            || activity.held
+            || activity.motion.is_some()
+            || activity.turn.is_some()
+            || activity.follow.is_some()
+            || activity.patrol.is_some()
+            || record.admitted_order.is_some_and(|(_, active)| active)
+            || !self.queued_orders(unit).is_empty()
+            || self.producer_has_training(unit)
+            || self.autocast_has_curse_phase(unit)
+        {
+            return Err(self.heading_error(
+                "timed facing requires a qualified stationary unit without an active order",
+            ));
+        }
+        heading.target = Some(Target::Static(target));
+        Ok(heading)
+    }
+
+    pub(crate) fn require_no_static_heading(
+        &self,
+        unit: HandleId,
+        name: &str,
+    ) -> Result<(), Error> {
+        if self.native_clock_driving()
+            && self
+                .executed_unit(unit)
+                .ok()
+                .and_then(|r| r.activity.as_ref())
+                .and_then(|a| a.heading)
+                .is_some_and(|h| matches!(h.target, Some(Target::Static(_))))
+        {
+            return Err(self.inner.error(
+                name,
+                Failure::UnitActivity(
+                    "transition during a static timed-facing relation is not qualified".into(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_static_heading_native(
+        &self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<(), Error> {
+        if self.inner.program.natives().get(name).is_none() {
+            return Ok(());
+        }
+        let Some(Value::Handle(unit)) = args.first() else {
+            return Ok(());
+        };
+        let Ok(record) = self.executed_unit(*unit) else {
+            return Ok(());
+        };
+        if !self.native_clock_driving()
+            || record
+                .activity
+                .as_ref()
+                .and_then(|a| a.heading)
+                .is_none_or(|h| !matches!(h.target, Some(Target::Static(_))))
+        {
+            return Ok(());
+        }
+        let order_shape = |value: Option<&Value>| match value {
+            Some(Value::Int(_)) => name.contains("ById"),
+            Some(Value::Str(_)) => !name.contains("ById"),
+            _ => false,
+        };
+        let guarded = match name {
+            "IssueImmediateOrder" | "IssueImmediateOrderById" => {
+                let order = match args.get(1) {
+                    Some(Value::Str(order)) if name == "IssueImmediateOrder" => {
+                        self.order_registry.as_ref().and_then(|r| r.id(order))
+                    }
+                    Some(Value::Int(order)) if name == "IssueImmediateOrderById" => Some(*order),
+                    _ => None,
+                };
+                args.len() == 2
+                    && match args.get(1) {
+                        Some(Value::Str(_)) if name == "IssueImmediateOrder" => order.is_some(),
+                        Some(Value::Int(value)) if name == "IssueImmediateOrderById" => *value != 0,
+                        _ => false,
+                    }
+                    && order != self.activity_stop_order()
+            }
+            "IssuePointOrder"
+            | "IssuePointOrderById"
+            | "IssuePointOrderLoc"
+            | "IssuePointOrderByIdLoc"
+            | "IssueBuildOrder"
+            | "IssueBuildOrderById" => {
+                order_shape(args.get(1))
+                    && if name.ends_with("Loc") {
+                        args.len() == 3 && self.location_point(&args[2], name).is_ok()
+                    } else {
+                        matches!(args, [_, _, Value::Real(x), Value::Real(y)] if x.is_finite() && y.is_finite())
+                    }
+            }
+            "IssueTargetOrder" | "IssueTargetOrderById" => {
+                order_shape(args.get(1))
+                    && matches!(args,
+                [_, _, Value::Handle(target)] if matches!(self.inner.entry(*target), Ok(Entry::Unit { .. } | Entry::Destructable { .. } | Entry::Item { .. })))
+            }
+            "PauseUnit" => matches!(args, [_, Value::Bool(true)]),
+            "ShowUnit" => record.shown && matches!(args, [_, Value::Bool(false)]),
+            "SetUnitOwner" => {
+                matches!(args, [_, Value::Handle(owner), Value::Bool(_)] if *owner != record.owner && matches!(self.inner.entry(*owner), Ok(Entry::Player { .. })))
+            }
+            "SetUnitPathing" => {
+                matches!(args, [_, Value::Bool(on)] if record.activity.as_ref().is_some_and(|a| a.pathing_off == *on))
+            }
+            "SetUnitPosition" => match args {
+                [_, Value::Real(x), Value::Real(y)] if x.is_finite() && y.is_finite() => {
+                    record.position != Some([*x, *y])
+                }
+                _ => false,
+            },
+            "SetUnitPositionLoc" => (args.len() == 2)
+                .then_some(args.get(1))
+                .flatten()
+                .and_then(|v| self.location_point(v, name).ok())
+                .is_some_and(|p| record.position != Some(p)),
+            _ => false,
+        };
+        if guarded {
+            self.require_no_static_heading(*unit, name)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn prepare_native_unit_look_at(
         &self,
         unit: HandleId,
@@ -208,6 +406,7 @@ impl ObjectHost {
         if !self.native_clock_driving() {
             return Ok(None);
         }
+        self.require_no_static_heading(unit, "attack facing")?;
         let Some(mut current) = self
             .executed_unit(unit)?
             .activity
@@ -278,6 +477,7 @@ impl ObjectHost {
         if !self.native_clock_driving() {
             return Ok(None);
         }
+        self.require_no_static_heading(unit, "spell facing")?;
         let record = self.executed_unit(unit)?;
         let Some(mut heading) = record.activity.as_ref().and_then(|a| a.heading) else {
             return Ok(None);
@@ -332,7 +532,7 @@ impl ObjectHost {
                 .cast_ready(heading.state.logical, goal)
                 .map_err(|e| self.heading_error(e.to_string()))?
         };
-        heading.target = (!ready).then_some(target);
+        heading.target = (!ready).then_some(Target::Unit(target));
         Ok(Some((heading, ready)))
     }
 
@@ -355,7 +555,7 @@ impl ObjectHost {
                 .ok()
                 .and_then(|r| r.activity.as_ref())
                 .and_then(|a| a.heading)
-                .is_some_and(|h| h.target.is_some())
+                .is_some_and(|h| matches!(h.target, Some(Target::Unit(_))))
     }
 
     pub(crate) fn native_unit_facing(&self, unit: HandleId) -> Result<Option<f32>, Error> {
@@ -562,7 +762,14 @@ impl ObjectHost {
                         "stationary heading overlaps an unqualified movement or script timed turn",
                     ));
                 }
-                let target_position = self.executed_unit(target).ok().and_then(|t| t.position);
+                let (target_position, speed, spell) = match target {
+                    Target::Unit(target) => (
+                        self.executed_unit(target).ok().and_then(|t| t.position),
+                        heading.speed,
+                        true,
+                    ),
+                    Target::Static(target) => (Some(target.point), target.speed, false),
+                };
                 let Some(to) = target_position else {
                     heading.target = None;
                     updates
@@ -605,7 +812,7 @@ impl ObjectHost {
                     )
                     .map_err(|e| self.heading_error(e.to_string()))?;
                 let step = rules
-                    .stationary_step(numeric, heading.state.logical, goal, heading.speed)
+                    .stationary_step(numeric, heading.state.logical, goal, speed)
                     .map_err(|e| self.heading_error(e))?;
                 heading.state.logical = step.logical;
                 if step.arrived {
@@ -614,7 +821,7 @@ impl ObjectHost {
                 updates
                     .try_reserve(1)
                     .map_err(|_| self.heading_error("physics logical storage"))?;
-                updates.push((unit, heading, step.arrived));
+                updates.push((unit, heading, spell && step.arrived));
             }
             for &(unit, heading, _) in &updates {
                 let Entry::Unit { record } = self.inner.entry_mut(unit)? else {
@@ -752,7 +959,9 @@ mod tests {
                 speed: 0.4,
                 window: 0.3,
                 selector: 5,
-                target: Some(HandleId::new(std::num::NonZeroU64::new(47).unwrap())),
+                target: Some(Target::Unit(HandleId::new(
+                    std::num::NonZeroU64::new(47).unwrap(),
+                ))),
             }),
             pathing_off: false,
             rally: None,

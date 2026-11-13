@@ -314,6 +314,9 @@ impl NumericPolicy {
     pub(crate) fn multiplication_va(&self) -> u32 {
         self.binding.math_mul.va
     }
+    pub(crate) fn division_va(&self) -> u32 {
+        self.binding.division.va
+    }
     pub(crate) fn addition_va(&self) -> u32 {
         self.binding.math_add.va
     }

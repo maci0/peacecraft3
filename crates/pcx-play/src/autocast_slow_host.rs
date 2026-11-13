@@ -52,6 +52,18 @@ pub(super) struct State {
 }
 
 impl ObjectHost {
+    pub(crate) fn autocast_has_curse_phase(&self, caster: HandleId) -> bool {
+        self.curses.as_ref().is_some_and(|state| {
+            state.pending.contains_key(&caster)
+                || state.slow_lifecycle.fault.is_some()
+                || state
+                    .slow_lifecycle
+                    .payments
+                    .values()
+                    .any(|p| p.caster == caster)
+        })
+    }
+
     /// Proves the zero-DataC no-target case before the still-unqualified positive selector.
     pub fn advance_slow_autocast(
         &mut self,
