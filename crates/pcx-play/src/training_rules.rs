@@ -239,9 +239,6 @@ impl Rules {
 
     pub(crate) fn upgrade_policy(&self) -> Result<UpgradePolicy, String> {
         let policy = *self.upgrade.as_ref().map_err(Clone::clone)?;
-        if policy.in_progress_id_change {
-            return Err("enabled UpgradeInProgressIdChange pending form is not qualified".into());
-        }
         if policy.damage_penalty {
             return Err("upgrade damage refund penalty is not qualified".into());
         }
@@ -616,7 +613,11 @@ pub(crate) mod tests {
             rules.image_sha256 = *numeric.image_sha256();
             assert_eq!(rules.refund(&numeric, 43).unwrap(), 15);
             assert_eq!(rules.research_refund(&numeric, 43).unwrap(), 26);
-            if mode == Some("0") {
+            if matches!(mode, Some("0" | "1")) {
+                assert_eq!(
+                    rules.upgrade_policy().unwrap().in_progress_id_change,
+                    mode == Some("1")
+                );
                 assert_eq!(
                     rules.upgrade_costs(Some([31, 7]), [74, 23]).unwrap(),
                     [43, 16]

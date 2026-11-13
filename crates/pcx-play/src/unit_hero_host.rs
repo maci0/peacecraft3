@@ -1134,6 +1134,12 @@ impl ObjectHost {
                 ));
             }
         }
+        if self.pending_form_upgrade(unit) && adding != listed {
+            return Err(self.hero_error(
+                name,
+                "mode1 upgrade ability changes are not qualified".into(),
+            ));
+        }
         if withdrawing_slow {
             self.withdraw_slow_ability(unit, alias);
         }

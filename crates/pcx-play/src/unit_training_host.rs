@@ -33,6 +33,8 @@ struct Training {
     research: Option<i32>,
     /// `kind` replaces this building. Not a trained unit and not a research level.
     structure_upgrade: bool,
+    /// Retained only when the source policy publishes the target type while pending.
+    original_kind: Option<i32>,
     food: i32,
     finish: f64,
     through: f64,
@@ -594,6 +596,112 @@ impl ObjectHost {
             .any(|job| job.producer == producer)
     }
 
+    pub(super) fn pending_upgrade_food_kind(
+        &self,
+        producer: HandleId,
+        column: &str,
+    ) -> Option<[u8; 4]> {
+        let job = self
+            .training
+            .jobs
+            .iter()
+            .find(|job| job.producer == producer && job.structure_upgrade)?;
+        match column {
+            "fused" => Some(job.kind.to_be_bytes()),
+            "fmade" => job.original_kind.map(i32::to_be_bytes),
+            _ => None,
+        }
+    }
+
+    fn upgrade_food_columns(
+        &self,
+        producer: HandleId,
+        target: &Definition,
+    ) -> Result<[[i32; 2]; 2], Error> {
+        let current = self.executed_unit(producer)?;
+        let original = self
+            .training
+            .jobs
+            .iter()
+            .find(|job| job.producer == producer && job.structure_upgrade)
+            .and_then(|job| job.original_kind)
+            .map_or(current.definition.rawcode, i32::to_be_bytes);
+        let original = self.resolve_form_definition(original)?;
+        let mut amounts = [[0; 2]; 2];
+        for (row, definition) in amounts.iter_mut().zip([&original, target]) {
+            for (amount, column) in row.iter_mut().zip(["fused", "fmade"]) {
+                *amount = self
+                    .unit_food_amount(definition, column)
+                    .map_err(|why| self.training_error(why))?;
+                if *amount < 0 {
+                    return Err(self.training_error("negative upgrade food class is not qualified"));
+                }
+            }
+        }
+        Ok(amounts)
+    }
+
+    fn prepare_upgrade_food_totals(
+        &self,
+        producer: HandleId,
+        next: [i32; 2],
+        enabled: bool,
+    ) -> Result<(), Error> {
+        let record = self.executed_unit(producer)?;
+        for (index, column) in ["fused", "fmade"].into_iter().enumerate() {
+            let definition = self
+                .pending_upgrade_food_kind(producer, column)
+                .map(|kind| self.resolve_form_definition(kind))
+                .transpose()?;
+            let current = if index == 0 && self.unit_food_disabled(producer) {
+                0
+            } else {
+                self.unit_food_amount(definition.as_ref().unwrap_or(&record.definition), column)
+                    .map_err(|why| self.training_error(why))?
+            };
+            let next = if index == 0 && !enabled {
+                0
+            } else {
+                next[index]
+            };
+            self.live_food(record.owner, column)?
+                .checked_sub(current)
+                .and_then(|total| total.checked_add(next))
+                .ok_or_else(|| self.training_error("upgrade food counter overflow"))?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_upgrade_food_toggle(
+        &self,
+        producer: HandleId,
+        enable: bool,
+    ) -> Result<(), Error> {
+        if enable != self.unit_food_disabled(producer) {
+            return Ok(());
+        }
+        if let Some(job) = self.training.jobs.iter().find(|job| {
+            job.producer == producer && job.structure_upgrade && job.original_kind.is_none()
+        }) {
+            let target = self.resolve_form_definition(job.kind.to_be_bytes())?;
+            let [original, target] = self.upgrade_food_columns(producer, &target)?;
+            if original[0] != target[0] {
+                return Err(
+                    self.training_error("mode0 changed-food pending toggle is not qualified")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn pending_structure_upgrade_target(&self, producer: HandleId) -> Option<i32> {
+        self.training
+            .jobs
+            .iter()
+            .find(|job| job.producer == producer && job.structure_upgrade)
+            .map(|job| job.kind)
+    }
+
     pub(super) fn producer_is_upgrading(&self, producer: HandleId) -> bool {
         self.training
             .jobs
@@ -607,6 +715,78 @@ impl ObjectHost {
                 job.owner = owner;
             }
         }
+    }
+
+    pub(super) fn pending_form_upgrade(&self, producer: HandleId) -> bool {
+        self.training
+            .jobs
+            .iter()
+            .any(|job| job.producer == producer && job.original_kind.is_some())
+    }
+
+    pub(super) fn prepare_pending_upgrade_health_factor(
+        &self,
+        producer: HandleId,
+        factor: f32,
+    ) -> Result<(), Error> {
+        if self.pending_form_upgrade(producer)
+            && factor != self.executed_unit(producer)?.health_handicap
+        {
+            return Err(self.training_error("mode1 upgrade changes the health-factor class"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_pending_upgrade_pool_change(
+        &self,
+        producer: HandleId,
+        projected: &super::unit_vitals::Vitals,
+    ) -> Result<(), Error> {
+        if !self.pending_form_upgrade(producer) {
+            return Ok(());
+        }
+        let current = self
+            .executed_unit(producer)?
+            .vitals
+            .ok_or_else(|| self.training_error("mode1 upgrade pools are absent"))?;
+        if current.max_life != projected.max_life
+            || current.max_mana != projected.max_mana
+            || current.mana != projected.mana
+            || current.regen.life_per_second != projected.regen.life_per_second
+            || current.regen.mana_per_second != projected.regen.mana_per_second
+            || current.regen.life_type != projected.regen.life_type
+        {
+            return Err(self.training_error("mode1 upgrade changed pool bonuses are not qualified"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_structure_upgrade_transfer(
+        &self,
+        producer: HandleId,
+        owner: HandleId,
+    ) -> Result<(), Error> {
+        self.prepare_pending_upgrade_health_factor(producer, self.owner_health_handicap(owner)?)?;
+        if let Some(kind) = self.pending_structure_upgrade_target(producer) {
+            let target = self.resolve_form_definition(kind.to_be_bytes())?;
+            let [original, target] = self.upgrade_food_columns(producer, &target)?;
+            if original != target {
+                return Err(
+                    self.training_error("changed-food upgrade ownership transfer is not qualified")
+                );
+            }
+            for (index, column) in ["fused", "fmade"].into_iter().enumerate() {
+                let amount = if index == 0 && self.unit_food_disabled(producer) {
+                    0
+                } else {
+                    original[index]
+                };
+                self.live_food(owner, column)?
+                    .checked_add(amount)
+                    .ok_or_else(|| self.training_error("upgrade transfer food counter overflow"))?;
+            }
+        }
+        Ok(())
     }
 
     /// Cancel one queue entry; public script order strings are not cancellation commands.
@@ -631,6 +811,31 @@ impl ObjectHost {
             return Err(self.training_error("training owner changed"));
         }
         let paused = record.paused_since.is_some();
+        if job.structure_upgrade {
+            let target = self.resolve_form_definition(job.kind.to_be_bytes())?;
+            let [original, _] = self.upgrade_food_columns(producer, &target)?;
+            self.prepare_upgrade_food_totals(producer, original, true)?;
+        }
+        let replacement = if let Some(original) = job.original_kind {
+            if record.definition.rawcode != job.kind.to_be_bytes() {
+                return Err(self.training_error("mode1 pending type changed before cancellation"));
+            }
+            let target = self.resolve_form_definition(job.kind.to_be_bytes())?;
+            self.prepare_mode1_pools(producer, original, &target, false)?;
+            let pools = self
+                .executed_unit(producer)?
+                .vitals
+                .expect("validated pools");
+            let mut replacement = self.prepare_upgrade_replacement(producer, original)?;
+            replacement.vitals.life = pools.life;
+            replacement.vitals.max_life = pools.max_life;
+            replacement.vitals.mana = pools.mana;
+            replacement.vitals.max_mana = pools.max_mana;
+            replacement.abilities = self.executed_unit(producer)?.abilities.clone();
+            Some(replacement)
+        } else {
+            None
+        };
         let refund = [
             self.training_refund(job.gold, job.refund_kind())?,
             self.training_refund(job.lumber, job.refund_kind())?,
@@ -693,7 +898,13 @@ impl ObjectHost {
         if let Some((next_index, head)) = next {
             self.training.jobs[next_index] = head;
         }
+        if let Some(replacement) = replacement {
+            self.commit_upgrade_replacement(producer, replacement);
+        }
         self.training.jobs.remove(index);
+        if job.structure_upgrade {
+            self.reenroll_structure_upgrade_food(producer);
+        }
         self.commit_training_debit(credit);
         self.commit_training_events(cancel, producer, job.kind, None);
         if let Some((_, head)) = next {
@@ -726,6 +937,7 @@ impl ObjectHost {
         let mut refund = [0_i32; 2];
         let mut food = 0_i32;
         let mut upgrading = None;
+        let mut pending_form = false;
         let mut ordinary = false;
         for job in self
             .training
@@ -739,6 +951,7 @@ impl ObjectHost {
             owner = Some(job.owner);
             if job.structure_upgrade {
                 upgrading = Some(job.kind);
+                pending_form |= job.original_kind.is_some();
                 continue;
             }
             ordinary = true;
@@ -759,7 +972,10 @@ impl ObjectHost {
         if upgrading.is_some() && ordinary {
             return Err(self.training_error("mixed upgrade and training queue is not qualified"));
         }
-        let upgrade = if dying && let Some(kind) = upgrading {
+        let upgrade = if dying
+            && !pending_form
+            && let Some(kind) = upgrading
+        {
             let mut upgrade = self.prepare_upgrade_replacement(producer, kind)?;
             let record = self.executed_unit(producer)?;
             let levels = |abilities: &Option<super::UnitAbilities>| {
@@ -1357,8 +1573,8 @@ impl ObjectHost {
             // site (the counters at `+0x3c` and `+0x40` are not decoded). The
             // target's `Requires` stands in for check slot `0x328`. Source cost
             // mode prices the job; its source upgrade rate controls refunds.
-            // Completion retains the life percentage in the target's base pool;
-            // researched bonuses are not rebased onto that base.
+            // Completion uses the selected pending-form policy; changed pool
+            // bonuses remain unsupported in either source base-pool path.
             if requested == *b"ugol" || !self.training_prerequisites_met(&definition, owner)? {
                 return Ok(false);
             }
@@ -1417,7 +1633,35 @@ impl ObjectHost {
                         Failure::UnitActivity("structure upgrade deadline cannot advance".into()),
                     ));
                 }
-                self.prepare_upgrade_vitals(producer, &definition)?;
+                let mode1 = self.structure_upgrade_policy()?.in_progress_id_change;
+                let original_kind = mode1.then(|| {
+                    i32::from_be_bytes(
+                        self.executed_unit(producer)
+                            .expect("selected producer")
+                            .definition
+                            .rawcode,
+                    )
+                });
+                let [original_food, target_food] =
+                    self.upgrade_food_columns(producer, &definition)?;
+                self.prepare_upgrade_food_totals(
+                    producer,
+                    [target_food[0], original_food[1]],
+                    true,
+                )?;
+                self.prepare_upgrade_food_totals(producer, target_food, true)?;
+                let replacement = if let Some(original) = original_kind {
+                    let (vitals, combat) =
+                        self.prepare_mode1_pools(producer, original, &definition, false)?;
+                    let mut replacement =
+                        self.prepare_upgrade_replacement_with_pools(producer, kind, Some(vitals))?;
+                    replacement.form.combat = combat;
+                    replacement.abilities = self.executed_unit(producer)?.abilities.clone();
+                    Some(replacement)
+                } else {
+                    self.prepare_upgrade_vitals(producer, &definition)?;
+                    None
+                };
                 let Some(debit) =
                     self.prepare_structure_upgrade_payment(owner, [gold, lumber], false, 0)?
                 else {
@@ -1434,11 +1678,16 @@ impl ObjectHost {
                     kind,
                     research: None,
                     structure_upgrade: true,
+                    original_kind,
                     food: 0,
                     finish,
                     through: now,
                     pause: None,
                 });
+                if let Some(replacement) = replacement {
+                    self.commit_upgrade_replacement(producer, replacement);
+                }
+                self.reenroll_structure_upgrade_food(producer);
                 self.commit_training_debit(debit);
             }
             return Ok(true);
@@ -1533,6 +1782,7 @@ impl ObjectHost {
             kind,
             research: None,
             structure_upgrade: false,
+            original_kind: None,
             food,
             finish: completion,
             through: now,
@@ -1715,6 +1965,7 @@ impl ObjectHost {
             kind: upgrade,
             research: Some(level),
             structure_upgrade: false,
+            original_kind: None,
             food: 0,
             finish: now + f64::from(seconds),
             through: now,
@@ -1912,12 +2163,162 @@ impl ObjectHost {
                 index += 1;
                 continue;
             }
-            let upgrade = self.prepare_upgrade_replacement(job.producer, job.kind)?;
-            self.commit_upgrade_replacement(job.producer, upgrade);
-
+            let target = self.resolve_form_definition(job.kind.to_be_bytes())?;
+            let [_, target_food] = self.upgrade_food_columns(job.producer, &target)?;
+            self.prepare_upgrade_food_totals(
+                job.producer,
+                target_food,
+                !self.unit_food_disabled(job.producer),
+            )?;
+            if let Some(original) = job.original_kind {
+                if record.definition.rawcode != job.kind.to_be_bytes() {
+                    return Err(self.training_error("mode1 pending type changed before completion"));
+                }
+                let (vitals, combat) =
+                    self.prepare_mode1_pools(job.producer, original, &target, true)?;
+                let Entry::Unit { record } = self
+                    .inner
+                    .entry_mut(job.producer)
+                    .expect("prepared upgrade")
+                else {
+                    unreachable!()
+                };
+                record.vitals = Some(vitals);
+                if let (Some(current), Some(combat)) = (&mut record.combat, combat) {
+                    current.armor = combat.armor;
+                    current.defense = combat.defense;
+                }
+            } else {
+                let upgrade = self.prepare_upgrade_replacement(job.producer, job.kind)?;
+                self.commit_upgrade_replacement(job.producer, upgrade);
+            }
             self.training.jobs.remove(index);
         }
         Ok(())
+    }
+
+    fn prepare_mode1_pools(
+        &self,
+        producer: HandleId,
+        original_kind: i32,
+        target: &Definition,
+        finish: bool,
+    ) -> Result<(super::unit_vitals::Vitals, Option<super::combat::Combat>), Error> {
+        let original = self.resolve_form_definition(original_kind.to_be_bytes())?;
+        let record = self.executed_unit(producer)?;
+        let fail = |why| self.training_error(why);
+        if !super::unit_types::structure(&original).map_err(fail)?
+            || !super::unit_types::structure(target).map_err(fail)?
+            || super::unit_types::flying(&original) != super::unit_types::flying(target)
+            || ![original.rawcode, target.rawcode].contains(&record.definition.rawcode)
+            || record.admitted_order.is_some_and(|(_, active)| active)
+        {
+            return Err(fail(
+                "mode1 upgrade form or active-order class is not qualified".into(),
+            ));
+        }
+        let rounding = self
+            .health_rounding()
+            .ok_or_else(|| fail("mode1 upgrade health rounding is not admitted".into()))?;
+        if self.owner_health_handicap(record.owner)? != record.health_handicap {
+            return Err(fail(
+                "mode1 upgrade owner health-factor class differs".into(),
+            ));
+        }
+        let current = record
+            .vitals
+            .ok_or_else(|| fail("mode1 upgrade pools are absent".into()))?;
+        let base = self
+            .prepare_unit_vitals(&original, record.health_handicap)?
+            .ok_or_else(|| fail("mode1 original pools are absent".into()))?;
+        let mut next = self
+            .prepare_unit_vitals(target, record.health_handicap)?
+            .ok_or_else(|| fail("mode1 target pools are absent".into()))?;
+        for pools in [&current, &base, &next] {
+            if let Some(problem) = Self::projected_pool_problem(pools) {
+                return Err(fail(problem.into()));
+            }
+            if pools.mana != 0. || pools.max_mana != 0. {
+                return Err(fail("mode1 upgrade mana class is not qualified".into()));
+            }
+        }
+        if next.max_life < base.max_life {
+            return Err(fail("mode1 negative life delta is not qualified".into()));
+        }
+        let delta = rounding.round(next.max_life - base.max_life);
+        if !delta.is_finite() || delta < 0. {
+            return Err(fail(
+                "mode1 negative or nonfinite life delta is not qualified".into(),
+            ));
+        }
+        if current.max_life != base.max_life {
+            return Err(fail(
+                "mode1 upgrade changed pool bonuses are not qualified".into(),
+            ));
+        }
+        let baseline = self
+            .prepare_unit_vitals(&record.definition, record.health_handicap)?
+            .expect("vitals admitted");
+        if current.regen.life_per_second != baseline.regen.life_per_second
+            || current.regen.mana_per_second != baseline.regen.mana_per_second
+            || current.regen.life_type != baseline.regen.life_type
+        {
+            return Err(fail(
+                "mode1 upgrade changed regeneration bonuses are not qualified".into(),
+            ));
+        }
+        self.prepare_structure_upgrade_inventory(producer)?;
+        let source_abilities = self.prepare_unit_abilities(&original)?;
+        let target_abilities = self.prepare_unit_abilities(target)?;
+        let levels = |abilities: &Option<super::UnitAbilities>| {
+            abilities.as_ref().map(|a| a.levels().collect::<Vec<_>>())
+        };
+        if source_abilities != target_abilities
+            || levels(&record.abilities) != levels(&source_abilities)
+            || record.abilities.as_ref().is_some_and(|a| a.hero.is_some())
+        {
+            return Err(fail(
+                "mode1 upgrade ability or hero class is not qualified".into(),
+            ));
+        }
+        let original_combat = self.prepare_unit_combat(&original)?;
+        let mut combat = self.prepare_unit_combat(target)?;
+        match (&original_combat, &mut combat, &record.combat) {
+            (Some(base), Some(next), Some(current)) => {
+                if self.victim_armor(producer)? != (base.armor, base.defense) {
+                    return Err(fail(
+                        "mode1 upgrade changed armor bonuses are not qualified".into(),
+                    ));
+                }
+                next.armor = if finish {
+                    current.armor + (next.armor - base.armor)
+                } else {
+                    current.armor
+                };
+                if !next.armor.is_finite() {
+                    return Err(fail("mode1 upgrade armor overflow".into()));
+                }
+                if !finish {
+                    next.defense = current.defense;
+                }
+            }
+            (None, None, None) => {}
+            _ => return Err(fail("mode1 upgrade combat class differs".into())),
+        }
+        if finish {
+            next = current;
+            next.life += delta;
+            next.max_life += delta;
+        } else {
+            next.life = current.life;
+            next.max_life = current.max_life;
+            next.mana = current.mana;
+            next.max_mana = current.max_mana;
+        }
+        if let Some(problem) = Self::projected_pool_problem(&next) {
+            return Err(fail(problem.into()));
+        }
+        Ok((next, combat))
     }
 
     fn prepare_upgrade_vitals(
@@ -1963,8 +2364,20 @@ impl ObjectHost {
         producer: HandleId,
         kind: i32,
     ) -> Result<UpgradeReplacement, Error> {
+        self.prepare_upgrade_replacement_with_pools(producer, kind, None)
+    }
+
+    fn prepare_upgrade_replacement_with_pools(
+        &mut self,
+        producer: HandleId,
+        kind: i32,
+        pools: Option<super::unit_vitals::Vitals>,
+    ) -> Result<UpgradeReplacement, Error> {
         let definition = self.resolve_form_definition(kind.to_be_bytes())?;
-        let vitals = self.prepare_upgrade_vitals(producer, &definition)?;
+        let vitals = match pools {
+            Some(pools) => pools,
+            None => self.prepare_upgrade_vitals(producer, &definition)?,
+        };
         let form = if self.has_unit_model_loader() {
             self.prepare_form(
                 producer,

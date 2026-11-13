@@ -968,6 +968,7 @@ impl ObjectHost {
         let mut work = usize::MAX;
         let mut projections = Vec::with_capacity(owned.len());
         for id in owned {
+            self.prepare_pending_upgrade_health_factor(id, requested)?;
             let record = self.executed_unit(id)?;
             let mut vitals = record.vitals.expect("filtered to vitals");
             if let Some((life, mana)) =
@@ -1821,6 +1822,8 @@ impl ObjectHost {
                 Failure::UnitState("incomplete construction ownership transfer is not qualified"),
             ));
         }
+        self.prepare_structure_upgrade_transfer(*unit, *player)?;
+        let upgrades = self.prepare_upgrade_transfer(*unit, previous, *player)?;
         // Ordinary queues refund on transfer; an upgrade keeps its paid deadline.
         let training = if self.producer_has_training(*unit) && !self.producer_is_upgrading(*unit) {
             self.prepare_training_removal(*unit)?
@@ -1866,7 +1869,6 @@ impl ObjectHost {
         } else {
             None
         };
-        let upgrades = self.prepare_upgrade_transfer(*unit, previous, *player)?;
         if self
             .guard_state()
             .and_then(|state| state.get(*unit))

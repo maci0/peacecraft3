@@ -10,12 +10,18 @@ const GRAPH_WORK: usize = 65536;
 const QUERY: &str = "GetPlayerTechCount";
 
 // shortcut: custom overlap/cycle graphs use one provider union; qualify those native cases before claiming parity.
+#[derive(Debug)]
+struct Providers {
+    completed: HashSet<[u8; 4]>,
+    pending_upgrade: HashSet<[u8; 4]>,
+}
+
 fn provider_types(
     catalog: &dyn ObjectCatalog,
     requested: [u8; 4],
     specific: bool,
     mut work: usize,
-) -> Result<Option<HashSet<[u8; 4]>>, String> {
+) -> Result<Option<Providers>, String> {
     if !requested.iter().all(u8::is_ascii_graphic) {
         return Ok(None);
     }
@@ -34,13 +40,15 @@ fn provider_types(
         }
         Err(error) => return Err(format!("technology catalog: {error:?}")),
     };
-    let mut pending = vec![requested];
-    let mut providers = HashSet::new();
-    while let Some(code) = pending.pop() {
-        if providers.contains(&code) {
+    let mut pending = vec![(requested, false)];
+    let mut visited = HashSet::new();
+    let mut completed = HashSet::new();
+    let mut pending_upgrade = HashSet::new();
+    while let Some((code, after_upgrade)) = pending.pop() {
+        if visited.contains(&(code, after_upgrade)) {
             continue;
         }
-        let definition = if code == requested {
+        let definition = if code == requested && root.is_some() {
             root.take().expect("first root visit")
         } else {
             pay(&mut work)?;
@@ -51,10 +59,20 @@ fn provider_types(
         if definition.rawcode != code || definition.kind != ObjectKind::Unit {
             return Err(format!("technology catalog identity differs for {code:?}"));
         }
-        providers
+        visited
+            .try_reserve(1)
+            .map_err(|_| "technology visited capacity")?;
+        completed
             .try_reserve(1)
             .map_err(|_| "technology provider capacity")?;
-        providers.insert(code);
+        visited.insert((code, after_upgrade));
+        completed.insert(code);
+        if after_upgrade {
+            pending_upgrade
+                .try_reserve(1)
+                .map_err(|_| "technology pending provider capacity")?;
+            pending_upgrade.insert(code);
+        }
         for key in ["DependencyOr", "Upgrade"] {
             if specific && key == "Upgrade" {
                 continue;
@@ -76,11 +94,14 @@ fn provider_types(
                 pending
                     .try_reserve(1)
                     .map_err(|_| "technology relationship capacity")?;
-                pending.push(next);
+                pending.push((next, after_upgrade || key == "Upgrade"));
             }
         }
     }
-    Ok(Some(providers))
+    Ok(Some(Providers {
+        completed,
+        pending_upgrade,
+    }))
 }
 
 pub(super) fn live(record: &super::ExecutedUnit) -> Result<bool, &'static str> {
@@ -115,29 +136,51 @@ impl ObjectHost {
             return Ok(None);
         };
         let mut count = 0i32;
-        for entry in &self.inner.arena {
+        for (slot, entry) in self.inner.arena.iter().enumerate() {
             let counted = match entry {
-                Entry::Unit { record }
-                    if record.owner == owner && providers.contains(&record.definition.rawcode) =>
-                {
-                    live(record).map_err(|detail| fail(detail.into()))?
+                Entry::Unit { record } if record.owner == owner => {
+                    let pending =
+                        self.pending_structure_upgrade_target(self.inner.id(slot, QUERY)?);
+                    let provider = if let Some(kind) = pending {
+                        providers.pending_upgrade.contains(&kind.to_be_bytes())
+                    } else {
+                        providers.completed.contains(&record.definition.rawcode)
+                    };
+                    provider && live(record).map_err(|detail| fail(detail.into()))?
                 }
                 Entry::RemovedUnit {
                     owner: previous,
                     kind,
-                    alive,
+                    technology,
                     removed_at,
                     ..
-                } if *previous == owner && providers.contains(kind) => {
-                    if removed_at.is_none() {
+                } if *previous == owner => {
+                    use super::super::RemovedUnitTechnology;
+                    if removed_at.is_some() && !self.removed_unit_state_retained(*removed_at) {
+                        continue;
+                    }
+                    if removed_at.is_none()
+                        && (providers.completed.contains(kind)
+                            || matches!(technology, Some(RemovedUnitTechnology::PendingUpgrade(target)) if providers.pending_upgrade.contains(target)))
+                    {
                         return Err(fail(
                             "removed technology needs the admitted game clock".into(),
                         ));
                     }
-                    self.removed_unit_state_retained(*removed_at)
-                        && alive.ok_or_else(|| {
-                            fail("removed technology liveness is not admitted".into())
-                        })?
+                    let provider = match technology {
+                        Some(RemovedUnitTechnology::Inactive) => false,
+                        Some(RemovedUnitTechnology::Completed) => {
+                            providers.completed.contains(kind)
+                        }
+                        Some(RemovedUnitTechnology::PendingUpgrade(target)) => {
+                            providers.pending_upgrade.contains(target)
+                        }
+                        None if providers.completed.contains(kind) => {
+                            return Err(fail("removed technology liveness is not admitted".into()));
+                        }
+                        None => false,
+                    };
+                    provider && self.removed_unit_state_retained(*removed_at)
                 }
                 _ => false,
             };
