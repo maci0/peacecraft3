@@ -126,7 +126,7 @@ fn timed_filter_refuses_without_clock_and_invalid_setters_preserve_the_previous_
     }
     assert!(
         vm.host()
-            .native("SetCineFilterTexture", &[Value::Str("x".repeat(65))])
+            .native("SetCineFilterTexture", &[Value::Str("x".repeat(65).into())])
             .is_err()
     );
     assert!(
@@ -567,4 +567,55 @@ fn multiboard_suppression_retains_the_executed_flag_without_a_default() {
     assert_eq!(h.presentation().unwrap().cinematic_subtitles, None);
     let wrong = common.replace("takes boolean flag", "takes integer flag");
     assert!(host(&wrong, "// map").admit_presentation(64).is_err());
+}
+
+#[test]
+fn invalid_byte_texture_refusal_preserves_draft_and_budget_precedes_decoding() {
+    let mut h = host(COMMON, SETUP);
+    h.admit_presentation(64).unwrap();
+    let mut vm = h.into_vm();
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    let error = vm
+        .host()
+        .native("SetCineFilterTexture", &[Value::Str(vec![0xff; 65].into())])
+        .unwrap_err();
+    assert!(!error.contains("UTF-8"), "{error}");
+    let error = vm
+        .host()
+        .native("SetCineFilterTexture", &[Value::Str(vec![0xff].into())])
+        .unwrap_err();
+    assert!(error.contains("UTF-8"), "{error}");
+    vm.host()
+        .native("DisplayCineFilter", &[Value::Bool(true)])
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .presentation()
+            .unwrap()
+            .filter
+            .as_ref()
+            .unwrap()
+            .texture,
+        "synthetic.tga"
+    );
+    vm.host()
+        .native(
+            "SetCineFilterTexture",
+            &[Value::Str("recovered.tga".into())],
+        )
+        .unwrap();
+    vm.host()
+        .native("DisplayCineFilter", &[Value::Bool(true)])
+        .unwrap();
+    assert_eq!(
+        vm.host()
+            .presentation()
+            .unwrap()
+            .filter
+            .as_ref()
+            .unwrap()
+            .texture,
+        "recovered.tga"
+    );
 }

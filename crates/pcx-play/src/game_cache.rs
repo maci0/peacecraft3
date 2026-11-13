@@ -36,7 +36,7 @@ pub(crate) enum Stored {
     Integer(i32),
     Real(u32),
     Boolean(bool),
-    String(String),
+    String(pcx_script::ScriptString),
     Unit(Vec<u8>),
 }
 impl Stored {
@@ -73,14 +73,15 @@ pub(crate) struct Profile {
     unit_bytes: usize,
 }
 
-pub(crate) fn key(text: &str, limit: usize) -> Result<String, String> {
+pub(crate) fn key(text: impl AsRef<[u8]>, limit: usize) -> Result<String, String> {
+    let text = text.as_ref();
     if text.len() > limit {
         return Err("game-cache text byte policy exceeded".into());
     }
-    if !text.is_ascii() || text.contains('\0') {
+    if !text.is_ascii() || text.contains(&0) {
         return Err("game-cache non-ASCII keys or embedded NUL are unsupported".into());
     }
-    Ok(text.to_ascii_lowercase())
+    String::from_utf8(text.to_ascii_lowercase()).map_err(|_| "game-cache ASCII key encoding".into())
 }
 
 impl Profile {
@@ -195,7 +196,14 @@ impl Profile {
                 .values()
                 .any(|value| matches!(value, Stored::Unit(_)))
         });
-        out.bytes(if has_units {
+        let raw_strings = self.files.values().any(|values| {
+            values
+                .values()
+                .any(|value| matches!(value, Stored::String(text) if text.as_utf8().is_err()))
+        });
+        out.bytes(if raw_strings {
+            b"PC3CACHE\x03"
+        } else if has_units {
             b"PC3CACHE\x02"
         } else {
             b"PC3CACHE\x01"
@@ -212,7 +220,10 @@ impl Profile {
                     Stored::Integer(v) => out.bytes(&v.to_le_bytes())?,
                     Stored::Real(bits) => out.bytes(&bits.to_le_bytes())?,
                     Stored::Boolean(v) => out.bytes(&[u8::from(*v)])?,
-                    Stored::String(v) => out.text(v)?,
+                    Stored::String(v) => {
+                        out.number(v.len())?;
+                        out.bytes(v.as_bytes())?;
+                    }
                     Stored::Unit(bytes) => {
                         out.number(bytes.len())?;
                         out.bytes(bytes)?;
@@ -228,7 +239,7 @@ impl Profile {
         }
         let mut input = Reader { bytes, cursor: 0 };
         let header = input.take(9)?;
-        if header != b"PC3CACHE\x01" && header != b"PC3CACHE\x02" {
+        if header != b"PC3CACHE\x01" && header != b"PC3CACHE\x02" && header != b"PC3CACHE\x03" {
             return Err(
                 "unsupported campaign cache format/version; original W3V import is unavailable"
                     .into(),
@@ -277,13 +288,17 @@ impl Profile {
                         _ => return Err("invalid saved game-cache boolean".into()),
                     },
                     3 => {
-                        let text = input.text(budget.text_bytes)?;
-                        if text.contains('\0') {
+                        let text: pcx_script::ScriptString = if header == b"PC3CACHE\x03" {
+                            input.blob(budget.text_bytes)?.into()
+                        } else {
+                            input.text(budget.text_bytes)?.into()
+                        };
+                        if text.as_bytes().contains(&0) {
                             return Err("saved game-cache string contains unsupported NUL".into());
                         }
                         Stored::String(text)
                     }
-                    4 if header == b"PC3CACHE\x02" => {
+                    4 if header == b"PC3CACHE\x02" || header == b"PC3CACHE\x03" => {
                         let length = input.number()?;
                         let bytes = input.take(length)?;
                         CachedUnit::decode(bytes, budget.storage_bytes)?;
@@ -359,12 +374,20 @@ impl<'a> Reader<'a> {
     fn number(&mut self) -> Result<usize, String> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("four bytes")) as usize)
     }
-    fn text(&mut self, limit: usize) -> Result<String, String> {
+    fn blob(&mut self, limit: usize) -> Result<Vec<u8>, String> {
         let len = self.number()?;
         if len > limit {
             return Err("saved game-cache text policy exceeded".into());
         }
-        String::from_utf8(self.take(len)?.to_vec())
+        let bytes = self.take(len)?;
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(bytes.len())
+            .map_err(|_| "game-cache allocation failed")?;
+        copy.extend_from_slice(bytes);
+        Ok(copy)
+    }
+    fn text(&mut self, limit: usize) -> Result<String, String> {
+        String::from_utf8(self.blob(limit)?)
             .map_err(|_| "saved game-cache text is not UTF-8".into())
     }
 }

@@ -173,8 +173,32 @@ fn native_string_quest_text_localizes_but_icon_path_stays_raw() {
     .unwrap();
     assert_eq!(*calls.borrow(), [7, 8, 9]);
     let state = h.quest_session().unwrap();
-    assert_eq!(state.quest_title(qid).unwrap(), Some("TRIGSTR_23"));
-    assert_eq!(state.quest_description(qid).unwrap(), Some(""));
-    assert_eq!(state.quest_icon_path(qid).unwrap(), Some("TRIGSTR_7"));
-    assert_eq!(state.item_description(item_id).unwrap(), Some("^^x^^"));
+    assert_eq!(
+        state
+            .quest_title(qid)
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("TRIGSTR_23")
+    );
+    assert_eq!(
+        state
+            .quest_description(qid)
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("")
+    );
+    assert_eq!(
+        state
+            .quest_icon_path(qid)
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("TRIGSTR_7")
+    );
+    assert_eq!(
+        state
+            .item_description(item_id)
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("^^x^^")
+    );
 }

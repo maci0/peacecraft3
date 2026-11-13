@@ -151,11 +151,14 @@ impl MapStartupHost {
             Ok(Value::Null)
         })())
     }
-    fn run_preloader(&mut self, path: &str) -> Result<(), String> {
+    fn run_preloader(&mut self, path: &pcx_script::ScriptString) -> Result<(), String> {
         let state = self.preload.as_mut().expect("admitted");
         if !state.filename(path)? {
             return Ok(());
         }
+        let path = path
+            .as_utf8()
+            .map_err(|why| format!("Preloader: unsupported path UTF8: {why}"))?;
         if state.depth >= 8 || state.report.scripts.len() >= 128 {
             return Err("Preloader: script recursion/count budget".into());
         }
@@ -340,7 +343,13 @@ mod native_string_tests {
                 .contains("cross-program callbacks")
         );
         assert_eq!(
-            startup.objects().map_config().unwrap().name.as_deref(),
+            startup
+                .objects()
+                .map_config()
+                .unwrap()
+                .name
+                .as_ref()
+                .map(|s| s.as_utf8().unwrap()),
             Some("explicit source")
         );
     }

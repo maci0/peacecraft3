@@ -138,7 +138,22 @@ impl ChapterTrace {
     pub fn encode(&self) -> Vec<u8> {
         use std::fmt::Write;
         let mut out = format!(
-            "pcx-script-trace 1\nchapter {}\nedition {}\nversion {}\nasset-source {}\nticks {}\n",
+            "pcx-script-trace {}\nchapter {}\nedition {}\nversion {}\nasset-source {}\nticks {}\n",
+            if self
+                .calls
+                .iter()
+                .map(|c| &c.result)
+                .chain(
+                    self.natives
+                        .iter()
+                        .flat_map(|n| n.args.iter().chain(std::iter::once(&n.result)))
+                )
+                .any(|v| matches!(v,Value::Str(s) if s.as_utf8().is_err()))
+            {
+                2
+            } else {
+                1
+            },
             hex(&self.chapter),
             hex(&self.identity.edition),
             hex(&self.identity.version),
@@ -183,13 +198,14 @@ impl ChapterTrace {
         out.into_bytes()
     }
 }
-fn hex(text: &str) -> String {
+fn hex(text: impl AsRef<[u8]>) -> String {
+    let text = text.as_ref();
     use std::fmt::Write;
     if text.is_empty() {
         return "-".into();
     }
     let mut out = String::new();
-    for byte in text.bytes() {
+    for byte in text {
         let _ = write!(out, "{byte:02x}");
     }
     out
@@ -854,7 +870,8 @@ mod native_string_recording_tests {
                 .map_config()
                 .unwrap()
                 .name
-                .as_deref(),
+                .as_ref()
+                .map(|s| s.as_utf8().unwrap()),
             Some("TRIGSTR_23 ^^x^^")
         );
     }

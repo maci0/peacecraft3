@@ -176,11 +176,11 @@ impl Registry {
     }
 
     /// Native ASCII comparison ignores case and stops at the first NUL.
-    pub fn id(&self, name: &str) -> Option<i32> {
-        let name = name.split('\0').next().unwrap_or("");
+    pub fn id(&self, name: impl AsRef<[u8]>) -> Option<i32> {
+        let name = pcx_script::text::native_c_bytes(name.as_ref());
         self.entries
             .iter()
-            .find(|(s, _)| s.eq_ignore_ascii_case(name))
+            .find(|(s, _)| s.as_bytes().eq_ignore_ascii_case(name))
             .map(|(_, n)| *n)
     }
 

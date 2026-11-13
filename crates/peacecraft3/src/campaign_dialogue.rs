@@ -378,7 +378,15 @@ impl DialogueAssets {
         materials: &mut Assets<BackdropImage>,
         show_text: bool,
     ) -> Result<Entity, String> {
-        let parsed = crate::rich_text::parse(&scene.text).map_err(|e| e.to_string())?;
+        let speaker = show_text
+            .then(|| scene.speaker.as_utf8())
+            .transpose()
+            .map_err(|e| format!("transmission speaker is not UTF-8: {e}"))?;
+        let text = scene
+            .text
+            .as_utf8()
+            .map_err(|e| format!("transmission text is not UTF-8: {e}"))?;
+        let parsed = crate::rich_text::parse(text).map_err(|e| e.to_string())?;
         if !parsed.unsupported.is_empty() {
             return Err("transmission contains unsupported substitutions".into());
         }
@@ -480,7 +488,7 @@ impl DialogueAssets {
                     .spawn((
                         position,
                         Text::new(if i == 0 {
-                            scene.speaker.clone()
+                            speaker.expect("text enabled").to_owned()
                         } else {
                             String::new()
                         }),

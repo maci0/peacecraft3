@@ -262,7 +262,10 @@ fn presentation_records_keep_executed_arguments_for_their_consumers() {
     )
     .unwrap();
     let scene = h.cinematic_scene().unwrap();
-    assert_eq!((scene.speaker.as_str(), scene.started), ("Arthas", 100.0));
+    assert_eq!(
+        (scene.speaker.as_utf8().unwrap(), scene.started),
+        ("Arthas", 100.0)
+    );
     h.native("EndCinematicScene", &[]).unwrap();
     assert!(h.cinematic_scene().is_none());
 }
@@ -541,7 +544,10 @@ fn timer_dialogs_retain_executed_state_and_refuse_unestablished_uses() {
     let live: Vec<_> = h.timer_dialogs().collect();
     assert_eq!(live.len(), 1);
     let (_, state) = live[0];
-    assert_eq!(state.title.as_deref(), Some("Reinforcements"));
+    assert_eq!(
+        state.title.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("Reinforcements")
+    );
     assert_eq!(
         (state.speed, state.real_time_remaining),
         (Some(2.5), Some(31.0))
@@ -588,7 +594,13 @@ fn native_string_timer_titles_and_cinematic_fields_use_distinct_lookups() {
     )
     .unwrap();
     assert_eq!(
-        h.timer_dialogs().next().unwrap().1.title.as_deref(),
+        h.timer_dialogs()
+            .next()
+            .unwrap()
+            .1
+            .title
+            .as_ref()
+            .map(|s| s.as_utf8().unwrap()),
         Some("TRIGSTR_23")
     );
     let color = h.native("ConvertPlayerColor", &[Value::Int(0)]).unwrap();

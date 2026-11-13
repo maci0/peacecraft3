@@ -27,6 +27,7 @@
 //! division by zero is undefined behaviour, so any answer would be a guess.
 
 use crate::ast::BinOp;
+use std::fmt;
 
 /// The id of a callable function in a resolved [`crate::Program`]. A `code`
 /// value carries this, and two `code` values are equal when they name the same
@@ -53,7 +54,84 @@ impl HandleId {
     }
 }
 
-/// A JASS value. `String` is owned rather than interned: the engine's string
+/// Owned script bytes. Text decoding belongs to a specific source or consumer.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ScriptString(Vec<u8>);
+
+impl fmt::Debug for ScriptString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.as_utf8() {
+            Ok(text) => fmt::Debug::fmt(text, f),
+            Err(_) => f.debug_tuple("Bytes").field(&self.0).finish(),
+        }
+    }
+}
+
+impl ScriptString {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+    pub fn as_utf8(&self) -> Result<&str, std::str::Utf8Error> {
+        std::str::from_utf8(&self.0)
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+impl From<Vec<u8>> for ScriptString {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+impl From<String> for ScriptString {
+    fn from(text: String) -> Self {
+        Self(text.into_bytes())
+    }
+}
+impl From<&str> for ScriptString {
+    fn from(text: &str) -> Self {
+        Self(text.as_bytes().into())
+    }
+}
+impl AsRef<[u8]> for ScriptString {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+impl PartialEq<str> for ScriptString {
+    fn eq(&self, text: &str) -> bool {
+        self.as_bytes() == text.as_bytes()
+    }
+}
+impl PartialEq<&str> for ScriptString {
+    fn eq(&self, text: &&str) -> bool {
+        self.as_bytes() == text.as_bytes()
+    }
+}
+impl PartialEq<String> for ScriptString {
+    fn eq(&self, text: &String) -> bool {
+        self.as_bytes() == text.as_bytes()
+    }
+}
+
+impl PartialEq<ScriptString> for String {
+    fn eq(&self, bytes: &ScriptString) -> bool {
+        self.as_bytes() == bytes.as_bytes()
+    }
+}
+impl PartialEq<ScriptString> for str {
+    fn eq(&self, bytes: &ScriptString) -> bool {
+        self.as_bytes() == bytes.as_bytes()
+    }
+}
+
+/// A JASS value. Script text is owned rather than interned: the engine's string
 /// table is a handle table owned by the host, and copying bytes loses nothing
 /// a handle comparison would decide.
 #[derive(Clone, PartialEq, Debug)]
@@ -63,7 +141,7 @@ pub enum Value {
     Bool(bool),
     Int(i32),
     Real(f32),
-    Str(String),
+    Str(ScriptString),
     Code(FunctionId),
     Handle(HandleId),
 }
@@ -151,7 +229,17 @@ impl std::fmt::Display for Value {
             Value::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
             Value::Int(i) => write!(f, "{i}"),
             Value::Real(r) => write!(f, "{r}"),
-            Value::Str(s) => f.write_str(s),
+            Value::Str(s) => match s.as_utf8() {
+                Ok(text) => f.write_str(text),
+                Err(_) => {
+                    for byte in s.as_bytes() {
+                        for escaped in std::ascii::escape_default(*byte) {
+                            write!(f, "{}", char::from(escaped))?;
+                        }
+                    }
+                    Ok(())
+                }
+            },
             Value::Code(id) => write!(f, "function#{}", id.0),
             Value::Handle(id) => write!(f, "host-handle#{}", id.token()),
         }
@@ -178,6 +266,7 @@ pub enum OpError {
     Logic(Class),
     IntDivByZero,
     IntModByZero,
+    StringCapacity,
 }
 
 impl OpError {
@@ -211,6 +300,7 @@ impl OpError {
             OpError::Logic(a) => format!("`and`, `or` and `not` need a boolean, got {}", a.name()),
             OpError::IntDivByZero => "integer division by zero".to_string(),
             OpError::IntModByZero => "integer modulus by zero".to_string(),
+            OpError::StringCapacity => "script string allocation exceeded capacity".to_string(),
         }
     }
 }
@@ -372,10 +462,17 @@ fn equal_classes(lhs: &Value, rhs: &Value) -> Result<bool, OpError> {
 fn add(lhs: &Value, rhs: &Value) -> Result<Value, OpError> {
     match (lhs, rhs) {
         (Value::Str(a), Value::Str(b)) => {
-            let mut s = String::with_capacity(a.len() + b.len());
-            s.push_str(a);
-            s.push_str(b);
-            Ok(Value::Str(s))
+            let len = a
+                .len()
+                .checked_add(b.len())
+                .ok_or(OpError::StringCapacity)?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(len)
+                .map_err(|_| OpError::StringCapacity)?;
+            bytes.extend_from_slice(a.as_bytes());
+            bytes.extend_from_slice(b.as_bytes());
+            Ok(Value::Str(bytes.into()))
         }
         (Value::Str(_), _) | (_, Value::Str(_)) => Err(OpError::Concat(lhs.class(), rhs.class())),
         _ => match pair(lhs, rhs) {
@@ -451,7 +548,7 @@ mod nullable_string_tests {
             Value::Bool(false)
         );
         for numeric in [Value::Int(0), Value::Real(0.0)] {
-            for other in [Value::Null, Value::Str(String::new())] {
+            for other in [Value::Null, Value::Str(String::new().into())] {
                 for (left, right) in [(&numeric, &other), (&other, &numeric)] {
                     for op in [BinOp::Eq, BinOp::Ne] {
                         assert_eq!(
@@ -477,7 +574,7 @@ mod nullable_string_tests {
             Value::Str("present".into())
         );
         assert_eq!(
-            binary(BinOp::Ne, &Value::Null, &Value::Str(String::new())).unwrap(),
+            binary(BinOp::Ne, &Value::Null, &Value::Str(String::new().into())).unwrap(),
             Value::Bool(true)
         );
         assert!(binary(BinOp::Eq, &Value::Null, &Value::Int(0)).is_err());

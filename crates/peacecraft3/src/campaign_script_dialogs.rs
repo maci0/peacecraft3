@@ -392,7 +392,14 @@ fn project(
             }
         }
     }
-    let formatting_only = match caption_is_formatting_only(dialog.message.as_deref()) {
+    let formatting_only = match dialog
+        .message
+        .as_ref()
+        .map(|message| message.as_utf8())
+        .transpose()
+        .map_err(|e| format!("script dialog caption is not UTF-8: {e}"))
+        .and_then(caption_is_formatting_only)
+    {
         Ok(empty) => empty,
         Err(error) => {
             clear_tree(&mut commands, &mut state, &mut assets.materials);
@@ -409,7 +416,10 @@ fn project(
             .caption
             .filter(|c| c.dialog == dialog.id && Some(c.revision) == revision),
     };
-    let ready = dialog.message.as_ref().is_none_or(String::is_empty)
+    let ready = dialog
+        .message
+        .as_ref()
+        .is_none_or(pcx_script::ScriptString::is_empty)
         || layout.formatting_only
         || layout.extent.is_some();
     clear_tree(&mut commands, &mut state, &mut assets.materials);
@@ -856,6 +866,22 @@ fn paint(
     images: &Assets<Image>,
     materials: &mut Assets<BackdropImage>,
 ) -> Result<Entity, String> {
+    let message = dialog
+        .message
+        .as_ref()
+        .map(|message| message.as_utf8())
+        .transpose()
+        .map_err(|e| format!("script dialog caption is not UTF-8: {e}"))?;
+    let labels = dialog
+        .buttons
+        .iter()
+        .map(|button| {
+            button
+                .text
+                .as_utf8()
+                .map_err(|e| format!("script dialog button is not UTF-8: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let l = dimensions(&source.fdf, &source.backdrop)?;
     let has_caption = dialog.message.as_ref().is_some_and(|s| !s.is_empty());
     let geometry = source.rules.geometry(
@@ -921,7 +947,7 @@ fn paint(
             })
             .id();
         commands.entity(panel).add_child(caption);
-        if let Some(message) = &dialog.message
+        if let Some(message) = message
             && has_caption
             && !layout.formatting_only
         {
@@ -995,7 +1021,7 @@ fn paint(
             let label = label(
                 commands,
                 node,
-                &button.text,
+                labels[index],
                 &source.styles[1],
                 &source.fonts[&source.styles[1].font],
             )?;

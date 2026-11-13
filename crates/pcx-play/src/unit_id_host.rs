@@ -34,7 +34,7 @@ enum Owner {
 pub(super) struct UnitIds {
     tables: Arc<DefaultTables>,
     /// Built on the first lookup so admission does not read every unit row.
-    names: Option<BTreeMap<String, Owner>>,
+    names: Option<BTreeMap<Vec<u8>, Owner>>,
 }
 
 impl ObjectHost {
@@ -83,12 +83,12 @@ impl ObjectHost {
         self.inner.error(NATIVE, Failure::UnitActivity(why.into()))
     }
 
-    fn unit_name_table(&self) -> Result<BTreeMap<String, Owner>, Error> {
+    fn unit_name_table(&self) -> Result<BTreeMap<Vec<u8>, Owner>, Error> {
         let state = self
             .unit_ids
             .as_ref()
             .ok_or_else(|| self.unit_id_error("not admitted"))?;
-        let mut names: BTreeMap<String, Owner> = BTreeMap::new();
+        let mut names: BTreeMap<Vec<u8>, Owner> = BTreeMap::new();
         let mut named = false;
         for spelling in state.tables.rawcodes(Family::Unit) {
             let rawcode = <[u8; 4]>::try_from(spelling.as_bytes()).map_err(|_| {
@@ -109,7 +109,7 @@ impl ObjectHost {
             }
             named = true;
             names
-                .entry(name)
+                .entry(name.into_bytes())
                 .and_modify(|owner| *owner = Owner::Shared)
                 .or_insert(Owner::Unit(rawcode));
         }
@@ -121,7 +121,10 @@ impl ObjectHost {
         Ok(names)
     }
 
-    pub(super) fn unit_name_id(&mut self, text: &str) -> Result<Option<[u8; 4]>, Error> {
+    pub(super) fn unit_name_id(
+        &mut self,
+        text: impl AsRef<[u8]>,
+    ) -> Result<Option<[u8; 4]>, Error> {
         if self.unit_ids.as_ref().is_some_and(|s| s.names.is_none()) {
             let table = self.unit_name_table()?;
             if let Some(state) = self.unit_ids.as_mut() {
@@ -133,6 +136,7 @@ impl ObjectHost {
             .as_ref()
             .and_then(|state| state.names.as_ref())
             .ok_or_else(|| self.unit_id_error("name table is not built"))?;
+        let text = pcx_script::text::native_c_bytes(text.as_ref());
         match names.get(&text.to_ascii_lowercase()) {
                 None => Ok(None),
                 Some(Owner::Unit(rawcode)) => Ok(Some(*rawcode)),

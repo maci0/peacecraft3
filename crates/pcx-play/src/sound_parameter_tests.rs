@@ -366,7 +366,7 @@ fn failed_assignments_are_atomic_and_reserved_or_wrong_family_objects_refuse() {
     let timer = h.native("CreateTimer", &[]).unwrap();
     for args in [
         vec![Value::Handle(a), Value::Str("Missing".into())],
-        vec![Value::Handle(a), Value::Str("x".repeat(257))],
+        vec![Value::Handle(a), Value::Str("x".repeat(257).into())],
         vec![Value::Handle(fake), Value::Str("Voice".into())],
         vec![timer, Value::Str("Voice".into())],
         vec![Value::Null, Value::Str("Voice".into())],
@@ -1282,7 +1282,7 @@ fn incremental_parameter_host_validates_identity_before_source_work() {
     for args in [
         vec![Value::Handle(timer), Value::Str("Voice".into())],
         vec![Value::Handle(a), Value::Str("\0".into())],
-        vec![Value::Handle(a), Value::Str(String::new())],
+        vec![Value::Handle(a), Value::Str(String::new().into())],
         vec![Value::Handle(a), Value::Int(1)],
     ] {
         assert!(h.native("SetSoundParamsFromLabel", &args).is_err());
@@ -1412,7 +1412,7 @@ fn filename_with_label_binds_the_caller_file_and_admitted_parameter_row() {
         },
         {
             let mut args = call.clone();
-            args[6] = Value::Str(String::new());
+            args[6] = Value::Str(String::new().into());
             args.to_vec()
         },
         {

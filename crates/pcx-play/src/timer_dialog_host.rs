@@ -40,7 +40,7 @@ const NATIVES: [(&str, &[&str], &str); 9] = [
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimerDialog {
     pub timer: HandleId,
-    pub title: Option<String>,
+    pub title: Option<pcx_script::ScriptString>,
     pub title_color: Option<[i32; 4]>,
     pub time_color: Option<[i32; 4]>,
     pub speed: Option<f32>,
@@ -148,13 +148,13 @@ impl ObjectHost {
             let [_, Value::Str(title)] = args else {
                 return Err(self.inner.error(name, Failure::Signature));
             };
-            let title = pcx_script::text::native_map_string(title, strings)
+            let title = pcx_script::text::native_map_bytes(title.as_bytes(), strings)
                 .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?
                 .into_owned();
             let Entry::TimerDialog(Some(dialog)) = self.inner.entry_mut(*id)? else {
                 unreachable!("validated timer dialog")
             };
-            dialog.title = Some(title);
+            dialog.title = Some(title.into());
             return Ok(Value::Null);
         }
         let Entry::TimerDialog(slot) = self.inner.entry_mut(*id)? else {

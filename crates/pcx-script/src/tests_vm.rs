@@ -2590,7 +2590,7 @@ fn string_length_counts_bytes_and_stops_at_nul_through_vm_calls() {
     let src = "native StringLength takes string s returns integer\nfunction f takes string s returns integer\nreturn StringLength(s)\nendfunction\n";
     for (input, expected) in [
         (Value::Null, 0),
-        (Value::Str(String::new()), 0),
+        (Value::Str(String::new().into()), 0),
         (Value::Str("é界".into()), 5),
         (Value::Str("é\0ignored".into()), 2),
         (Value::Str("\0TRIGSTR_12".into()), 0),
@@ -2933,4 +2933,104 @@ fn string_hash_rejects_wrong_declared_signatures() {
             Some(crate::natives::NativeCall::SignatureMismatch(..))
         ));
     }
+}
+
+#[test]
+fn byte_strings_survive_globals_arrays_concat_registered_callback_and_park() {
+    use crate::Host;
+    use crate::value::FunctionId;
+    #[derive(Default)]
+    struct Bytes {
+        callback: Option<FunctionId>,
+    }
+    impl Host for Bytes {
+        fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+            match (name, args) {
+                ("Register", [Value::Code(id)]) => {
+                    self.callback = Some(*id);
+                    Ok(Value::Null)
+                }
+                _ => Err(format!("unexpected {name}")),
+            }
+        }
+        fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
+            name == "Pause"
+        }
+        fn park_thread(&mut self) -> Result<u64, String> {
+            Ok(1)
+        }
+        fn resume_thread(&mut self, _: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn leave_thread(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let source = "native Register takes code callback returns nothing\nnative Pause takes nothing returns nothing\nglobals\nstring value=null\nstring array copied\nendglobals\nfunction callback takes nothing returns nothing\nset copied[1]=value+\"Z\"\ncall Pause()\nset value=copied[1]+value\nendfunction\nfunction seed takes string input returns nothing\nset value=input\ncall Register(function callback)\nendfunction\nfunction read takes nothing returns string\nreturn value\nendfunction\nfunction array_value takes nothing returns string\nreturn copied[1]\nendfunction\n";
+    let program = program_of(source);
+    let mut vm = Vm::new(&program, Bytes::default());
+    let raw = vec![0xc3, 0, 0xff];
+    vm.call("seed", &[Value::Str(raw.clone().into())]).unwrap();
+    let callback = vm.host().callback.unwrap();
+    vm.run_thread(&[callback]).unwrap();
+    assert_eq!(vm.parked_threads().collect::<Vec<_>>(), [1]);
+    assert_eq!(
+        vm.call("array_value", &[]).unwrap(),
+        Value::Str([raw.as_slice(), b"Z"].concat().into())
+    );
+    assert_eq!(
+        vm.call("read", &[]).unwrap(),
+        Value::Str(raw.clone().into())
+    );
+    vm.resume_thread(1).unwrap();
+    assert_eq!(
+        vm.call("read", &[]).unwrap(),
+        Value::Str([raw.as_slice(), b"Z", raw.as_slice()].concat().into())
+    );
+    assert_eq!(vm.parked_threads().count(), 0);
+}
+
+#[test]
+fn byte_strings_use_raw_equality_and_native_c_prefix_without_utf8_fallback() {
+    use crate::Host;
+    struct Raw;
+    impl Host for Raw {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            Err(name.into())
+        }
+        fn native_table_string(&self, _: u32) -> Result<Option<String>, String> {
+            panic!("raw bytes must not demand WTS")
+        }
+        fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
+            assert_eq!(bytes, &[0xc3]);
+            Ok(-83)
+        }
+    }
+    let program = program_of(
+        "native StringLength takes string s returns integer\nnative StringHash takes string s returns integer\nfunction length takes string s returns integer\nreturn StringLength(s)\nendfunction\nfunction hash takes string s returns integer\nreturn StringHash(s)\nendfunction\nfunction same takes string a,string b returns boolean\nreturn a==b\nendfunction\n",
+    );
+    let mut vm = Vm::new(&program, Raw);
+    let raw = Value::Str(vec![0xc3, 0, 0xff].into());
+    assert_eq!(
+        vm.call("length", std::slice::from_ref(&raw)).unwrap(),
+        Value::Int(1)
+    );
+    assert_eq!(
+        vm.call("hash", std::slice::from_ref(&raw)).unwrap(),
+        Value::Int(-83)
+    );
+    assert_eq!(
+        vm.call("same", &[raw.clone(), raw.clone()]).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        vm.call("same", &[raw, Value::Str(vec![0xc3].into())])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        vm.call("same", &[Value::Null, Value::Str(Vec::new().into())])
+            .unwrap(),
+        Value::Bool(false)
+    );
 }

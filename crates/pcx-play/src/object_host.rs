@@ -1365,7 +1365,10 @@ impl ObjectHost {
                     let abilities = record.and_then(|record| record.abilities.as_ref())
                         .map(|abilities| abilities.levels().take(16).collect::<Vec<_>>());
                     let order = args.get(1).map(|order| match order {
-                        Value::Str(text) => format!("{:?}", text.chars().take(128).collect::<String>()),
+                        Value::Str(text) => match text.as_utf8() {
+                            Ok(text) => format!("{:?}", text.chars().take(128).collect::<String>()),
+                            Err(_) => format!("bytes:{:02x?}", &text.as_bytes()[..text.len().min(128)]),
+                        },
                         value => format!("{value:?}"),
                     });
                     format!("{error}; rejected immediate order: unit={unit:?} rawcode={:?} abilities_first16={abilities:?} order_first128={order:?} clock={:?}", record.map(|record| record.definition.rawcode), self.timer_game_time())

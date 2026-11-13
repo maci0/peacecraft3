@@ -25,13 +25,18 @@ pub fn trigstr_id(text: &str) -> Option<u32> {
 /// Native trigger lookup differs from the editor's exact identifier syntax.
 /// Selected 1.29.2.9231: 0x708dc0 -> 0x434390; -1 means no lookup.
 pub fn native_trigstr_id(text: &str) -> Option<u32> {
-    let suffix = text.strip_prefix("TRIGSTR_")?;
-    let (negative, digits) = match suffix.strip_prefix('-') {
+    native_trigstr_id_bytes(text.as_bytes())
+}
+
+pub fn native_trigstr_id_bytes(text: &[u8]) -> Option<u32> {
+    let suffix = text.strip_prefix(b"TRIGSTR_")?;
+    let (negative, digits) = match suffix.strip_prefix(b"-") {
         Some(digits) => (true, digits),
         None => (false, suffix),
     };
     let magnitude = digits
-        .bytes()
+        .iter()
+        .copied()
         .take_while(u8::is_ascii_digit)
         .fold(0_u32, |n, digit| {
             n.wrapping_mul(10).wrapping_add(u32::from(digit - b'0'))
@@ -56,33 +61,77 @@ pub fn native_c_bytes(bytes: &[u8]) -> &[u8] {
         .unwrap_or(bytes.len())]
 }
 
+/// Runtime byte strings use the same one-level map boundary without UTF8 decoding.
+pub fn native_map_bytes<'a>(
+    text: &'a [u8],
+    source: Option<&NativeStringLookup<'_>>,
+) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+    let text = native_c_bytes(text);
+    let Some(id) = native_trigstr_id_bytes(text) else {
+        return Ok(std::borrow::Cow::Borrowed(text));
+    };
+    let source = source.ok_or_else(|| format!("TRIGSTR_{id}: map string source unavailable"))?;
+    let mut body = source(id)
+        .map_err(|why| format!("TRIGSTR_{id}: {why}"))?
+        .unwrap_or_default()
+        .into_bytes();
+    body.truncate(native_c_bytes(&body).len());
+    Ok(std::borrow::Cow::Owned(body))
+}
+
 /// The selected native map-string wrapper: C text and at most one WTS lookup.
 /// No UI dictionary lookup or tag substitution happens at this boundary.
 pub fn native_map_string<'a>(
     text: &'a str,
     source: Option<&NativeStringLookup<'_>>,
 ) -> Result<std::borrow::Cow<'a, str>, String> {
-    let text = text
-        .split('\0')
-        .next()
-        .expect("split has an initial segment");
-    let Some(id) = native_trigstr_id(text) else {
-        return Ok(std::borrow::Cow::Borrowed(text));
-    };
-    let source = source.ok_or_else(|| format!("TRIGSTR_{id}: map string source unavailable"))?;
-    let mut body = source(id)
-        .map_err(|why| format!("TRIGSTR_{id}: {why}"))?
-        .unwrap_or_default();
-    if let Some(end) = body.find('\0') {
-        body.truncate(end);
+    match native_map_bytes(text.as_bytes(), source)? {
+        std::borrow::Cow::Borrowed(bytes) => std::str::from_utf8(bytes)
+            .map(std::borrow::Cow::Borrowed)
+            .map_err(|why| format!("native text encoding: {why}")),
+        std::borrow::Cow::Owned(bytes) => String::from_utf8(bytes)
+            .map(std::borrow::Cow::Owned)
+            .map_err(|why| format!("native text encoding: {why}")),
     }
-    Ok(std::borrow::Cow::Owned(body))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn native_map_byte_boundary_keeps_invalid_payload_and_exact_lookup_demand() {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let source = |id| {
+            calls.borrow_mut().push(id);
+            Ok(Some("TRIGSTR_8\0tail".into()))
+        };
+        assert_eq!(
+            native_map_bytes(&[0xff, 0, 0xc3], Some(&source))
+                .unwrap()
+                .as_ref(),
+            &[0xff]
+        );
+        assert!(calls.borrow().is_empty());
+        assert_eq!(
+            native_map_bytes(b"TRIGSTR_7\xff", Some(&source))
+                .unwrap()
+                .as_ref(),
+            b"TRIGSTR_8"
+        );
+        assert_eq!(*calls.borrow(), [7]);
+        assert!(
+            native_map_bytes(b"TRIGSTR_7\xff", None)
+                .unwrap_err()
+                .contains("source unavailable")
+        );
+        assert_eq!(
+            native_map_bytes(b"TRIGSTR_7", Some(&|_| Ok(None)))
+                .unwrap()
+                .as_ref(),
+            b""
+        );
+    }
     #[test]
     fn native_map_source_distinguishes_missing_entry_from_missing_or_broken_source() {
         assert!(

@@ -833,7 +833,7 @@ fn name_budget_is_aggregate_utf8_and_failed_replacements_preserve_both_players()
         h.native("GetPlayerName", std::slice::from_ref(&b)).unwrap(),
         Value::Str("ok".into())
     );
-    h.native("SetPlayerName", &[a, Value::Str(String::new())])
+    h.native("SetPlayerName", &[a, Value::Str(String::new().into())])
         .unwrap();
     h.native("SetPlayerName", &[b.clone(), Value::Str("abcdef".into())])
         .unwrap();

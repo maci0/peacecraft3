@@ -465,7 +465,7 @@ mod selected_tests {
             session
                 .call_function(
                     program.function_id("SetNextLevelBJ").unwrap(),
-                    &[Value::Str(next.clone())],
+                    &[Value::Str(next.clone().into())],
                 )
                 .unwrap();
             let player = Value::Handle(
@@ -819,7 +819,7 @@ mod selected_tests {
             calls[0]
         };
         let literal = |expression: &Expr| match expression {
-            Expr::Literal(Literal::Str(value), _) => Value::Str(value.decoded()),
+            Expr::Literal(Literal::Str(value), _) => Value::Str(value.decoded().into()),
             _ => panic!("expected source string literal"),
         };
         let filename = literal(&arguments("InitGameCacheBJ")[0]);
