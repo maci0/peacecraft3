@@ -553,7 +553,7 @@ impl ObjectHost {
                         }
                         if locked || settings.is_some_and(|settings| *speed == settings.speed) {
                             Ok(Value::Null)
-                        } else if self.native_clock_driving() {
+                        } else if self.native_counter_platform() {
                             let admitted = usize::try_from(value).ok().is_some_and(|index| {
                                 self.native_game_clock.as_ref().is_some_and(|clock| {
                                     clock.rules().turn.speed_steps.get(index).is_some()

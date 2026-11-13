@@ -209,6 +209,13 @@ endfunction
                     };
                     assert!(Arc::ptr_eq(&fault, &retry_fault));
                 }
+                for input in [Some(Duration::from_millis(333)), None] {
+                    let retry = session.advance_native_counter_frame(input, 8);
+                    let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                        panic!("counter input hid the original projection fault: {retry:?}")
+                    };
+                    assert!(Arc::ptr_eq(&fault, &retry_fault));
+                }
                 assert_eq!(
                     format!(
                         "{:?}",
@@ -2031,5 +2038,112 @@ endfunction
         assert!(session.advance_timers(1., 16).is_err());
         session.advance_native_counter_frame(None, 16).unwrap();
         assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_speed_changes_require_the_counter_rate_consumer() {
+    use pcx_script::Host;
+    for producer in 0..3 {
+        let mut app = timer_app();
+        publish_counter_map(
+            &mut app,
+            "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+        );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let frame = clock::FrameInput {
+            game_elapsed: Duration::ZERO,
+            real_elapsed_ms: 0,
+        };
+        match producer {
+            0 => {
+                pcx_play::campaign_host::advance_paced_tick(&mut session, Duration::ZERO, 0., 16)
+                    .unwrap();
+            }
+            1 => {
+                session.advance_native_frame(Some(frame), 16).unwrap();
+            }
+            _ => {
+                session
+                    .advance_native_counter_frame(Some(Duration::ZERO), 16)
+                    .unwrap();
+            }
+        }
+        let normal = session.global("COUNTER_NORMAL").unwrap();
+        let fast = session.global("COUNTER_FAST").unwrap();
+        let before = format!(
+            "{:?}",
+            session.host().unwrap().objects().test_native_clock_state()
+        );
+        let result = session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&fast));
+        if producer == 2 {
+            result.unwrap();
+            assert_eq!(
+                session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+                fast
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "producer {producer} accepted an unused speed change"
+            );
+            assert_eq!(
+                session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+                normal
+            );
+        }
+        assert_eq!(
+            format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            ),
+            before
+        );
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", &[if producer == 2 { fast } else { normal }])
+            .unwrap();
+        match producer {
+            0 => {
+                pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    Duration::from_millis(250),
+                    0.25,
+                    16,
+                )
+                .unwrap();
+            }
+            1 => {
+                session
+                    .advance_native_frame(
+                        Some(clock::FrameInput {
+                            game_elapsed: Duration::from_millis(250),
+                            ..frame
+                        }),
+                        16,
+                    )
+                    .unwrap();
+            }
+            _ => {
+                session
+                    .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: if producer == 2 { 0.375f32 } else { 0.25f32 }.to_bits()
+            })
+        );
     }
 }

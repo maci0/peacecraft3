@@ -213,8 +213,10 @@ state. All quanta precede the record's real advance. This fresh local model
 recreates the observable counter phases without implementing network packet pulls,
 replay overrides or external controller time-scale changes.
 
-Native speed requests validate their selected table index before replacing the
-current identity. Locked requests and legacy different-identity refusals retain
+Only the selected counter platform admits different speed identities; game-only
+and independently supplied Game durations retain their strict refusal. Counter
+speed requests validate the selected table index before replacing the current
+identity. Locked requests and legacy different-identity refusals retain
 their existing contracts. The counter stores its original duration with the FIFO
 record and reports committed duration only after the real phase completes, so
 application tick accounting need not count a partly delivered record.
