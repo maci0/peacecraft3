@@ -627,7 +627,10 @@ fn leaderboard_compiled_authored_shape_keeps_localized_row_labels_in_canonical_s
     let board = vm.global("Board");
     let h = &vm.host().inner;
     let state = h.leaderboard_state().unwrap().get(id(&board)).unwrap();
-    assert_eq!(state.label.as_deref(), Some("Synthetic title"));
+    assert_eq!(
+        state.label.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("Synthetic title")
+    );
     assert_eq!(state.items.len(), 1);
     assert_eq!(state.items[0].label, "Authored count label");
     assert_eq!(state.items[0].value, 0);

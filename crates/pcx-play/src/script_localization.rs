@@ -182,39 +182,47 @@ impl Bank {
         &self,
         key: &str,
     ) -> Result<Option<String>, String> {
-        if key.contains('\0') {
+        self.localized_bytes_after_map_lookup(key.as_bytes())?
+            .map(|value| {
+                String::from_utf8(value.into_bytes()).map_err(|e| {
+                    format!(
+                        "{}: localized source text is not UTF-8: {e}",
+                        self.strings.label
+                    )
+                })
+            })
+            .transpose()
+    }
+    pub(crate) fn localized_bytes_after_map_lookup(
+        &self,
+        key: &[u8],
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        if key.contains(&0) {
             return Err(format!("{}: embedded NUL in lookup", self.strings.label));
         }
-        let value = self
-            .labels
-            .get(key)
-            .filter(|v| !v.is_empty())
-            .map_or(key, String::as_str);
-        // Native copies at most capacity-1 encoded bytes. Split UTF-8 would require a byte-string VM.
-        let max = self.rules.output_bytes - 1;
-        let value = if self.labels.get(key).is_some_and(|v| !v.is_empty()) && value.len() > max {
-            if !value.is_char_boundary(max) {
-                return Err(format!(
-                    "{}: native output bound splits UTF-8",
-                    self.strings.label
-                ));
-            }
-            &value[..max]
-        } else {
-            value
+        // Admitted dictionary keys are UTF-8; an unmatched byte key remains literal.
+        let value = std::str::from_utf8(key)
+            .ok()
+            .and_then(|key| self.labels.get(key))
+            .filter(|v| !v.is_empty());
+        let bytes = match value {
+            Some(value) => &value.as_bytes()[..value.len().min(self.rules.output_bytes - 1)],
+            None => key,
         };
-        Ok(Some(value.into()))
+        Ok(Some(bytes.to_vec().into()))
     }
-    pub fn localized_hotkey(&self, key: &str) -> Result<i32, String> {
+    pub fn localized_hotkey(&self, key: impl AsRef<[u8]>) -> Result<i32, String> {
+        let key = key.as_ref();
         if key.is_empty() {
             return Ok(0);
         }
-        if !key.is_ascii() || key.contains('\0') {
+        if !key.is_ascii() || key.contains(&0) {
             return Err(format!(
                 "{}: non-ASCII hotkey comparison is not qualified",
                 self.hotkeys.label
             ));
         }
+        let key = std::str::from_utf8(key).expect("checked ASCII");
         Ok(self
             .keys
             .get(&key.to_ascii_lowercase())
@@ -430,6 +438,12 @@ pub(crate) mod tests {
             missing_hotkey: 17,
             output_bytes: 64,
         }
+    }
+    pub(crate) fn byte_bound_bank() -> Bank {
+        let mut bank = bank();
+        bank.rules.output_bytes = 2;
+        bank.labels.insert("UTF".into(), "éx".into());
+        bank
     }
     pub(crate) fn bank() -> Bank {
         Bank::read(

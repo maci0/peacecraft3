@@ -456,20 +456,32 @@ fn text_replacement_keeps_the_previous_value_when_the_budget_refuses() {
         .call(
             &mut arena,
             "QuestSetTitle",
-            &[quest.clone(), Value::Str("x".repeat(65))],
+            &[quest.clone(), Value::Str("x".repeat(65).into())],
         )
         .unwrap_err();
     assert_eq!(error, QuestFailure::Budget("quest text bytes"));
-    assert_eq!(session.quest_title(handle(&quest)).unwrap(), Some("ab"));
+    assert_eq!(
+        session
+            .quest_title(handle(&quest))
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("ab")
+    );
     assert_eq!(session.text_used(), 2);
     session
         .call(
             &mut arena,
             "QuestSetTitle",
-            &[quest.clone(), Value::Str(String::new())],
+            &[quest.clone(), Value::Str(String::new().into())],
         )
         .unwrap();
-    assert_eq!(session.quest_title(handle(&quest)).unwrap(), Some(""));
+    assert_eq!(
+        session
+            .quest_title(handle(&quest))
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("")
+    );
     assert_eq!(session.text_used(), 0);
 }
 
@@ -843,7 +855,13 @@ fn renamed_formal_parameters_still_create_query_and_destroy() {
             &[quest.clone(), Value::Str("Hold".into())],
         )
         .unwrap();
-    assert_eq!(session.quest_title(handle(&quest)).unwrap(), Some("Hold"));
+    assert_eq!(
+        session
+            .quest_title(handle(&quest))
+            .unwrap()
+            .map(|s| s.as_utf8().unwrap()),
+        Some("Hold")
+    );
     let item = session
         .call(&mut arena, "QuestCreateItem", std::slice::from_ref(&quest))
         .unwrap();

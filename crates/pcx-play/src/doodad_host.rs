@@ -76,7 +76,7 @@ impl ObjectHost {
             };
             if ["soundon", "soundoff"]
                 .iter()
-                .any(|word| clip.eq_ignore_ascii_case(word))
+                .any(|word| clip.as_bytes().eq_ignore_ascii_case(word.as_bytes()))
             {
                 return Err(self.inner.error(
                     name,
@@ -89,7 +89,18 @@ impl ObjectHost {
                     Failure::Doodad("randomized doodad animation is not admitted".into()),
                 ));
             }
-            if clip.len() > 16 << 10 || clip.chars().any(char::is_control) {
+            if clip.len() > 16 << 10 {
+                return Err(self
+                    .inner
+                    .error(name, Failure::Doodad("invalid animation name".into())));
+            }
+            let clip = clip.as_utf8().map_err(|e| {
+                self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("doodad animation selector is not UTF-8: {e}")),
+                )
+            })?;
+            if clip.chars().any(char::is_control) {
                 return Err(self
                     .inner
                     .error(name, Failure::Doodad("invalid animation name".into())));

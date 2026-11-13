@@ -1776,7 +1776,7 @@ pub(crate) mod tests {
                 .expect("parent host")
                 .native(
                     "ChangeLevel",
-                    &[Value::Str(map.clone()), Value::Bool(false)],
+                    &[Value::Str(map.clone().into()), Value::Bool(false)],
                 )
                 .expect("ChangeLevel records its request");
             context

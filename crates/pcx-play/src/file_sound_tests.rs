@@ -904,7 +904,7 @@ fn missing_case_changed_paths_bad_types_and_eax_budget_never_issue_ids() {
         assert!(e.contains(text));
     }
     let mut long = args();
-    long[0] = Value::Str("x".repeat(4097));
+    long[0] = Value::Str("x".repeat(4097).into());
     assert!(h.native("CreateSound", &long).is_err());
     for at in 0..7 {
         let mut a = args();
@@ -913,7 +913,7 @@ fn missing_case_changed_paths_bad_types_and_eax_budget_never_issue_ids() {
     }
     for text in ["x".repeat(16), "A\0B".into()] {
         let mut a = args();
-        a[6] = Value::Str(text);
+        a[6] = Value::Str(text.into());
         assert!(h.native("CreateSound", &a).is_err());
     }
     assert_eq!(h.inner().handles(), 0);
@@ -1353,7 +1353,7 @@ fn incremental_file_loading_refuses_arguments_and_wrong_bindings_before_mutation
             0 => a[1] = Value::Int(1),
             1 => a[6] = Value::Str("\0".into()),
             2 => a[0] = Value::Str("\0".into()),
-            _ => a[0] = Value::Str("x".repeat(budget().metadata_bytes + 1)),
+            _ => a[0] = Value::Str("x".repeat(budget().metadata_bytes + 1).into()),
         }
         assert!(h.native("CreateSound", &a).is_err());
     }

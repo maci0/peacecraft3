@@ -1216,6 +1216,9 @@ impl ObjectHost {
                     .map_err(fail)?
             }
         };
+        let sequence = sequence
+            .as_utf8()
+            .map_err(|e| fail(format!("animation selector is not UTF-8: {e}")))?;
         let candidates = state
             .rules
             .candidates(&animation.model, sequence, &props, rarity)
@@ -1283,6 +1286,9 @@ impl ObjectHost {
         };
         let authored = crate::unit_animation_rarity::properties(&record.definition, &rules.props)
             .map_err(fail)?;
+        let text = text
+            .as_utf8()
+            .map_err(|e| fail(format!("animation properties are not UTF-8: {e}")))?;
         let mut animation = animation.clone();
         animation
             .edit_properties(&rules, authored, text, *add)
@@ -1338,6 +1344,14 @@ impl ObjectHost {
             if queue {
                 self.reserve_animation_active(*unit)
                     .map_err(|failure| self.inner.error(name, failure))?;
+            }
+            let sequence = sequence.as_utf8().map_err(|e| {
+                self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("animation selector is not UTF-8: {e}")),
+                )
+            })?;
+            if queue {
                 queued = state
                     .queue(sequence, now)
                     .map_err(|e| self.inner.error(name, Failure::UnitAnimation(e)))?;

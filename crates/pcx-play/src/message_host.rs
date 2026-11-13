@@ -2,7 +2,7 @@
 use super::{Error, Failure, ObjectHost};
 use pcx_script::Value;
 
-/// Retained live messages and their aggregate UTF-8 bytes, independent of game limits.
+/// Retained live messages and their aggregate script bytes, independent of game limits.
 #[derive(Clone, Copy, Debug)]
 pub struct MessageBudget {
     pub records: usize,
@@ -12,7 +12,7 @@ pub struct MessageBudget {
 pub struct TimedMessage {
     pub sequence: u64,
     pub position: [f32; 2],
-    pub text: String,
+    pub text: pcx_script::ScriptString,
     pub started_at: f64,
     pub expires_at: f64,
 }
@@ -159,7 +159,7 @@ impl ObjectHost {
             || !y.is_finite()
             || !duration.is_finite()
             || *duration < 0.0
-            || text.contains('\0')
+            || text.as_bytes().contains(&0)
         {
             return Err(fail("invalid position, duration or text"));
         }
@@ -173,7 +173,7 @@ impl ObjectHost {
         if player != local {
             return Ok(Value::Null);
         }
-        let text = pcx_script::text::native_map_string(text, strings)
+        let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
             .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
         let now = self
             .timer_game_time()
@@ -193,10 +193,10 @@ impl ObjectHost {
         if bytes > state.budget.text_bytes || count >= state.budget.records {
             return Err(fail("live message budget exceeded"));
         }
-        let mut copy = String::new();
+        let mut copy = Vec::new();
         copy.try_reserve_exact(text.len())
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-        copy.push_str(&text);
+        copy.extend_from_slice(&text);
         let state = self.messages.as_mut().expect("admitted messages");
         state
             .entries
@@ -206,7 +206,7 @@ impl ObjectHost {
         state.entries.push(TimedMessage {
             sequence: revision,
             position: [x.max(0.0), y.max(0.0)],
-            text: copy,
+            text: copy.into(),
             started_at: now,
             expires_at,
         });

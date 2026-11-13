@@ -109,7 +109,7 @@ fn logical_time_chunking_and_expiration_do_not_depend_on_rendering() {
         let current = host.messages().unwrap().visible(4.).next().unwrap();
         assert_eq!(
             (
-                current.text.as_str(),
+                current.text.as_utf8().unwrap(),
                 current.started_at,
                 current.expires_at
             ),
@@ -368,5 +368,71 @@ fn native_string_player_names_resolve_once_after_player_identity() {
     assert_eq!(
         h.native("GetPlayerName", &[p]).unwrap(),
         Value::Str("é".into())
+    );
+}
+
+#[test]
+fn message_bytes_survive_retention_and_local_budget_failures_are_atomic() {
+    let mut h = host("// raw payload", 1, 2);
+    let local = player(&mut h, 2);
+    let foreign = player(&mut h, 1);
+    let args = |player, bytes: Vec<u8>| {
+        vec![
+            player,
+            Value::Real(0.),
+            Value::Real(0.),
+            Value::Real(1.),
+            Value::Str(bytes.into()),
+        ]
+    };
+    h.native("DisplayTimedTextToPlayer", &args(foreign, vec![0xff; 3]))
+        .unwrap();
+    assert_eq!(h.messages().unwrap().visible(0.).count(), 0);
+    h.native(
+        "DisplayTimedTextToPlayer",
+        &args(local.clone(), vec![0xc3, 0xff]),
+    )
+    .unwrap();
+    assert_eq!(
+        h.messages()
+            .unwrap()
+            .visible(0.)
+            .next()
+            .unwrap()
+            .text
+            .as_bytes(),
+        &[0xc3, 0xff]
+    );
+    let revision = h.messages().unwrap().revision();
+    assert!(
+        h.native(
+            "DisplayTimedTextToPlayer",
+            &args(local.clone(), vec![0xff; 3])
+        )
+        .is_err()
+    );
+    assert_eq!(h.messages().unwrap().revision(), revision);
+    assert_eq!(
+        h.messages()
+            .unwrap()
+            .visible(0.)
+            .next()
+            .unwrap()
+            .text
+            .as_bytes(),
+        &[0xc3, 0xff]
+    );
+    h.native("ClearTextMessages", &[]).unwrap();
+    h.native("DisplayTimedTextToPlayer", &args(local, vec![0xff]))
+        .unwrap();
+    assert_eq!(
+        h.messages()
+            .unwrap()
+            .visible(0.)
+            .next()
+            .unwrap()
+            .text
+            .as_bytes(),
+        &[0xff]
     );
 }

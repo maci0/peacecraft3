@@ -438,7 +438,8 @@ fn command_for(
     form: OrderForm,
 ) -> Result<PlayerCommand, String> {
     let mut name = |order: i32| match objects.native("OrderId2String", &[Value::Int(order)]) {
-        Ok(Value::Str(name)) => Ok(name),
+        Ok(Value::Str(name)) => String::from_utf8(name.into_bytes())
+            .map_err(|e| format!("command order name is not UTF-8: {e}")),
         Ok(_) => Err("order has no admitted name".to_string()),
         Err(error) => Err(error),
     };

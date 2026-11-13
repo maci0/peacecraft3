@@ -265,13 +265,14 @@ pub fn cumulative_model_load_work_is_bounded_without_charging_cached_selection()
             .function_id("choose")
             .unwrap();
         let before = reads.load(std::sync::atomic::Ordering::SeqCst);
-        let result = session.call_function(id, &[Value::Str(format!("Scene/Other{index}.mdl"))]);
+        let result =
+            session.call_function(id, &[Value::Str(format!("Scene/Other{index}.mdl").into())]);
         if index < 63 {
             result.unwrap();
             let after = reads.load(std::sync::atomic::Ordering::SeqCst);
             assert_eq!(after, before + 2);
             session
-                .call_function(id, &[Value::Str(format!("Scene/Other{index}.mdl"))])
+                .call_function(id, &[Value::Str(format!("Scene/Other{index}.mdl").into())])
                 .unwrap();
             assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), after);
         } else {
@@ -531,7 +532,7 @@ pub fn sound_source_path_limit_refuses_before_reading_or_copying_the_path_into_a
         .function_id("choose_sound")
         .unwrap();
     let error = session
-        .call_function(id, &[Value::Str("x".repeat((16 << 10) + 1))])
+        .call_function(id, &[Value::Str("x".repeat((16 << 10) + 1).into())])
         .expect_err("source path cap");
     let message = error.to_string();
     assert!(message.contains("source path/identity/count budget exceeded"));

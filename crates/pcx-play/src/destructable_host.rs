@@ -1512,9 +1512,21 @@ impl ObjectHost {
         &mut self,
         id: HandleId,
         name: &str,
-        clip: &str,
+        clip: impl AsRef<[u8]>,
     ) -> Result<(), Error> {
-        if clip.len() > ANIMATION_NAME_LIMIT || clip.chars().any(char::is_control) {
+        let clip = clip.as_ref();
+        if clip.len() > ANIMATION_NAME_LIMIT {
+            return Err(self
+                .inner
+                .error(name, Failure::DestructableState("invalid animation name")));
+        }
+        let clip = std::str::from_utf8(clip).map_err(|e| {
+            self.inner.error(
+                name,
+                Failure::ScriptString(format!("destructable animation selector is not UTF-8: {e}")),
+            )
+        })?;
+        if clip.chars().any(char::is_control) {
             return Err(self
                 .inner
                 .error(name, Failure::DestructableState("invalid animation name")));

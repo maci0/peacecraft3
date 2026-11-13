@@ -2397,7 +2397,7 @@ endglobals
         let arguments: Vec<_> = creations[0]
             .iter()
             .map(|arg| match arg {
-                Expr::Literal(Literal::Str(value), _) => Value::Str(value.decoded()),
+                Expr::Literal(Literal::Str(value), _) => Value::Str(value.decoded().into()),
                 Expr::Literal(Literal::Bool(value), _) => Value::Bool(*value),
                 Expr::Literal(Literal::Int(value), _) => {
                     Value::Int(i32::try_from(value.value).unwrap())
@@ -2408,6 +2408,7 @@ endglobals
         let Value::Str(member) = &arguments[0] else {
             panic!("original sound filename")
         };
+        let member = member.as_utf8().expect("selected source sound filename");
         let encoded = std::fs::read(&media_path).unwrap();
         let asset_origin = identity(format!("{media_path} explicitly bound to {member}"));
         let assets = SoundAssets::read_encoded(
@@ -2434,7 +2435,7 @@ endglobals
         object_host
             .native(
                 "SetSoundParamsFromLabel",
-                &[Value::Handle(id), Value::Str(label)],
+                &[Value::Handle(id), Value::Str(label.into())],
             )
             .unwrap();
         let mut world = world_for(object_host, limits_for(encoded.len()));
@@ -2454,7 +2455,7 @@ endglobals
         );
         let mut voices = world.query::<(&ScriptVoice, &mix::Voice, &FadeIn)>();
         let (voice, mixed, fade) = voices.single(&world).unwrap();
-        assert_eq!(voice.member, member.as_str());
+        assert_eq!(voice.member, member);
         assert!(mixed.preempt_channel && mixed.preempt_list);
         assert!(fade.target > 0.0);
         let audio = world

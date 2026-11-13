@@ -135,7 +135,7 @@ pub use resolve::{
     Prelude, Program, ResolveDiagnostic, resolve, resolve_with, resolve_with_diagnostics,
 };
 pub use span::{SourceMap, Span};
-pub use value::{HandleId, Value};
+pub use value::{HandleId, ScriptString, Value};
 
 /// Counts a caller can print without walking the tree by hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

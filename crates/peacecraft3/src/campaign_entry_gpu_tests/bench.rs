@@ -634,7 +634,7 @@ impl Harness {
             let host = session.host().unwrap();
             if index % (2 * HUD_EVENT_PERIOD) == 0 {
                 let player = host.native("Player", &[Value::Int(0)]).unwrap();
-                let text = Value::Str(format!("render-cpu message {index}"));
+                let text = Value::Str(format!("render-cpu message {index}").into());
                 host.native(
                     "DisplayTimedTextToPlayer",
                     &[

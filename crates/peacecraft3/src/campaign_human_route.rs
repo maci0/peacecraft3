@@ -1535,11 +1535,12 @@ fn observe(app: &mut App, retained: Option<HandleId>) -> Observation {
                     panic!("exit without authored next map: {authored_next:?}; {requests:?}")
                 };
                 assert!(!next.is_empty());
-                assert!(
-                    requests
-                        .iter()
-                        .all(|r| r.next_level.as_ref() == Some(next) && r.score_screen)
-                );
+                assert!(requests.iter().all(|r| {
+                    r.next_level
+                        .as_ref()
+                        .is_some_and(|level| level.as_bytes() == next.as_bytes())
+                        && r.score_screen
+                }));
                 println!("Human01 authored exit: target={next:?} requests={requests:?}");
             }
             !requests.is_empty()
@@ -1778,7 +1779,7 @@ fn heal_with_units(
         let accepted = objects.native("IssueTargetOrderById", &[Value::Handle(hero), Value::Int(command.order), Value::Handle(target)]).unwrap();
         match accepted {
             Value::Bool(true) => {
-                input.commands.record(objects.timer_game_time(), PlayerCommand::Target { unit: hero, order, target }).unwrap();
+                input.commands.record(objects.timer_game_time(), PlayerCommand::Target { unit: hero, order: String::from_utf8(order.into_bytes()).expect("admitted order name"), target }).unwrap();
                 println!("Human01 Holy Light accepted: clock={:?} target={target:?} readiness={ready:?}", objects.timer_game_time());
                 Some((target, ready.mana.unwrap()))
             }

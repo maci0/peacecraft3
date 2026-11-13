@@ -50,14 +50,23 @@ impl ObjectHost {
         if path.is_empty() {
             return Some(Ok(Value::Null));
         }
-        let path = match pcx_script::text::native_map_string(path, strings) {
+        let path = match pcx_script::text::native_map_bytes(path.as_bytes(), strings) {
             Ok(path) => path,
             Err(why) => return Some(Err(self.inner.error(name, Failure::ScriptString(why)))),
         };
         if path.is_empty() {
             return Some(Ok(Value::Null));
         }
-        self.units.as_mut()?.alt_minimap_icon = Some(path.to_string());
+        let path = match std::str::from_utf8(&path) {
+            Ok(path) => path,
+            Err(why) => {
+                return Some(Err(self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("minimap icon path UTF8: {why}")),
+                )));
+            }
+        };
+        self.units.as_mut()?.alt_minimap_icon = Some(path.into());
         Some(Ok(Value::Null))
     }
 }

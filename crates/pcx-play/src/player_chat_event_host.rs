@@ -11,7 +11,7 @@ pub(super) const REGISTER: &str = "TriggerRegisterPlayerChatEvent";
 pub struct PlayerChatRegistration {
     pub trigger: HandleId,
     pub player: HandleId,
-    pub message: String,
+    pub message: pcx_script::ScriptString,
     pub exact_match_only: bool,
 }
 
@@ -129,20 +129,20 @@ impl ObjectHost {
         let limit = admitted
             .player_chat_event_limit
             .ok_or_else(|| fail(Failure::TriggerState("player chat events not admitted")))?;
-        let message = pcx_script::text::native_map_string(message, strings)
+        let message = pcx_script::text::native_map_bytes(message.as_bytes(), strings)
             .map_err(|why| fail(Failure::ScriptString(why)))?;
         if admitted.retained_player_chat_events >= limit {
             return Err(fail(Failure::Budget("player chat event registration")));
         }
-        let mut owned = String::new();
+        let mut owned = Vec::new();
         owned
             .try_reserve_exact(message.len())
             .map_err(|_| fail(Failure::Capacity))?;
-        owned.push_str(&message);
+        owned.extend_from_slice(&message);
         let record = PlayerChatRegistration {
             trigger: *trigger,
             player: *player,
-            message: owned,
+            message: owned.into(),
             exact_match_only: *exact_match_only,
         };
         let id = self
