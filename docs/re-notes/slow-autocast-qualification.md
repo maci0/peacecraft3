@@ -278,6 +278,15 @@ unqualified center-distance or collision-edge approximation would lose this
 relationship. The shared enumeration order, visibility and readiness still
 require their own canonical mapping.
 
+The outer helper `0x69df20` is another alliance query, not fog visibility:
+`0x47fb00` resolves the target's owner and `0x47faa0` reads player-data mask
+`+0x78`, identifying `ALLIANCE_SHARED_SPELLS` through the same indexed layout.
+Actual visibility is checked earlier through `0x67fb80` and `0x475150`, with
+the additional unit masks at `+0x250`/`+0x254`. These distinct predicates must
+not collapse into a passive-ally or raw visible boolean. The additional
+source-role chain is checked in the Help Response source receipt; it is not a
+runtime qualification of every Shared Spells or fog state.
+
 The shared Slow order path now queues CHANNEL/CAST synchronously and EFFECT
 before payment/buff application. Retained payment survives interruption; exact
 game-clock boundaries deliver EFFECT and source-backed backswing completion.
@@ -306,6 +315,38 @@ This family evaluator does not select a nearest target or consume an error as a
 successful evaluation. The common periodic dispatcher and its native timer queue
 domain remain separate integration work; this change alone does not enable
 positive automatic casts.
+
+The family additionally follows the source-derived victim alliance kind for
+explicit directed assignments. False excludes that attacker's victim relation;
+true remains a potential candidate and refuses before positive selection. An
+explicit self-assignment takes precedence over the qualified self-enable
+initializer. Missing cross-player state and conflicting assignments refuse;
+the generic alliance helper's absent-state false default is not used. Each
+canonical unit and each inspected assignment consumes work. This extends the
+negative proof without changing the common due loop or publishing cast events.
+
+The unchanged HumanX03Secret recreation snapshot in
+`/tmp/pc3-slow-frontier-global-context-horizon/tft-HumanX03Secret.w3x.log` counts
+all 96 units, with no missing combat/position state and no combat targets.
+That establishes the negative proof's attack-state condition for this host
+snapshot, independently of its truncated nearest-neighbor listing. It does not
+establish original-client mission behavior, caster readiness or a passing
+horizon; the common retry dispatcher remains separate work.
+
+The explicit-relation extension is checked in
+`/tmp/pc3-sol04-help-response-validation-1794546732395192385/report.json`:
+36 Curse and 53 autocast tests pass, including the two selected-image gates.
+`slow_negative_filter_uses_directed_help_response_and_preserves_unknown_state`
+issues public attacks and alliance writes using a nonstock relation enumerand;
+it checks missing-state refusal, opposite-direction/passive independence,
+explicit false, self-override precedence, budget exhaustion and unchanged unit
+records without cast events. The relocated source fixture uses a nonstock mask
+layout and stride, while
+`victim_relation_rejects_receiver_layout_and_self_initializer_drift` rejects
+changed receiver, field, getter/setter, enable operation and initializer roles.
+Strict native/WASM Clippy, both library builds and touched-file formatting pass
+with unchanged gameplay-source fingerprints. Initial fixture failures remain
+in their separate logs; they are not counted as successful checks.
 
 Local validation receipt:
 `/tmp/pc3-sol04-validation-1794517450346458864/report.json`. On the isolated
