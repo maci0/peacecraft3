@@ -176,6 +176,7 @@ impl Rules {
         let arc = read(0x8a19ea, 14, true)?;
         shape(&arc, 0, &[0x0f, 0x2f, 0x05])?;
         shape(&arc, 7, &[0x76, 0x5d, 0xa1])?;
+        Self::read_normalization(read, numeric, word(&arc, 10)?)?;
         let step = read(0x8b0169, 20, true)?;
         shape(&step, 0, &[0x8b, 0x86, 0xb8, 0, 0, 0])?;
         shape(&step, 14, &[0x0f, 0x2f, 0xc1, 0x0f, 0x47, 0xc1])?;
@@ -206,6 +207,47 @@ impl Rules {
             return Err("heading inconsistent source ranges".into());
         }
         Ok(rules)
+    }
+
+    fn read_normalization(
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+        numeric: &NumericPolicy,
+        full_turn: u32,
+    ) -> Result<(), String> {
+        call(&read(0x8b14b9, 5, true)?, 0x8b14b9, 0, 0x8bc3d0)?;
+        let setter = read(0x8bc3dd, 16, true)?;
+        call(&setter, 0x8bc3dd, 0, 0x8aead0)?;
+        shape(
+            &setter,
+            5,
+            &[0x83, 0xc4, 8, 0x8b, 0, 0x89, 0x86, 0x8c, 0, 0, 0],
+        )?;
+        let wrap = read(0x8aeaec, 27, true)?;
+        shape(&wrap, 0, &[0x0f, 0x2f, 0x05])?;
+        shape(&wrap, 7, &[0x72, 0x1b, 0x68])?;
+        shape(&wrap, 14, &[0x8d, 0x45, 0x0c, 0x50, 0x8d, 0x45, 0xfc, 0x50])?;
+        call(&wrap, 0x8aeaec, 22, 0x9a1a90)?;
+        let negative = read(0x8aeb10, 32, true)?;
+        shape(&negative, 0, &[0xf3, 0x0f, 0x10, 0x05])?;
+        shape(&negative, 8, &[0x0f, 0x2f, 0x45, 0x0c, 0x76, 0x20, 0x68])?;
+        shape(
+            &negative,
+            19,
+            &[0x8d, 0x45, 0x0c, 0x50, 0x8d, 0x45, 0xfc, 0x50],
+        )?;
+        call(&negative, 0x8aeb10, 27, numeric.addition_va())?;
+        let (zero, value) = numeric
+            .integer_initializer(&read(0x401300, 16, true)?, 0x401300)
+            .ok_or("heading normalization zero initializer differs")?;
+        if word(&wrap, 3)? != full_turn
+            || word(&wrap, 10)? != full_turn
+            || word(&negative, 15)? != full_turn
+            || word(&negative, 4)? != zero
+            || value != 0.0
+        {
+            return Err("heading normalization operands differ".into());
+        }
+        Ok(())
     }
 
     /// One stationary logical step. Callers must supply the authoritative physics frame.
@@ -324,6 +366,33 @@ pub(crate) mod tests {
         ] {
             put(va, value.to_bits().to_le_bytes().to_vec());
         }
+        let mut setter = vec![0xe8];
+        setter.extend(relative(0x8b14b9, 0x8bc3d0));
+        put(0x8b14b9, setter);
+        let mut normalize = vec![0xe8];
+        normalize.extend(relative(0x8bc3dd, 0x8aead0));
+        normalize.extend([0x83, 0xc4, 8, 0x8b, 0, 0x89, 0x86, 0x8c, 0, 0, 0]);
+        put(0x8bc3dd, normalize);
+        let mut wrap = vec![0x0f, 0x2f, 0x05];
+        wrap.extend(0x70430_u32.to_le_bytes());
+        wrap.extend([0x72, 0x1b, 0x68]);
+        wrap.extend(0x70430_u32.to_le_bytes());
+        wrap.extend([0x8d, 0x45, 0x0c, 0x50, 0x8d, 0x45, 0xfc, 0x50, 0xe8]);
+        wrap.extend(relative(0x8aeb02, 0x9a1a90));
+        put(0x8aeaec, wrap);
+        let mut negative = vec![0xf3, 0x0f, 0x10, 0x05];
+        negative.extend(0x70500_u32.to_le_bytes());
+        negative.extend([0x0f, 0x2f, 0x45, 0x0c, 0x76, 0x20, 0x68]);
+        negative.extend(0x70430_u32.to_le_bytes());
+        negative.extend([0x8d, 0x45, 0x0c, 0x50, 0x8d, 0x45, 0xfc, 0x50, 0xe8]);
+        negative.extend(relative(0x8aeb2b, binding.math_add.va));
+        put(0x8aeb10, negative);
+        let mut zero = vec![0x6a, 0, 0x68];
+        zero.extend(0x70500_u32.to_le_bytes());
+        zero.push(0xe8);
+        zero.extend(relative(0x401307, binding.math_i32_to_real.va));
+        zero.extend([0x83, 0xc4, 8, 0xc3]);
+        put(0x401300, zero);
         memory
     }
 
@@ -432,6 +501,11 @@ pub(crate) mod tests {
         let numeric = numeric();
         assert_eq!(rules.normalize(&numeric, 12.25).unwrap(), 6.375);
         assert_eq!(rules.normalize(&numeric, -0.25).unwrap(), 11.75);
+        assert_eq!(rules.normalize(&numeric, -12.25).unwrap(), 5.625);
+        assert_eq!(
+            rules.normalize(&numeric, -0.).unwrap().to_bits(),
+            (-0_f32).to_bits()
+        );
         assert_eq!(
             numeric
                 .positive_remainder(0_f32.to_bits(), 12_f32.to_bits())
@@ -450,6 +524,37 @@ pub(crate) mod tests {
                     .positive_remainder(left.to_bits(), right.to_bits())
                     .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn negative_normalization_binds_relocated_operands_setter_and_arithmetic_calls() {
+        assert_eq!(
+            decode(&fixture())
+                .unwrap()
+                .normalize(&numeric(), -0.5)
+                .unwrap(),
+            11.5
+        );
+        for (va, at) in [
+            (0x8b14b9, 1),
+            (0x8bc3dd, 1),
+            (0x8bc3dd, 12),
+            (0x8aeaec, 3),
+            (0x8aeaec, 7),
+            (0x8aeaec, 10),
+            (0x8aeaec, 23),
+            (0x8aeb10, 4),
+            (0x8aeb10, 12),
+            (0x8aeb10, 15),
+            (0x8aeb10, 28),
+            (0x401300, 1),
+            (0x401300, 3),
+            (0x401300, 8),
+        ] {
+            let mut drift = fixture();
+            drift.iter_mut().find(|(base, _)| *base == va).unwrap().1[at] ^= 1;
+            assert!(decode(&drift).is_err(), "{va:x}+{at}");
         }
     }
 

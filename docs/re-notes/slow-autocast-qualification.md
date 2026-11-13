@@ -154,7 +154,8 @@ polymorph restoration retain these properties. Form replacement preserves the
 logical angle, visual angle, angular velocity and target relation; capability
 mismatch refuses before mutation. Movement and attack writers keep logical and
 visual state coherent, but their instantaneous logical facing remains existing
-recreation debt. Script timed turns on this clock still refuse explicitly.
+recreation debt. [Timed facing](unit-facing-timed.md) now admits the selected
+handler's short-duration direct-facing branch; longer controllers still refuse.
 
 The initial request anchor has a separate read-only native observation. The root
 chain is `[[0x113b6f4]+0x1c]+0x2a8`, joined through `0x520d30`, `0x47ab10` and
