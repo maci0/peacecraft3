@@ -385,7 +385,20 @@ fn public_fixture_admitted(
                 native GetBJPlayerNeutralVictim takes nothing returns integer\n\
                 native GetBJMaxPlayers takes nothing returns integer\n\
                 native GetPlayerNeutralAggressive takes nothing returns integer\n\
-                native GetPlayerNeutralPassive takes nothing returns integer\n"
+                native GetPlayerNeutralPassive takes nothing returns integer\n\
+                type limitop extends eventid\n\
+                constant native ConvertLimitOp takes integer value returns limitop\n\
+                native TriggerRegisterPlayerStateEvent takes trigger t, player p, playerstate s, limitop op, real limit returns event\n\
+                constant native GetEventPlayerState takes nothing returns playerstate\n\
+                globals\n\
+                constant limitop LESS_THAN=ConvertLimitOp(0)\n\
+                constant limitop LESS_THAN_OR_EQUAL=ConvertLimitOp(1)\n\
+                constant limitop EQUAL=ConvertLimitOp(2)\n\
+                constant limitop GREATER_THAN_OR_EQUAL=ConvertLimitOp(3)\n\
+                constant limitop GREATER_THAN=ConvertLimitOp(4)\n\
+                constant limitop NOT_EQUAL=ConvertLimitOp(5)\n\
+                constant playerevent EVENT_PLAYER_STATE_LIMIT=ConvertPlayerEvent(47)\n\
+                endglobals\n"
             ),
             |mut host| {
                 let catalog = Arc::new(PublicBuildCatalog(host.unit_catalog().unwrap()));
@@ -2287,6 +2300,15 @@ fn assistant_fixture(
     rate: &str,
     overlay: pcx_objects::editor::Overlay,
 ) -> (Vm, HandleId, HandleId) {
+    assistant_fixture_configured(ratio, rate, overlay, |host| host)
+}
+
+fn assistant_fixture_configured(
+    ratio: &str,
+    rate: &str,
+    overlay: pcx_objects::editor::Overlay,
+    configure: impl FnOnce(ObjectHost) -> ObjectHost,
+) -> (Vm, HandleId, HandleId) {
     struct AssistantCatalog(Arc<dyn ObjectCatalog + Send + Sync>);
     impl ObjectCatalog for AssistantCatalog {
         fn resolve(&self, code: [u8; 4]) -> Result<Definition, ResolutionProblem> {
@@ -2383,18 +2405,20 @@ fn assistant_fixture(
             )
             .unwrap();
             let (rules, _) = super::super::super::hero_rules();
-            host.with_hero_skills(
-                tables,
-                origin,
-                overlay,
-                rules,
-                crate::playercolor_host::HeroBudget {
-                    abilities_per_unit: 8,
-                    overlay_objects: 4,
-                    modifications_per_ability: 8,
-                },
+            configure(
+                host.with_hero_skills(
+                    tables,
+                    origin,
+                    overlay,
+                    rules,
+                    crate::playercolor_host::HeroBudget {
+                        abilities_per_unit: 8,
+                        overlay_objects: 4,
+                        modifications_per_ability: 8,
+                    },
+                )
+                .unwrap(),
             )
-            .unwrap()
         },
     )
 }
@@ -2420,12 +2444,62 @@ fn assistant_worker(host: &mut ObjectHost, owner: HandleId) -> HandleId {
     worker
 }
 
-#[test]
-fn published_session_finishes_fractional_free_assistance_at_large_clocks() {
+fn publish_construction_session(
+    vm: &mut Vm,
+) -> crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost> {
     use crate::map_script_session::MapScriptSession;
     use crate::map_startup_host::MapStartupHost;
     use crate::neutral_player::{SelectedMapNeutralHost, tests as neutral};
+    let host = &mut vm.host().inner;
+    let context = Arc::clone(host.player_context().unwrap());
+    let placeholder = ObjectHost::checked(
+        EnumHost::checked_selected(
+            context.scripts.shared_program(),
+            &context.map_digest.label,
+            &[],
+            Limits {
+                max_handles: 256,
+                admission_steps: 1000,
+                expression_depth: 64,
+                expression_work: 4096,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let host = std::mem::replace(host, placeholder);
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::slots_rule(301, -3, 9), host)
+            .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::extra_rule(301, -3, 9), world)
+            .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::victim_rule(301, -3, 9), world)
+            .unwrap();
+    let world = SelectedMapNeutralHost::try_new(
+        context.clone(),
+        neutral::bj_max_players_rule(301, -3, 9),
+        world,
+    )
+    .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(context.clone(), neutral::aggressive_rules(301), world)
+            .unwrap();
+    let world = SelectedMapNeutralHost::try_new(context.clone(), neutral::rules(), world).unwrap();
+    let mut session = MapScriptSession::<MapStartupHost>::default();
+    session
+        .replace(
+            context,
+            |_| Ok::<_, std::convert::Infallible>(MapStartupHost::timer_session_fixture(world)),
+            &[],
+        )
+        .unwrap();
+    session
+}
 
+#[test]
+fn published_session_finishes_fractional_free_assistance_at_large_clocks() {
     for start in [10000., 1_099_511_627_776.] {
         let (mut vm, primary, _) = assistant_fixture("0", ".3", Default::default());
         let owner = vm.host().inner.executed_unit(primary).unwrap().owner;
@@ -2445,57 +2519,7 @@ fn published_session_finishes_fractional_free_assistance_at_large_clocks() {
             bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
             bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
         ];
-        let context = Arc::clone(host.player_context().unwrap());
-        let placeholder = ObjectHost::checked(
-            EnumHost::checked_selected(
-                context.scripts.shared_program(),
-                &context.map_digest.label,
-                &[],
-                Limits {
-                    max_handles: 256,
-                    admission_steps: 1000,
-                    expression_depth: 64,
-                    expression_work: 4096,
-                },
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let host = std::mem::replace(host, placeholder);
-        let world =
-            SelectedMapNeutralHost::try_new(context.clone(), neutral::slots_rule(301, -3, 9), host)
-                .unwrap();
-        let world = SelectedMapNeutralHost::try_new(
-            context.clone(),
-            neutral::extra_rule(301, -3, 9),
-            world,
-        )
-        .unwrap();
-        let world = SelectedMapNeutralHost::try_new(
-            context.clone(),
-            neutral::victim_rule(301, -3, 9),
-            world,
-        )
-        .unwrap();
-        let world = SelectedMapNeutralHost::try_new(
-            context.clone(),
-            neutral::bj_max_players_rule(301, -3, 9),
-            world,
-        )
-        .unwrap();
-        let world =
-            SelectedMapNeutralHost::try_new(context.clone(), neutral::aggressive_rules(301), world)
-                .unwrap();
-        let world =
-            SelectedMapNeutralHost::try_new(context.clone(), neutral::rules(), world).unwrap();
-        let mut session = MapScriptSession::<MapStartupHost>::default();
-        session
-            .replace(
-                context,
-                |_| Ok::<_, std::convert::Infallible>(MapStartupHost::timer_session_fixture(world)),
-                &[],
-            )
-            .unwrap();
+        let mut session = publish_construction_session(&mut vm);
         assert_eq!(session.advance_timers(start + 40., 8).unwrap(), 0);
         assert_eq!(session.advance_queued_events(1).unwrap(), 1);
         assert_eq!(session.advance_timers(start + 41., 8).unwrap(), 0);
@@ -2974,4 +2998,366 @@ fn assisted_site_death_clears_enrolled_and_arriving_helpers_and_all_charge_wakes
     let host = &mut vm.host().inner;
     assert!(host.take_fired_event().is_none());
     assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), paid);
+}
+
+#[test]
+fn membership_stop_debits_only_distant_resource_and_preserves_near_deadline_in_session() {
+    let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+    let owner = vm.host().inner.executed_unit(primary).unwrap().owner;
+    register(&mut vm, owner, "EVENT_PLAYER_UNIT_CONSTRUCT_FINISH");
+    let site = site(&mut vm, primary);
+    let host = &mut vm.host().inner;
+    let helpers = [assistant_worker(host, owner), assistant_worker(host, owner)];
+    for worker in helpers {
+        assert!(host.set_construction_worker(site, Some(worker)).unwrap());
+    }
+    let mut session = publish_construction_session(&mut vm);
+    assert_eq!(session.advance_timers(0.25, 16).unwrap(), 0);
+    let host = session.host().unwrap().objects_mut();
+    let before = host.construction_test_assistant_deadlines(site);
+    assert!(
+        before[0].unwrap() - 0.25 <= 7. && before[1].unwrap() - 0.25 > 7.,
+        "{before:?}"
+    );
+    let banks = [
+        bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+    ];
+    assert_eq!(
+        host.native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(helpers[0]), Value::Int(744)]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), banks[0]);
+    assert_eq!(
+        bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+        banks[1] - 3
+    );
+    let after = host.construction_test_assistant_deadlines(site);
+    assert_eq!(after[0], before[0]);
+    assert!(after[1].unwrap() > 0.25 && after[1] != before[1]);
+    assert!(host.unit_construction_order(helpers[0]).unwrap().is_none());
+    assert_eq!(session.advance_timers(80., 256).unwrap(), 0);
+    assert_eq!(session.advance_queued_events(1).unwrap(), 1);
+    assert_eq!(session.advance_queued_events(1).unwrap(), 0);
+    let host = session.host().unwrap().objects_mut();
+    assert!(host.unit_construction(site).unwrap().is_none());
+    for worker in [primary, helpers[1]] {
+        assert!(host.unit_construction_order(worker).unwrap().is_none());
+    }
+}
+
+fn producer_assistant_fixture() -> (Vm, HandleId, HandleId, HandleId, HandleId) {
+    struct QueueCostCatalog(Arc<dyn ObjectCatalog + Send + Sync>);
+    impl ObjectCatalog for QueueCostCatalog {
+        fn resolve(&self, code: [u8; 4]) -> Result<Definition, ResolutionProblem> {
+            let mut definition = self.0.resolve(code)?;
+            if code == *b"u001" {
+                definition.fields.get_mut(b"T004").unwrap().value =
+                    Ok(FieldValue::Cell("9".into()));
+            }
+            Ok(definition)
+        }
+    }
+    let (mut vm, primary, _) =
+        assistant_fixture_configured(".25", ".5", Default::default(), |mut host| {
+            host.construction_test_catalog(Arc::new(QueueCostCatalog(
+                host.unit_catalog().unwrap(),
+            )));
+            host.with_player_state_events(8).unwrap()
+        });
+    let site = site(&mut vm, primary);
+    let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+    let wood = vm.global("PLAYER_STATE_RESOURCE_LUMBER");
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(primary).unwrap().owner;
+    let a = assistant_worker(host, owner);
+    let b = assistant_worker(host, owner);
+    for worker in [a, b] {
+        assert!(host.set_construction_worker(site, Some(worker)).unwrap());
+    }
+    assert_eq!(
+        host.native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(a), Value::Int(i32::from_be_bytes(*b"u001"))]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(host.unit_training_queue(a).unwrap().len(), 1);
+    assert!(host.unit_construction_order(a).unwrap().is_some());
+    for state in [gold, wood] {
+        host.native(
+            "SetPlayerState",
+            &[Value::Handle(owner), state, Value::Int(20)],
+        )
+        .unwrap();
+    }
+    (vm, primary, site, a, b)
+}
+
+#[test]
+fn producer_assistant_loss_composes_refund_debit_food_and_projected_event_snapshots() {
+    for action in ["KillUnit", "RemoveUnit"] {
+        let (mut vm, primary, site, a, b) = producer_assistant_fixture();
+        let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+        let wood = vm.global("PLAYER_STATE_RESOURCE_LUMBER");
+        let op = vm.global("GREATER_THAN");
+        let host = &mut vm.host().inner;
+        let owner = host.executed_unit(primary).unwrap().owner;
+        let food = bank(host, owner, "PLAYER_STATE_RESOURCE_FOOD_USED");
+        for state in [gold.clone(), wood.clone()] {
+            let trigger = host.native("CreateTrigger", &[]).unwrap();
+            host.native(
+                "TriggerRegisterPlayerStateEvent",
+                &[
+                    trigger,
+                    Value::Handle(owner),
+                    state,
+                    op.clone(),
+                    Value::Real(0.),
+                ],
+            )
+            .unwrap();
+        }
+        host.native(action, &[Value::Handle(a)]).unwrap();
+        assert_eq!(
+            bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+            35,
+            "{action}"
+        );
+        assert_eq!(
+            bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+            20,
+            "refund3 then debit3: {action}"
+        );
+        assert_eq!(
+            bank(host, owner, "PLAYER_STATE_RESOURCE_FOOD_USED"),
+            food - 3,
+            "{action}"
+        );
+        assert!(host.unit_training_queue(a).unwrap().is_empty());
+        assert_eq!(
+            host.unit_construction(site).unwrap().unwrap().worker,
+            Some(primary)
+        );
+        assert_eq!(
+            host.unit_construction_order(b).unwrap().unwrap().site,
+            Some(site)
+        );
+        let mut events = Vec::new();
+        while let Some(event) = host.take_fired_event() {
+            host.begin_fired_event(&event).unwrap().unwrap();
+            events.push(host.native("GetEventPlayerState", &[]).unwrap());
+            host.finish_fired_event();
+        }
+        assert_eq!(events, vec![gold, wood.clone(), wood], "{action}");
+    }
+}
+
+#[test]
+fn projected_event_reservation_overflow_keeps_banks_orders_liveness_and_snapshots() {
+    let (mut vm, primary, site, a, _) = producer_assistant_fixture();
+    let wood = vm.global("PLAYER_STATE_RESOURCE_LUMBER");
+    let op = vm.global("GREATER_THAN");
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(primary).unwrap().owner;
+    let trigger = host.native("CreateTrigger", &[]).unwrap();
+    host.native(
+        "TriggerRegisterPlayerStateEvent",
+        &[
+            trigger,
+            Value::Handle(owner),
+            wood.clone(),
+            op,
+            Value::Real(0.),
+        ],
+    )
+    .unwrap();
+    let Value::Handle(state) = wood else { panic!() };
+    assert!(
+        host.construction_test_refund_event_overflow(a, owner)
+            .is_err()
+    );
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), 20);
+    assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 20);
+    assert!(!host.executed_unit(a).unwrap().combat.as_ref().unwrap().dead);
+    assert_eq!(host.unit_training_queue(a).unwrap().len(), 1);
+    assert_eq!(
+        host.unit_construction_order(a).unwrap().unwrap().site,
+        Some(site)
+    );
+    assert!(host.take_fired_event().is_none());
+    // A later ordinary change still sees the original registration snapshot.
+    host.native(
+        "SetPlayerState",
+        &[Value::Handle(owner), Value::Handle(state), Value::Int(21)],
+    )
+    .unwrap();
+    assert!(host.take_fired_event().is_some());
+}
+
+#[test]
+fn membership_boundary_at_source_horizon_retains_both_pending_debits() {
+    let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+    let site = site(&mut vm, primary);
+    let host = &mut vm.host().inner;
+    let owner = host.executed_unit(primary).unwrap().owner;
+    let a = assistant_worker(host, owner);
+    let b = assistant_worker(host, owner);
+    for worker in [a, b] {
+        assert!(host.set_construction_worker(site, Some(worker)).unwrap());
+    }
+    let now = host.construction_test_assistant_deadlines(site)[1].unwrap() - 7.;
+    assert!(now > 0.);
+    step(&mut vm, now);
+    let host = &mut vm.host().inner;
+    let before = host.construction_test_assistant_deadlines(site);
+    assert_eq!(before[1].unwrap() - now, 7.);
+    let banks = [
+        bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+        bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+    ];
+    host.native(
+        "IssueImmediateOrderById",
+        &[Value::Handle(a), Value::Int(744)],
+    )
+    .unwrap();
+    assert_eq!(host.construction_test_assistant_deadlines(site), before);
+    assert_eq!(
+        [
+            bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+            bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER")
+        ],
+        banks
+    );
+}
+
+#[test]
+fn unaffordable_member_loss_stops_paid_cohort_preserves_free_work_without_refunds() {
+    for action in [
+        "IssueImmediateOrderById",
+        "KillUnit",
+        "RemoveUnit",
+        "SetUnitOwner",
+    ] {
+        let (mut vm, primary, _) = assistant_fixture(".25", ".5", Default::default());
+        let site = site(&mut vm, primary);
+        let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+        let wood = vm.global("PLAYER_STATE_RESOURCE_LUMBER");
+        let host = &mut vm.host().inner;
+        let owner = host.executed_unit(primary).unwrap().owner;
+        let a = assistant_worker(host, owner);
+        let b = assistant_worker(host, owner);
+        let Value::Handle(free) = host
+            .native(
+                "CreateUnit",
+                &[
+                    Value::Handle(owner),
+                    Value::Int(i32::from_be_bytes(*b"w001")),
+                    Value::Real(16.),
+                    Value::Real(80.),
+                    Value::Real(0.),
+                ],
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        host.native("RemoveGuardPosition", &[Value::Handle(free)])
+            .unwrap();
+        for worker in [a, b, free] {
+            assert!(host.set_construction_worker(site, Some(worker)).unwrap());
+        }
+        for state in [gold, wood] {
+            host.native(
+                "SetPlayerState",
+                &[Value::Handle(owner), state, Value::Int(0)],
+            )
+            .unwrap();
+        }
+        let args = match action {
+            "IssueImmediateOrderById" => vec![Value::Handle(a), Value::Int(744)],
+            "SetUnitOwner" => vec![
+                Value::Handle(a),
+                host.native("Player", &[Value::Int(5)]).unwrap(),
+                Value::Bool(false),
+            ],
+            _ => vec![Value::Handle(a)],
+        };
+        host.native(action, &args).unwrap();
+        assert_eq!(
+            bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"),
+            0,
+            "{action}"
+        );
+        assert_eq!(
+            bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"),
+            0,
+            "{action}"
+        );
+        assert!(
+            host.unit_construction_order(b).unwrap().is_none(),
+            "{action}"
+        );
+        assert_eq!(
+            host.unit_construction_order(free).unwrap().unwrap().site,
+            Some(site)
+        );
+        assert_eq!(
+            host.unit_construction(site).unwrap().unwrap().worker,
+            Some(primary)
+        );
+        step(&mut vm, 1.);
+        assert_eq!(
+            vm.host()
+                .inner
+                .unit_construction(site)
+                .unwrap()
+                .unwrap()
+                .elapsed,
+            1.75,
+            "{action}"
+        );
+    }
+}
+
+#[test]
+fn primary_only_loss_has_no_assistant_charge_or_resource_requirement() {
+    for action in [
+        "IssueImmediateOrderById",
+        "KillUnit",
+        "RemoveUnit",
+        "SetUnitOwner",
+    ] {
+        let (mut vm, primary, _) = assistant_fixture("0", ".5", Default::default());
+        let site = site(&mut vm, primary);
+        let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+        let wood = vm.global("PLAYER_STATE_RESOURCE_LUMBER");
+        let host = &mut vm.host().inner;
+        let owner = host.executed_unit(primary).unwrap().owner;
+        for state in [gold, wood] {
+            host.native(
+                "SetPlayerState",
+                &[Value::Handle(owner), state, Value::Int(0)],
+            )
+            .unwrap();
+        }
+        let args = match action {
+            "IssueImmediateOrderById" => vec![Value::Handle(primary), Value::Int(744)],
+            "SetUnitOwner" => vec![
+                Value::Handle(primary),
+                host.native("Player", &[Value::Int(5)]).unwrap(),
+                Value::Bool(false),
+            ],
+            _ => vec![Value::Handle(primary)],
+        };
+        host.native(action, &args).unwrap();
+        assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+        assert_eq!(bank(host, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 0);
+        assert_eq!(host.unit_construction(site).unwrap().unwrap().worker, None);
+    }
 }

@@ -1602,7 +1602,10 @@ impl ObjectHost {
         if !eligible {
             return Ok(());
         }
+        self.advance_construction_participant(unit)?;
         let training = self.prepare_training_death(unit)?;
+        let construction =
+            self.prepare_construction_loss(unit, training.as_ref().and_then(|plan| plan.credit()))?;
         let upgrade_animation = training
             .as_ref()
             .and_then(|plan| plan.upgraded_death_animation());
@@ -1687,7 +1690,7 @@ impl ObjectHost {
         if let Some(blight) = &mut self.initial_blight {
             blight.remove_growth(unit);
         }
-        self.forget_construction_unit(unit)?;
+        self.forget_construction_unit(unit, construction)?;
         if exploded && !exploded_presented {
             self.note_unrendered_explosion(unit);
         }

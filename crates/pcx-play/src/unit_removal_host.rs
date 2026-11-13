@@ -63,16 +63,18 @@ impl ObjectHost {
             ),
             _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
         };
-        // Producer-loss cleanup for training queues: refund remaining entries
-        // per-entry with the admitted rate and release active food, without
-        // training events. Mirrors the qualified producer-death path; explicit
-        // removal is not a UI cancellation.
-        if self.producer_has_training(unit)
-            && let Some(cleanup) = self.prepare_training_removal(unit)?
-        {
-            self.commit_training_death(cleanup);
+        self.advance_construction_participant(unit)?;
+        let training = if self.producer_has_training(unit) {
+            self.prepare_training_removal(unit)?
+        } else {
+            None
+        };
+        let construction =
+            self.prepare_construction_loss(unit, training.as_ref().and_then(|plan| plan.credit()))?;
+        if let Some(training) = training {
+            self.commit_training_death(training);
         }
-        self.forget_construction_unit(unit)?;
+        self.forget_construction_unit(unit, construction)?;
         self.forget_morph_unit(unit);
         self.forget_mirror_unit(unit);
         self.forget_inventory_unit(unit, true)?;

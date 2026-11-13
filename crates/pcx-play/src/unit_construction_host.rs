@@ -74,6 +74,12 @@ struct PreparedBuild {
     steer: super::unit_activity::PreparedSteer,
 }
 
+pub(super) struct PreparedConstructionMembership {
+    site: HandleId,
+    state: Site,
+    debit: Option<super::players::ResourceCredit>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Site {
     worker: Option<HandleId>,
@@ -168,6 +174,34 @@ impl ObjectHost {
     #[cfg(test)]
     pub(crate) fn clear_construction_test_player_admission(&mut self) {
         self.players = None;
+    }
+    #[cfg(test)]
+    pub(crate) fn construction_test_assistant_deadlines(&self, site: HandleId) -> [Option<f64>; 2] {
+        self.executed_unit(site)
+            .unwrap()
+            .construction
+            .as_ref()
+            .unwrap()
+            .assistant_next
+    }
+    #[cfg(test)]
+    pub(crate) fn construction_test_refund_event_overflow(
+        &mut self,
+        unit: HandleId,
+        owner: HandleId,
+    ) -> Result<(), Error> {
+        let state = self.source_constant_enumerand("PLAYER_STATE_RESOURCE_LUMBER", "playerstate")?;
+        let prior = self
+            .prepare_training_death(unit)?
+            .expect("test queued producer");
+        let changes = prior.credit().expect("test ordinary refund").changes();
+        self.prepare_player_state_changes_after_reserving(
+            owner,
+            [(state, 20)],
+            usize::MAX,
+            &changes,
+        )
+        .map(|_| ())
     }
 
     /// Authored build list and current readiness; malformed admission is an error.
@@ -740,7 +774,12 @@ impl ObjectHost {
         Ok(found)
     }
 
-    fn refresh_construction_assistants(&self, state: &mut Site, now: f64) -> Result<(), Error> {
+    fn refresh_construction_assistants(
+        &self,
+        state: &mut Site,
+        now: f64,
+        reconfigure: bool,
+    ) -> Result<(), Error> {
         let mut rate = 0.;
         let mut cost = [0.; 2];
         for assistant in &state.assistants {
@@ -751,6 +790,19 @@ impl ObjectHost {
         }
         let speed = self.construction_math(BinOp::Add, 1., rate)?;
         let duration = self.construction_math(BinOp::Div, state.duration as f32, speed)?;
+        let horizon = if reconfigure && cost.iter().any(|cost| *cost > 0.) {
+            let rules = self.construction_rules()?;
+            let numeric = self.numeric.as_ref().expect("construction math checked");
+            let horizon = numeric
+                .integer(rules.assistant_reconfigure_horizon)
+                .map_err(|why| self.construction_error(why))?;
+            if !horizon.is_finite() || horizon <= 0. {
+                return Err(self.construction_error("invalid assistant reconfiguration horizon"));
+            }
+            f64::from(horizon)
+        } else {
+            0.
+        };
         for (i, cost) in cost.into_iter().enumerate() {
             state.assistant_period[i] = if cost > 0. {
                 let quantum = self
@@ -772,12 +824,80 @@ impl ObjectHost {
             } else {
                 None
             };
-            // Preserve an already scheduled debit; following periods use the new pooled contributions.
-            state.assistant_next[i] =
-                state.assistant_period[i].map(|_| state.assistant_next[i].unwrap_or(now));
+            state.assistant_next[i] = state.assistant_period[i].map(|_| {
+                state.assistant_next[i]
+                    .filter(|at| !reconfigure || *at - now <= horizon)
+                    .unwrap_or(now)
+            });
         }
         state.assistant_rate = rate;
         Ok(())
+    }
+
+    fn prepare_construction_membership(
+        &mut self,
+        site: HandleId,
+        mut state: Site,
+        now: f64,
+        reconfigure: bool,
+        prior: Option<&super::players::TrainingDebit>,
+    ) -> Result<PreparedConstructionMembership, Error> {
+        self.refresh_construction_assistants(&mut state, now, reconfigure)?;
+        let owner = self.executed_unit(site)?.owner;
+        let quantum = self.construction_rules()?.assistant_debit;
+        if state.assistant_period.iter().any(Option::is_some) {
+            if quantum <= 0 {
+                return Err(self.construction_error("assistant debit quantum must be positive"));
+            }
+            let bank = self.construction_debit_bank(owner, prior)?;
+            state.assistants.retain(|assistant| {
+                assistant
+                    .cost
+                    .iter()
+                    .zip(bank)
+                    .all(|(cost, bank)| *cost == 0. || bank >= quantum)
+            });
+            self.refresh_construction_assistants(&mut state, now, false)?;
+        }
+        let mut charges = [0; 2];
+        for (i, charge) in charges.iter_mut().enumerate() {
+            if let (Some(at), Some(period)) = (state.assistant_next[i], state.assistant_period[i])
+                && at <= now
+            {
+                let next = now + period;
+                if next <= now || !next.is_finite() {
+                    return Err(self.construction_error("assistant charging clock did not advance"));
+                }
+                *charge = quantum;
+                state.assistant_next[i] = Some(next);
+            }
+        }
+        let debit = if charges == [0; 2] {
+            None
+        } else {
+            Some(
+                self.prepare_construction_debit_after(owner, charges, prior)?
+                    .ok_or_else(|| self.construction_error("assistant debit preflight changed"))?,
+            )
+        };
+        Ok(PreparedConstructionMembership { site, state, debit })
+    }
+
+    pub(super) fn commit_construction_membership(
+        &mut self,
+        prepared: PreparedConstructionMembership,
+    ) {
+        let Entry::Unit { record } = self
+            .inner
+            .entry_mut(prepared.site)
+            .expect("prepared construction site")
+        else {
+            unreachable!("prepared construction site family")
+        };
+        record.construction = Some(prepared.state);
+        if let Some(debit) = prepared.debit {
+            self.apply_resource_credit(debit);
+        }
     }
 
     fn prepare_construction_request(
@@ -1236,42 +1356,62 @@ impl ObjectHost {
         Ok(())
     }
 
-    pub(super) fn forget_construction_unit(&mut self, unit: HandleId) -> Result<(), Error> {
-        // Qualified pre-arrival KillUnit and STOP both release the complete reservation without site events.
-        self.cancel_construction_request(unit)?;
-        let sites: Vec<_> = self
-            .executed_units()
-            .filter_map(|(site, record)| {
-                record
-                    .construction
-                    .as_ref()
-                    .filter(|state| {
-                        state.worker == Some(unit)
-                            || state.assistants.iter().any(|a| a.worker == unit)
-                    })
-                    .map(|_| site)
-            })
-            .collect();
-        for site in sites {
-            let mut state = self
-                .executed_unit(site)?
-                .construction
-                .clone()
-                .expect("retained site");
-            if state.worker == Some(unit) {
-                state.worker = None;
-            }
+    pub(super) fn advance_construction_participant(&mut self, unit: HandleId) -> Result<(), Error> {
+        if let Some(site) = self
+            .unit_construction_order(unit)?
+            .and_then(|order| order.site)
+        {
+            let now = self
+                .timer_game_time()
+                .ok_or_else(|| self.construction_error("construction clock"))?;
+            self.advance_unit_construction(site, now)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_construction_loss(
+        &mut self,
+        unit: HandleId,
+        prior: Option<&super::players::TrainingDebit>,
+    ) -> Result<Option<PreparedConstructionMembership>, Error> {
+        let Some(site) = self
+            .unit_construction_order(unit)?
+            .and_then(|order| order.site)
+        else {
+            return Ok(None);
+        };
+        let Some(mut state) = self.executed_unit(site)?.construction.clone() else {
+            return Ok(None);
+        };
+        let changed = state
+            .assistants
+            .iter()
+            .any(|assistant| assistant.worker == unit);
+        if state.worker == Some(unit) {
+            state.worker = None;
+        } else if changed {
             state
                 .assistants
                 .retain(|assistant| assistant.worker != unit);
-            self.refresh_construction_assistants(
-                &mut state,
-                self.timer_game_time()
-                    .ok_or_else(|| self.construction_error("construction clock"))?,
-            )?;
-            if let Entry::Unit { record } = self.inner.entry_mut(site)? {
-                record.construction = Some(state);
-            }
+        } else {
+            return Ok(None);
+        }
+        let now = self
+            .timer_game_time()
+            .ok_or_else(|| self.construction_error("construction clock"))?;
+        self.prepare_construction_membership(site, state, now, changed, prior)
+            .map(Some)
+    }
+
+    pub(super) fn forget_construction_unit(
+        &mut self,
+        unit: HandleId,
+        prepared: Option<PreparedConstructionMembership>,
+    ) -> Result<(), Error> {
+        // Pre-arrival loss releases the reservation; enrolled loss uses its already prepared resource plan.
+        self.cancel_construction_request(unit)?;
+        if let Some(prepared) = prepared {
+            self.commit_construction_membership(prepared);
         }
         let workers: Vec<_> = self
             .executed_units()
@@ -1691,6 +1831,7 @@ impl ObjectHost {
         let paused = record.paused_since;
         let kind = i32::from_be_bytes(record.definition.rawcode);
         let mut delta = now - state.through;
+        let previous_assistants = state.assistants.len();
         let resources = ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"];
         let mut bank = [0; 2];
         let quantum = self.construction_rules()?.assistant_debit;
@@ -1762,7 +1903,8 @@ impl ObjectHost {
                 state.assistants.clear();
             }
         }
-        self.refresh_construction_assistants(&mut state, now)?;
+        let changed = state.assistants.len() != previous_assistants;
+        self.refresh_construction_assistants(&mut state, now, changed)?;
         if state.worker.is_none() && !state.autonomous {
             delta = 0.;
         }
@@ -1824,7 +1966,7 @@ impl ObjectHost {
                     .enumerate()
                     .all(|(i, cost)| *cost == 0. || bank[i] - charges[i] >= quantum)
             });
-            self.refresh_construction_assistants(&mut state, now)?;
+            self.refresh_construction_assistants(&mut state, now, false)?;
         }
         let following_speed =
             f64::from(self.construction_math(BinOp::Add, 1., state.assistant_rate)?);
@@ -1897,6 +2039,10 @@ impl ObjectHost {
         let Some(mut state) = self.executed_unit(site)?.construction.clone() else {
             return Ok(false);
         };
+        let changed = state
+            .assistants
+            .iter()
+            .any(|assistant| assistant.worker == worker);
         if state.worker == Some(worker) {
             state.worker = None;
         } else {
@@ -1904,10 +2050,8 @@ impl ObjectHost {
                 .assistants
                 .retain(|assistant| assistant.worker != worker);
         }
-        self.refresh_construction_assistants(&mut state, now)?;
-        if let Entry::Unit { record } = self.inner.entry_mut(site)? {
-            record.construction = Some(state);
-        }
+        let prepared = self.prepare_construction_membership(site, state, now, changed, None)?;
+        self.commit_construction_membership(prepared);
         Ok(true)
     }
 
@@ -1974,6 +2118,7 @@ impl ObjectHost {
         let Some(mut state) = self.executed_unit(site)?.construction.clone() else {
             return Ok(false);
         };
+        let changed = state.worker.is_some();
         if state.worker.is_some() {
             let Some(assistant) = assistant else {
                 return Ok(false);
@@ -1986,11 +2131,8 @@ impl ObjectHost {
         } else {
             state.worker = Some(worker);
         }
-        self.refresh_construction_assistants(&mut state, now)?;
-        if let Entry::Unit { record } = self.inner.entry_mut(site)? {
-            record.construction = Some(state);
-        }
-        self.advance_unit_construction(site, now)?;
+        let prepared = self.prepare_construction_membership(site, state, now, changed, None)?;
+        self.commit_construction_membership(prepared);
         Ok(true)
     }
 
