@@ -196,6 +196,35 @@ game speed. Native mode must be selected before globals/config/main in that
 platform factory. The generic Fresh/Legacy APIs and the earlier game-only pacing
 prototype keep their existing contracts; neither is a substitute for this adapter.
 
+## Fresh local counter grants
+
+`advance_native_counter_frame` feeds the same FIFO with counter records. The
+selected speed setter and scheduler identify the speed-count table; its length,
+quantum, credit cap, constructor scale, elapsed ratio and fresh modifier are read
+from the selected image. The bound fractional-carry word lies in a validated PE
+zero-filled tail. Grant arithmetic uses the scheduler's unsigned conversion,
+binary32 multiply/add, finite nonnegative truncation and binary32 carry subtraction.
+It does not substitute queue soft arithmetic for the native SSE operations.
+
+Counter records retain checked sub-millisecond carry and DWORD elapsed wrap.
+Each quantum captures the current admitted speed. A pause or speed change during
+its game work preserves the remainder of that grant; later quanta read the new
+state. All quanta precede the record's real advance. This fresh local model
+recreates the observable counter phases without implementing network packet pulls,
+replay overrides or external controller time-scale changes.
+
+Native speed requests validate their selected table index before replacing the
+current identity. Locked requests and legacy different-identity refusals retain
+their existing contracts. The counter stores its original duration with the FIFO
+record and reports committed duration only after the real phase completes, so
+application tick accounting need not count a partly delivered record.
+
+Synthetic kernel and published-session cases cover counter wrap, fractional carry,
+in-flight pause/speed changes, pending grants, locked/invalid speed requests,
+real-wake unpause and partial-record accounting. Normal application routing is
+still held on the coordinated physics, pre-startup factory and resumable selected
+callback integration; this counter transport alone does not activate it.
+
 ## Remaining fidelity work
 
 The normal application adapter and pre-startup mode selection remain open. The

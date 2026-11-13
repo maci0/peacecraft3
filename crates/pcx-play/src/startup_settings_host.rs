@@ -18,7 +18,7 @@ impl ObjectHost {
     /// Context identity does not authenticate the input's runtime provenance.
     /// The caller must refresh or invalidate on external setting changes. Failed
     /// admission preserves the prior state. Locked speed requests are ignored.
-    /// Unlocked requests can only retain the current speed until rates are qualified.
+    /// Native counter rules qualify rate changes; legacy callers retain their current speed.
     pub fn admit_startup_settings(
         &mut self,
         context: &Arc<ParsedMapContext>,
@@ -552,6 +552,20 @@ impl ObjectHost {
                             return Err(self.inner.error(name, Failure::OutsideDomain(value)));
                         }
                         if locked || settings.is_some_and(|settings| *speed == settings.speed) {
+                            Ok(Value::Null)
+                        } else if self.native_clock_driving() {
+                            let admitted = usize::try_from(value).ok().is_some_and(|index| {
+                                self.native_game_clock.as_ref().is_some_and(|clock| {
+                                    clock.rules().turn.speed_steps.get(index).is_some()
+                                })
+                            });
+                            if !admitted {
+                                return Err(self.inner.error(name, Failure::OutsideDomain(value)));
+                            }
+                            self.startup_settings
+                                .as_mut()
+                                .expect("unlocked settings admitted")
+                                .speed = *speed;
                             Ok(Value::Null)
                         } else {
                             // shortcut: rate changes refuse until the clock consumes qualified speed rates.

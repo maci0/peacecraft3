@@ -13,10 +13,30 @@ use std::{collections::VecDeque, sync::Arc, time::Duration};
 pub mod frame;
 #[path = "native_sleep_rules.rs"]
 pub mod sleep;
+#[path = "native_turn_rules.rs"]
+pub mod turn;
 pub use frame::FrameInput;
 pub use sleep::Domain;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug, thiserror::Error)]
+pub enum QueueError {
+    #[error("{0} budget exhausted")]
+    Budget(&'static str),
+    #[error("{0}")]
+    Invalid(String),
+}
+impl From<String> for QueueError {
+    fn from(value: String) -> Self {
+        Self::Invalid(value)
+    }
+}
+impl From<&str> for QueueError {
+    fn from(value: &str) -> Self {
+        Self::Invalid(value.into())
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Rules {
     pub simple: clock::Rules,
     pub numerator: u32,
@@ -25,6 +45,7 @@ pub struct Rules {
     pub wrap_tolerance: u32,
     pub frame: frame::Rules,
     pub sleep: sleep::Rules,
+    pub turn: turn::Rules,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,14 +88,27 @@ impl SleepRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FramePhase {
     Queued,
+    CounterQuanta,
     Game,
     Real,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Frame {
-    input: FrameInput,
+    input: FrameSource,
     phase: FramePhase,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FrameSource {
+    Independent(FrameInput),
+    Counter { raw_ms: u32, duration: Duration },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Input {
+    Independent(FrameInput),
+    Counter(Duration),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +130,11 @@ pub struct State {
     real: frame::Queue,
     frames: Arc<VecDeque<Frame>>,
     selected_domain: Option<Domain>,
+    turn_credit_ms: u32,
+    turn_carry: u32,
+    sub_ms_nanos: u32,
+    counter_platform: bool,
+    completed_counter_ns: u128,
 }
 
 fn word(b: &[u8], at: usize) -> Result<u32, String> {
@@ -150,6 +189,13 @@ impl Rules {
         let frame = frame::Rules::read(&mut read, numeric)
             .map_err(|e| format!("native real clock: {e}"))?;
         let sleep = sleep::Rules::read(&mut read).map_err(|e| format!("native sleep: {e}"))?;
+        let turn = turn::Rules::read(
+            &mut read,
+            |va, len| u32::try_from(len).is_ok_and(|len| pe.zero_filled(va, len)),
+            &frame,
+            budget.profile_bytes,
+        )
+        .map_err(|e| format!("native local turn: {e}"))?;
         verify_timed_event(&mut read)?;
         let (numerator, denominator, destination) = decode_step(&read(0x406730, 56, true)?)?;
         let consumer = read(0x5af277, 43, true)?;
@@ -175,6 +221,7 @@ impl Rules {
             wrap_tolerance,
             frame,
             sleep,
+            turn,
         };
         rules.validate()?;
         Ok(rules)
@@ -182,6 +229,7 @@ impl Rules {
 
     fn validate(&self) -> Result<(), String> {
         self.frame.validate(self.simple.cycle)?;
+        self.turn.validate()?;
         for value in [
             self.simple.origin,
             self.simple.cycle,
@@ -440,6 +488,8 @@ fn finish_drain(
 impl State {
     pub fn new(rules: Rules) -> Result<Self, String> {
         rules.validate()?;
+        let origin = rules.simple.origin.to_bits();
+        let turn_carry = rules.turn.initial_carry;
         Ok(Self {
             point: Point {
                 cycle: 0,
@@ -450,9 +500,14 @@ impl State {
             credit: 0,
             pending: None,
             selected: None,
-            real: frame::Queue::new(rules.simple.origin.to_bits()),
+            real: frame::Queue::new(origin),
             frames: Arc::new(VecDeque::new()),
             selected_domain: None,
+            turn_credit_ms: 0,
+            turn_carry,
+            sub_ms_nanos: 0,
+            counter_platform: false,
+            completed_counter_ns: 0,
         })
     }
     pub fn driver(&self) -> Driver {
@@ -486,31 +541,91 @@ impl State {
     pub fn frame_active(&self) -> bool {
         !self.frames.is_empty()
     }
+    pub fn counter_platform(&self) -> bool {
+        self.counter_platform
+    }
+    pub fn counter_progress_ns(&self) -> u128 {
+        self.completed_counter_ns
+    }
+    pub fn counter_pending_ns(&self) -> u128 {
+        self.frames
+            .iter()
+            .filter_map(|frame| match frame.input {
+                FrameSource::Counter { duration, .. } => Some(duration.as_nanos()),
+                _ => None,
+            })
+            .sum()
+    }
+    pub fn select_counter_platform(&mut self) -> Result<(), String> {
+        self.pace(Duration::ZERO)?;
+        self.counter_platform = true;
+        Ok(())
+    }
 
     pub fn enqueue_frame(&mut self, input: FrameInput, work: &mut usize) -> Result<(), String> {
+        self.enqueue_source(FrameSource::Independent(input), work)
+    }
+    pub fn enqueue_counter_frame(
+        &mut self,
+        elapsed: Duration,
+        work: &mut usize,
+    ) -> Result<(), String> {
+        let total = elapsed
+            .as_nanos()
+            .checked_add(u128::from(self.sub_ms_nanos))
+            .ok_or("native counter duration overflow")?;
+        let milliseconds = (total / 1_000_000) as u32; // GetTickCount subtraction retains the low DWORD.
+        let remainder = (total % 1_000_000) as u32;
+        self.enqueue_source(
+            FrameSource::Counter {
+                raw_ms: milliseconds,
+                duration: elapsed,
+            },
+            work,
+        )?;
+        self.sub_ms_nanos = remainder;
+        self.counter_platform = true;
+        Ok(())
+    }
+    pub(crate) fn enqueue_input(&mut self, input: Input, work: &mut usize) -> Result<(), String> {
+        match input {
+            Input::Independent(input) => self.enqueue_frame(input, work),
+            Input::Counter(elapsed) => self.enqueue_counter_frame(elapsed, work),
+        }
+    }
+    fn enqueue_source(&mut self, input: FrameSource, work: &mut usize) -> Result<(), String> {
         if self.driver == Driver::Legacy || self.selected_domain.is_some() {
             return Err("native frame cannot enter the current driver context".into());
         }
         if *work == 0 || self.frames.len() >= *work {
             return Err("native frame input budget exceeded".into());
         }
-        self.rules.frame.delta(input.real_elapsed_ms)?;
-        let mut credit = self
-            .credit
-            .checked_add(
-                input
-                    .game_elapsed
-                    .as_nanos()
-                    .checked_mul(u128::from(self.rules.denominator))
-                    .ok_or("native frame credit overflow")?,
-            )
-            .ok_or("native frame credit overflow")?;
-        for frame in self.frames.iter() {
-            if frame.phase == FramePhase::Queued {
+        let real_ms = match input {
+            FrameSource::Independent(input) => input.real_elapsed_ms,
+            FrameSource::Counter { raw_ms, .. } => raw_ms,
+        };
+        self.rules.frame.delta(real_ms)?;
+        let mut counter_total = self
+            .completed_counter_ns
+            .checked_add(self.counter_pending_ns())
+            .ok_or("native counter accounting overflow")?;
+        if let FrameSource::Counter { duration, .. } = input {
+            counter_total = counter_total
+                .checked_add(duration.as_nanos())
+                .ok_or("native counter accounting overflow")?;
+        }
+        let _ = counter_total;
+        let mut credit = self.credit;
+        for source in std::iter::once(input).chain(
+            self.frames
+                .iter()
+                .filter(|frame| frame.phase == FramePhase::Queued)
+                .map(|frame| frame.input),
+        ) {
+            if let FrameSource::Independent(input) = source {
                 credit = credit
                     .checked_add(
-                        frame
-                            .input
+                        input
                             .game_elapsed
                             .as_nanos()
                             .checked_mul(u128::from(self.rules.denominator))
@@ -531,41 +646,113 @@ impl State {
         *work -= spent;
         Ok(())
     }
-
     pub fn next_frame_segment(
         &mut self,
         work: &mut usize,
-    ) -> Result<Option<(Domain, Segment)>, String> {
+    ) -> Result<Option<(Domain, Segment)>, QueueError> {
+        self.next_frame_segment_with_settings(work, None, false)
+    }
+    pub fn next_frame_segment_with_settings(
+        &mut self,
+        work: &mut usize,
+        speed: Option<usize>,
+        paused: bool,
+    ) -> Result<Option<(Domain, Segment)>, QueueError> {
         loop {
             let Some(frame) = self.frames.front().copied() else {
                 return Ok(None);
             };
+            let real_ms = match frame.input {
+                FrameSource::Independent(input) => input.real_elapsed_ms,
+                FrameSource::Counter { raw_ms, .. } => raw_ms,
+            };
             match frame.phase {
                 FramePhase::Queued => {
                     if *work == 0 {
-                        return Err("native frame transition work exhausted".into());
+                        return Err(QueueError::Budget("native frame transition"));
                     }
-                    self.add_credit(frame.input.game_elapsed)?;
+                    let phase = match frame.input {
+                        FrameSource::Independent(input) => {
+                            self.add_credit(input.game_elapsed)?;
+                            FramePhase::Game
+                        }
+                        FrameSource::Counter { raw_ms: ms, .. } => {
+                            self.turn_credit_ms = self
+                                .turn_credit_ms
+                                .wrapping_add(
+                                    ms.wrapping_mul(self.rules.turn.elapsed_numerator)
+                                        / self.rules.turn.elapsed_denominator,
+                                )
+                                .min(self.rules.turn.credit_cap);
+                            FramePhase::CounterQuanta
+                        }
+                    };
                     Arc::make_mut(&mut self.frames)
                         .front_mut()
                         .expect("frame")
-                        .phase = FramePhase::Game;
+                        .phase = phase;
+                    *work -= 1;
+                }
+                FramePhase::CounterQuanta => {
+                    if self.turn_credit_ms < self.rules.turn.quantum_ms {
+                        self.real.begin(self.rules.frame.delta(real_ms)?)?;
+                        Arc::make_mut(&mut self.frames)
+                            .front_mut()
+                            .expect("frame")
+                            .phase = FramePhase::Real;
+                        continue;
+                    }
+                    if *work == 0 {
+                        return Err(QueueError::Budget("native turn"));
+                    }
+                    if paused {
+                        self.turn_credit_ms -= self.rules.turn.quantum_ms;
+                    } else {
+                        let (steps, carry) = self.rules.turn.grant(
+                            speed.ok_or("native game speed is not admitted")?,
+                            self.turn_carry,
+                            &self.rules.frame,
+                        )?;
+                        let duration = self.rules.turn.duration(
+                            steps,
+                            self.rules.numerator,
+                            self.rules.denominator,
+                        )?;
+                        self.add_credit(duration)?;
+                        self.turn_carry = carry;
+                        self.turn_credit_ms -= self.rules.turn.quantum_ms;
+                        Arc::make_mut(&mut self.frames)
+                            .front_mut()
+                            .expect("frame")
+                            .phase = FramePhase::Game;
+                    }
                     *work -= 1;
                 }
                 FramePhase::Game => {
                     if let Some(segment) = self.next_segment(work)? {
                         return Ok(Some((Domain::Game, segment)));
                     }
-                    self.real
-                        .begin(self.rules.frame.delta(frame.input.real_elapsed_ms)?)?;
+                    let phase = match frame.input {
+                        FrameSource::Counter { .. } => FramePhase::CounterQuanta,
+                        FrameSource::Independent(_) => {
+                            self.real.begin(self.rules.frame.delta(real_ms)?)?;
+                            FramePhase::Real
+                        }
+                    };
                     Arc::make_mut(&mut self.frames)
                         .front_mut()
                         .expect("frame")
-                        .phase = FramePhase::Real;
+                        .phase = phase;
                 }
                 FramePhase::Real => {
                     if let Some(segment) = self.real.next(&self.rules, work)? {
                         return Ok(Some((Domain::Real, segment)));
+                    }
+                    if let FrameSource::Counter { duration, .. } = frame.input {
+                        self.completed_counter_ns = self
+                            .completed_counter_ns
+                            .checked_add(duration.as_nanos())
+                            .ok_or("native counter accounting overflow")?;
                     }
                     Arc::make_mut(&mut self.frames).pop_front();
                 }
@@ -613,7 +800,7 @@ impl State {
         self.driver = Driver::Native;
         Ok(())
     }
-    pub fn next_segment(&mut self, work: &mut usize) -> Result<Option<Segment>, String> {
+    pub fn next_segment(&mut self, work: &mut usize) -> Result<Option<Segment>, QueueError> {
         if let Some(pending) = self.pending {
             return Ok(Some(pending.segment));
         }
@@ -622,7 +809,7 @@ impl State {
             return Ok(None);
         }
         if *work == 0 {
-            return Err("native game clock step budget exceeded".into());
+            return Err(QueueError::Budget("native game clock step"));
         }
         let pending = prepare_drain(&self.rules, self.point, self.rules.step)?;
         self.pending = Some(pending);

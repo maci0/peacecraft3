@@ -306,7 +306,7 @@ impl NumericPolicy {
         self
     }
     pub(crate) fn native_game_clock(&self) -> Option<crate::native_game_clock::Rules> {
-        self.native_clock
+        self.native_clock.clone()
     }
     pub(crate) fn equality_threshold(&self) -> f32 {
         self.equality_threshold

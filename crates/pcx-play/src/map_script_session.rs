@@ -270,6 +270,8 @@ pub enum TimerSessionError {
     RangeBudget,
     #[error("thread wake budget exhausted")]
     WakeBudget,
+    #[error("{0} queue work budget exhausted")]
+    QueueBudget(&'static str),
     #[error("trigger condition {id:?} did not return boolean")]
     ConditionResult { id: FunctionId },
     #[error(transparent)]
@@ -278,12 +280,48 @@ pub enum TimerSessionError {
     Timer(#[from] crate::playercolor_host::Error),
 }
 
+fn queue_selection_error(error: crate::playercolor_host::Error) -> TimerSessionError {
+    if let crate::playercolor_host::Failure::Budget(stage) = &error.failure {
+        TimerSessionError::QueueBudget(stage)
+    } else {
+        error.into()
+    }
+}
+fn source_queue_error(error: crate::native_game_clock::QueueError) -> TimerSessionError {
+    match error {
+        crate::native_game_clock::QueueError::Budget(stage) => {
+            TimerSessionError::QueueBudget(stage)
+        }
+        crate::native_game_clock::QueueError::Invalid(reason) => {
+            TimerSessionError::NativeQueue(reason)
+        }
+    }
+}
+
 impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     /// Admit one independently supplied frame, or resume retained frame work.
     /// This transport does not infer game speed or real time from a legacy horizon.
     pub fn advance_native_frame(
         &mut self,
         input: Option<crate::native_game_clock::FrameInput>,
+        budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        self.advance_native_input(
+            input.map(crate::native_game_clock::Input::Independent),
+            budget,
+        )
+    }
+    /// Simulate fresh local GetTickCount input, retaining sub-millisecond carry.
+    pub fn advance_native_counter_frame(
+        &mut self,
+        input: Option<std::time::Duration>,
+        budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        self.advance_native_input(input.map(crate::native_game_clock::Input::Counter), budget)
+    }
+    fn advance_native_input(
+        &mut self,
+        input: Option<crate::native_game_clock::Input>,
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
         use crate::native_game_clock::Domain;
@@ -300,7 +338,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             } else {
                 None
             };
-            host.objects_mut().enqueue_native_frame(input, &mut work)?;
+            host.objects_mut().enqueue_native_input(input, &mut work)?;
             if let Some(rows) = prepared {
                 host.commit_native_ai_sleep_rows(rows);
             }
@@ -311,7 +349,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_native_frame_segment(&mut work)?;
+                .next_native_frame_segment(&mut work)
+                .map_err(queue_selection_error)?;
             let Some((domain, segment)) = segment else {
                 return Ok(delivered);
             };
@@ -326,7 +365,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                         .host()
                         .ok_or(ScriptSessionError::NoSession)?
                         .objects()
-                        .next_native_thread_wake(segment.point, &mut work)?;
+                        .next_native_thread_wake(segment.point, &mut work)
+                        .map_err(queue_selection_error)?;
                     let Some(wake) = wake else { break };
                     budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     let objects = self
@@ -496,7 +536,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .native_game_point()
                     .expect("native frame Game point");
                 host.next_native_ai_wake(point, activity_work)
-                    .map_err(TimerSessionError::Ai)?
+                    .map_err(source_queue_error)?
             } else {
                 None
             };
@@ -512,7 +552,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             });
             let native_target = if let Some(limit) = native_limit {
                 host.objects()
-                    .next_native_timer_boundary(limit, activity_work)?
+                    .next_native_timer_boundary(limit, activity_work)
+                    .map_err(queue_selection_error)?
                     .into_iter()
                     .chain(native_ai.map(|wake| wake.point))
                     .min_by_key(|point| point.local)

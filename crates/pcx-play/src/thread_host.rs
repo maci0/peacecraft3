@@ -188,9 +188,10 @@ impl ObjectHost {
         let fail = |error: &str| self.inner.error(SLEEP, Failure::GameClock(error.into()));
         let mut selected: Option<(u64, Point, SleepRequest)> = None;
         for (&ticket, sleeper) in &self.threads.sleepers {
-            *work = work
-                .checked_sub(1)
-                .ok_or_else(|| fail("native thread selection work exhausted"))?;
+            *work = work.checked_sub(1).ok_or_else(|| {
+                self.inner
+                    .error(SLEEP, Failure::Budget("native thread selection"))
+            })?;
             let request = sleeper
                 .sleep
                 .native
