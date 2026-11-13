@@ -1640,3 +1640,170 @@ fn selected_original_parasite_autocast_production_sources_follow_both_tft_header
         );
     }
 }
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires PCX_WAR3_EXE, PCX_CAMPAIGN_COMMON and PCX_UPGRADE_MODE_PROBES local inputs"]
+fn selected_original_upgrade_modes_use_production_profiles_and_isolate_the_pending_selector() {
+    use crate::campaign_data_set::{CampaignRecipe, ImageRules};
+    use pcx_sim::world::{FieldValue, ObjectCatalog};
+    use std::{
+        io::Read,
+        path::{Path, PathBuf},
+    };
+    fn bounded(path: impl AsRef<Path>, limit: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .unwrap()
+            .take(limit + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(bytes.len() as u64 <= limit);
+        bytes
+    }
+    let image_path = PathBuf::from(std::env::var_os("PCX_WAR3_EXE").unwrap());
+    let image = bounded(&image_path, 32 << 20);
+    let common = bounded(std::env::var_os("PCX_CAMPAIGN_COMMON").unwrap(), 4 << 20);
+    let root = PathBuf::from(std::env::var_os("PCX_UPGRADE_MODE_PROBES").unwrap());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&bounded(root.join("manifest.json"), 64 << 10)).unwrap();
+    let hex = |bytes: &[u8]| {
+        crate::neutral_player::sha256(bytes)
+            .iter()
+            .map(|v| format!("{v:02x}"))
+            .collect::<String>()
+    };
+    assert_eq!(manifest["source_image_sha256"], hex(&image));
+    let origin = client_identity(&image, image_path.to_str().unwrap());
+    let rules = ImageRules::read(&image, origin.clone()).unwrap();
+    assert_eq!(manifest["flag_mask"], rules.flag_mask);
+    let recipe = CampaignRecipe::pin(
+        image_path.parent().unwrap(),
+        pcx_assets::GameMode::default(),
+        rules,
+        &image,
+        Some(&common),
+        "VERSION_REIGN_OF_CHAOS",
+    )
+    .unwrap();
+    let budget = pcx_mpq::checked::ReadBudget {
+        max_archive_bytes: 64 << 20,
+        max_archive_table_bytes: 8 << 20,
+        max_raw_packed_bytes: 4 << 20,
+        max_decoded_bytes: 4 << 20,
+    };
+    let arms = manifest["arms"].as_array().unwrap();
+    assert_eq!(arms.len(), 3);
+    let mut receipt: Vec<serde_json::Value> = Vec::new();
+    for arm in arms {
+        let label = arm["map"].as_str().unwrap();
+        let bytes = bounded(label, 64 << 20);
+        assert_eq!(arm["map_sha256"], hex(&bytes));
+        let reader = recipe.open_map(&bytes, label, budget).unwrap();
+        let context = AssetIdentity {
+            source: format!("{label}::{}", reader.selection.prefix),
+            edition: "VERSION_REIGN_OF_CHAOS".into(),
+            version: origin.version.clone(),
+        };
+        let tables = defaults(&reader.resolver, &context).unwrap();
+        let overlay = pcx_objects::editor::Overlay::default();
+        let catalog = pcx_sim::world::MetadataCatalog {
+            editor: tables.editor(),
+            units: &overlay,
+            items: &overlay,
+        };
+        let mut units = serde_json::Map::new();
+        for code in [*b"htow", *b"hkee"] {
+            let definition = catalog.resolve(code).unwrap();
+            let mut cells = serde_json::Map::new();
+            for key in ["goldcost", "lumbercost", "bldtm", "HP"] {
+                cells.insert(
+                    key.into(),
+                    crate::player_unit_cost::amount(&definition, key)
+                        .unwrap()
+                        .into(),
+                );
+            }
+            for key in ["manaN", "def", "defType"] {
+                let (_, field) = definition.column_field(key).unwrap();
+                let Ok(FieldValue::Cell(value)) = &field.value else {
+                    panic!("missing source cell {key}")
+                };
+                cells.insert(key.into(), value.clone().into());
+            }
+            units.insert(String::from_utf8(code.to_vec()).unwrap(), cells.into());
+        }
+        let misc = reader
+            .resolver
+            .resolve_bounded("Units/MiscGame.txt", 4 << 20)
+            .unwrap();
+        let map = pcx_map::Map::parse(&bytes).unwrap();
+        let map_misc = map
+            .extract_checked(label, "war3mapMisc.txt", budget)
+            .unwrap();
+        if let Some(bytes) = &map_misc {
+            assert_eq!(arm["arm"], "custom-disabled");
+            let disabled = receipt[0]["policy"][0].as_f64().unwrap();
+            assert_eq!(
+                bytes,
+                format!("[Misc]\nUpgradeInProgressIdChange={disabled}\n").as_bytes()
+            );
+        } else {
+            assert_ne!(arm["arm"], "custom-disabled");
+        }
+        let mut profiles = vec![(
+            misc.provenance.source.origin.as_str(),
+            misc.bytes.as_slice(),
+        )];
+        if let Some(bytes) = &map_misc {
+            profiles.push((label, bytes));
+        }
+        let (values, sources) = pcx_objects::editor::misc::misc_scalars(
+            &profiles,
+            [
+                "UpgradeInProgressIdChange",
+                "RelativeUpgradeCost",
+                "UpgradeRefundRate",
+                "UpgradeDamageRefundPenalty",
+            ],
+            8 << 20,
+        )
+        .unwrap();
+        assert!(values.iter().all(Option::is_some));
+        let training = crate::training_rules::Rules::read(
+            &image,
+            context,
+            &profiles,
+            crate::neutral_player::RuleInputBudget {
+                image_bytes: 32 << 20,
+                profile_bytes: 8 << 20,
+                sections: 96,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            training.upgrade_policy().is_ok(),
+            values[0] == Some(0.) && values[3] == Some(0.)
+        );
+        receipt.push(serde_json::json!({"arm":arm["arm"], "map_sha256":hex(&bytes), "selection":reader.selection.prefix, "units":units, "policy":values, "profile_sources":sources, "profile_sha256":hex(&misc.bytes), "map_misc_sha256":map_misc.as_ref().map(|b| hex(b))}));
+    }
+    assert_eq!(receipt[0]["selection"], "Melee_V0");
+    assert_eq!(receipt[1]["selection"], "Custom_V0");
+    assert_eq!(receipt[2]["selection"], "Custom_V0");
+    assert_eq!(receipt[1]["units"], receipt[2]["units"]);
+    assert_eq!(receipt[1]["profile_sha256"], receipt[2]["profile_sha256"]);
+    assert_eq!(receipt[1]["policy"][0], 1.);
+    assert_eq!(receipt[2]["policy"][0], 0.);
+    assert_eq!(
+        &receipt[1]["policy"].as_array().unwrap()[1..],
+        &receipt[2]["policy"].as_array().unwrap()[1..]
+    );
+    let output = serde_json::to_vec_pretty(&serde_json::json!({"source_image_sha256":hex(&image), "common_sha256":hex(&common), "arms":receipt})).unwrap();
+    assert!(output.len() <= 64 << 10);
+    std::fs::write(root.join("source-receipt.tmp"), output).unwrap();
+    std::fs::rename(
+        root.join("source-receipt.tmp"),
+        root.join("source-receipt.json"),
+    )
+    .unwrap();
+}

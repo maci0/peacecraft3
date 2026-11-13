@@ -433,3 +433,18 @@ strict failures. Regressions exercise each upgrade key with `bogus`, `NaN` and
 upgrades leave the producer, queue, banks, handles and RNG unchanged. This fixes
 the outer-parser error introduced by selecting an additional upgrade-only key;
 it does not admit any malformed upgrade value or implement the enabled mode.
+
+The explicit local gate
+`campaign_inputs::selected_original_upgrade_modes_use_production_profiles_and_isolate_the_pending_selector`
+now follows the production recipe, defaults and metadata catalog for three probe
+maps. The header's selection bit comes from `ImageRules` and the selected image.
+The Melee_V0 / Custom_V0 comparison records each source policy separately; a
+second Custom_V0 arm changes only the pending-form selector through the normal
+map-misc override. Its catalog and every other selected policy remain equal to
+the first Custom_V0 arm. Inputs and the local receipt are bounded and hashed.
+Raw mana markers are preserved rather than assigned an assumed default.
+
+These are local diagnostic profiles, not campaign encounter evidence. The gate
+qualifies source selection and probe setup only. Map/member CRC round trips,
+JASS resolution and collector self-checks precede runtime admission; none proves
+an original-client result or closes pending-form/damage-refund behavior.
