@@ -12,16 +12,14 @@ use std::sync::Arc;
 #[path = "regular_music_volume_rules.rs"]
 pub(crate) mod volume_rules;
 
-// Candidate controller remains outside native dispatch until its app consumers are qualified.
-#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_controller.rs"]
 pub(crate) mod controller;
-#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_random.rs"]
 pub(crate) mod random;
-#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_rules.rs"]
 pub(crate) mod rules;
+#[path = "regular_music_host.rs"]
+mod regular;
 
 #[derive(Clone, Debug)]
 pub struct RegularMusicVolumeRequest {
@@ -58,6 +56,8 @@ pub(super) struct State {
     play_position: Option<i32>,
     thematic_ex: Option<ThematicMusicExRequest>,
     thematic_play_position: Option<i32>,
+    rules: Option<Result<Arc<rules::Rules>, String>>,
+    commands: Vec<controller::Operation>,
 }
 
 fn checked_name(
@@ -188,6 +188,8 @@ impl ObjectHost {
             play_position: None,
             thematic_ex: None,
             thematic_play_position: None,
+            rules: None,
+            commands: Vec::new(),
         });
         Ok(self)
     }
@@ -258,6 +260,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.play_music.as_ref()?;
+        if let Some(result) = self.regular_music_native(name, args) {
+            return Some(result);
+        }
         match (name, args) {
             ("PlayThematicMusicEx", [Value::Str(path), Value::Int(from)])
                 if self

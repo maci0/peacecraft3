@@ -1478,7 +1478,6 @@ pub use music::{MapMusicSelection, ThematicMusicRequest};
 mod play_music;
 pub use play_music::volume_rules::Rules as RegularMusicVolumeRules;
 pub use play_music::{PlayMusicRequest, RegularMusicVolumeRequest, ThematicMusicExRequest};
-#[cfg(any(test, feature = "test-fixtures"))]
 pub use play_music::{
     controller::{
         Controller as RegularMusicController, Effect as RegularMusicEffect,

@@ -1024,7 +1024,6 @@ pub use objects::{NativeCoverage, WorldSnapshot};
 
 pub use objects::{ScriptStringBinding, ScriptStringPolicy};
 
-#[cfg(any(test, feature = "test-fixtures"))]
 pub use objects::{
     AudioRandom, MusicRole, MusicVoice, RegularMusicController, RegularMusicEffect,
     RegularMusicOperation, RegularMusicRules,

@@ -491,7 +491,7 @@ fn configuration(
     })
 }
 
-fn campaign_recipe(dir: &Path, mode: GameMode) -> Result<Arc<CampaignRecipe>, String> {
+pub(crate) fn campaign_recipe(dir: &Path, mode: GameMode) -> Result<Arc<CampaignRecipe>, String> {
     crate::menu_lighting::with_client_image(Some(dir), |source, image| {
         let identity = pcx_play::campaign_inputs::client_identity(image, source);
         let rules = ImageRules::read(image, identity).map_err(|error| error.to_string())?;
