@@ -242,6 +242,43 @@ mod tests {
     }
 
     #[test]
+    fn native_clock_checkpoint_refuses_unreachable_real_remainder_without_replacing_candidate() {
+        let mut candidate = host();
+        candidate
+            .native_game_clock
+            .as_mut()
+            .unwrap()
+            .enqueue_frame(
+                clock::FrameInput {
+                    game_elapsed: Duration::ZERO,
+                    real_elapsed_ms: 125,
+                },
+                &mut 128,
+            )
+            .unwrap();
+        assert!(
+            candidate
+                .native_game_clock
+                .as_mut()
+                .unwrap()
+                .next_frame_segment(&mut 1)
+                .is_err()
+        );
+        let before = format!("{:?}", candidate.test_native_clock_state());
+        let mut out = Writer::new(budget()).unwrap();
+        candidate.write_native_clock_checkpoint(&mut out).unwrap();
+        let mut bytes = out.finish();
+        // This fixture has no game segment or selected scope before its real remaining word.
+        assert_eq!(&bytes[103..107], &0.125f32.to_bits().to_le_bytes());
+        bytes[103..107].copy_from_slice(&0.0625f32.to_bits().to_le_bytes());
+        let error = candidate
+            .restore_native_clock_checkpoint(&mut Reader::new(&bytes, budget()).unwrap())
+            .unwrap_err();
+        assert!(error.contains("not reachable"), "{error}");
+        assert_eq!(format!("{:?}", candidate.test_native_clock_state()), before);
+    }
+
+    #[test]
     fn native_clock_checkpoint_candidate_restores_source_scope_before_sleep_sections() {
         let mut live = host();
         live.pace_native_game_clock(Duration::ZERO, &mut 128)

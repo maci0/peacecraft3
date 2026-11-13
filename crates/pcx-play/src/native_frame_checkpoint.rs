@@ -45,6 +45,7 @@ impl Queue {
         &self,
         rules: &ClockRules,
         real_frame: Option<u32>,
+        work: &mut impl FnMut() -> Result<(), String>,
     ) -> Result<(), String> {
         validate_point(rules, self.point)?;
         if self.pending.is_some() != self.amount.is_some() {
@@ -57,6 +58,22 @@ impl Queue {
             }
             if f32::from_bits(remaining) <= 0. || !real::below_or_equal(remaining, original) {
                 return Err("checkpoint real duration exceeds its frame".into());
+            }
+            let mut reachable = original;
+            while reachable != remaining {
+                work()?;
+                if real::below_or_equal(reachable, rules.frame.chunk)
+                    || !real::below_or_equal(remaining, reachable)
+                {
+                    return Err(
+                        "checkpoint real remainder is not reachable by source chunks".into(),
+                    );
+                }
+                let next = real::sub(reachable, rules.frame.chunk).map_err(|e| e.to_string())?;
+                if next == reachable {
+                    return Err("checkpoint real chunk proof did not progress".into());
+                }
+                reachable = next;
             }
             if let Some(amount) = self.amount {
                 let expected = if real::below_or_equal(remaining, rules.frame.chunk) {

@@ -576,3 +576,9 @@ the candidate clock unchanged. These are recreation component checks; no new
 original-client save behavior is claimed. They do not capture the application's
 outer delivery cursor, the complete world graph or durable storage, and do not
 enable SaveGame/LoadGame.
+
+Clock admission also permits a frame enqueued behind an already pending
+game-only segment, as the current producer API does. Real duration validation
+walks the exact source chunk-subtraction words, charging the codec item budget;
+a positive but unreachable remainder is refused. Exhausting that proof budget
+refuses the candidate rather than approximating or silently dropping time.

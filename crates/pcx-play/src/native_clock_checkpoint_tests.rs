@@ -163,20 +163,20 @@ fn clock_checkpoint_refuses_corruption_foreign_rules_and_unbounded_counts() {
             game_elapsed: Duration::ZERO,
             real_elapsed_ms: 1,
         });
-    assert!(bad.validate_checkpoint().is_err());
+    assert!(bad.validate_checkpoint(&mut || Ok(())).is_err());
     let mut bad = state.clone();
     bad.selected_domain = Some(Domain::Real);
-    assert!(bad.validate_checkpoint().is_err());
+    assert!(bad.validate_checkpoint(&mut || Ok(())).is_err());
     let mut bad = state.clone();
     bad.completed_counter_ns = u128::MAX;
-    assert!(bad.validate_checkpoint().is_err());
+    assert!(bad.validate_checkpoint(&mut || Ok(())).is_err());
     let mut bad = state;
     if let FrameSource::Counter { raw_ms, .. } =
         &mut Arc::make_mut(&mut bad.frames).front_mut().unwrap().input
     {
         *raw_ms += 1;
     }
-    assert!(bad.validate_checkpoint().is_err());
+    assert!(bad.validate_checkpoint(&mut || Ok(())).is_err());
 }
 
 #[test]
@@ -194,4 +194,85 @@ fn clock_checkpoint_keeps_counter_low_dword_and_source_initial_carry() {
         restored.frames[0].input,
         FrameSource::Counter { raw_ms: 827, .. }
     ));
+}
+
+#[test]
+fn clock_checkpoint_keeps_game_only_pending_when_a_frame_is_enqueued() {
+    for counter in [false, true] {
+        let mut live = State::new(rules()).unwrap();
+        live.pace(Duration::from_millis(125)).unwrap();
+        let selected = live.next_segment(&mut 1).unwrap().unwrap();
+        if counter {
+            live.enqueue_counter_frame(Duration::from_millis(26), &mut 128)
+                .unwrap();
+        } else {
+            live.enqueue_frame(
+                FrameInput {
+                    game_elapsed: Duration::ZERO,
+                    real_elapsed_ms: 0,
+                },
+                &mut 128,
+            )
+            .unwrap();
+        }
+        let mut restored = roundtrip(&live);
+        let mut a = 128;
+        let mut b = 128;
+        let first = live
+            .next_frame_segment_with_settings(&mut a, Some(1), false)
+            .unwrap()
+            .unwrap();
+        let other = restored
+            .next_frame_segment_with_settings(&mut b, Some(1), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, other);
+        assert_eq!(first, (Domain::Game, selected));
+        assert_eq!(format!("{live:?}"), format!("{restored:?}"));
+        live.finish_frame_segment(first.0, first.1).unwrap();
+        restored.finish_frame_segment(other.0, other.1).unwrap();
+        assert_eq!(format!("{live:?}"), format!("{restored:?}"));
+        roundtrip(&live);
+    }
+}
+
+#[test]
+fn clock_checkpoint_real_chunk_proof_charges_work_and_keeps_soft_subtraction_words() {
+    let mut source = rules();
+    source.frame.chunk = 0.3f32.to_bits();
+    let mut live = State::new(source).unwrap();
+    live.enqueue_frame(
+        FrameInput {
+            game_elapsed: Duration::ZERO,
+            real_elapsed_ms: 41,
+        },
+        &mut 128,
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let (domain, segment) = live.next_frame_segment(&mut 128).unwrap().unwrap();
+        assert_eq!(domain, Domain::Real);
+        live.finish_frame_segment(domain, segment).unwrap();
+    }
+    let mut restored = roundtrip(&live);
+    let mut left = 128;
+    let mut right = 128;
+    assert_eq!(
+        live.next_frame_segment(&mut left).unwrap(),
+        restored.next_frame_segment(&mut right).unwrap()
+    );
+    let bytes = encode(&live);
+    let small = Budget {
+        items: 1,
+        ..budget()
+    };
+    let error = live
+        .write_checkpoint(&mut Writer::new(small).unwrap())
+        .unwrap_err();
+    assert!(error.contains("item policy"), "{error}");
+    let error =
+        State::read_checkpoint(live.rules.clone(), &mut Reader::new(&bytes, small).unwrap())
+            .unwrap_err();
+    assert!(error.contains("item policy"), "{error}");
+    roundtrip(&live);
 }

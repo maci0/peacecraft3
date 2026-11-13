@@ -73,7 +73,7 @@ impl Rules {
 
 impl State {
     pub(crate) fn write_checkpoint(&self, out: &mut Writer) -> Result<(), String> {
-        self.validate_checkpoint()?;
+        self.validate_checkpoint(&mut || out.items(1))?;
         let Self {
             rules,
             driver,
@@ -212,11 +212,14 @@ impl State {
             counter_platform: input.boolean()?,
             completed_counter_ns: u128_in(input)?,
         };
-        next.validate_checkpoint()?;
+        next.validate_checkpoint(&mut || input.items(1))?;
         Ok(next)
     }
 
-    fn validate_checkpoint(&self) -> Result<(), String> {
+    fn validate_checkpoint(
+        &self,
+        work: &mut impl FnMut() -> Result<(), String>,
+    ) -> Result<(), String> {
         self.rules.validate()?;
         validate_point(&self.rules, self.point)?;
         validate_point(&self.rules, self.real.point)?;
@@ -269,13 +272,8 @@ impl State {
                 }
             };
             let delta = self.rules.frame.delta(raw)?;
-            if index == 0 {
-                if frame.phase == FramePhase::Real {
-                    real_frame = delta;
-                }
-                if self.pending.is_some() && frame.phase != FramePhase::Game {
-                    return Err("checkpoint game segment has no owning phase".into());
-                }
+            if index == 0 && frame.phase == FramePhase::Real {
+                real_frame = delta;
             }
         }
         if total % 1_000_000 != u128::from(self.sub_ms_nanos)
@@ -295,7 +293,8 @@ impl State {
         {
             return Err("checkpoint turn carry is invalid".into());
         }
-        self.real.validate_checkpoint(&self.rules, real_frame)?;
+        self.real
+            .validate_checkpoint(&self.rules, real_frame, work)?;
         match (self.selected_domain, self.selected, self.real.selected) {
             (None, None, None) => {}
             (Some(domain), game, real) => {
