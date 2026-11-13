@@ -42,6 +42,7 @@ pub fn install(app: &mut App) {
     app.add_systems(
         Update,
         apply_user_volume
+            .after(crate::campaign_audio::CampaignAudioSet)
             .after(crate::menu_settings::SettingsUpdate)
             .after(crate::intro::IntroUpdate)
             .after(crate::launch_gui::MenuActions)
@@ -84,6 +85,19 @@ struct MenuSounds {
 #[derive(Component)]
 pub(crate) struct AuthoredVolume(pub(crate) f32);
 
+#[derive(Component, Clone)]
+pub(crate) struct RegularMusicGain {
+    pub(crate) request: pcx_play::playercolor_host::RegularMusicVolumeRequest,
+    pub(crate) group: f32,
+}
+impl RegularMusicGain {
+    pub(crate) fn with_user_gain(&self, user: f32) -> Result<f32, String> {
+        self.request
+            .rules
+            .gain(self.request.level, self.group, user)
+    }
+}
+
 type UserVolumeQuery<'w, 's> = Query<
     'w,
     's,
@@ -93,6 +107,7 @@ type UserVolumeQuery<'w, 's> = Query<
         Option<&'static AuthoredVolume>,
         Option<&'static peacecraft3::script_audio::ScriptAudioGain>,
         Option<&'static peacecraft3::script_audio::ScriptAudioCategory>,
+        Option<&'static RegularMusicGain>,
         Has<MenuMusic>,
         Has<CampaignMusic>,
     ),
@@ -102,9 +117,13 @@ type UserVolumeQuery<'w, 's> = Query<
     )>,
 >;
 
-fn apply_user_volume(settings: Res<crate::menu_settings::Backend>, mut sinks: UserVolumeQuery) {
+pub(crate) fn apply_user_volume(
+    settings: Res<crate::menu_settings::Backend>,
+    mut sinks: UserVolumeQuery,
+) {
     use bevy::audio::AudioSinkPlayback;
-    for (sink, mut playback, base, script_gain, category, menu_music, campaign_music) in &mut sinks
+    for (sink, mut playback, base, script_gain, category, regular, menu_music, campaign_music) in
+        &mut sinks
     {
         let gain = if menu_music || campaign_music {
             settings.audio.effective_music()
@@ -112,10 +131,20 @@ fn apply_user_volume(settings: Res<crate::menu_settings::Backend>, mut sinks: Us
             settings.audio.effective_effects()
         };
         let authored = base.map_or(1.0, |base| base.0) * script_gain.map_or(1.0, |gain| gain.0);
-        playback.volume =
-            bevy::audio::Volume::Linear(category.map_or(authored * gain, |category| {
+        let value = if let Some(regular) = regular {
+            match regular.with_user_gain(gain) {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!("regular music gain: {error}");
+                    continue;
+                }
+            }
+        } else {
+            category.map_or(authored * gain, |category| {
                 category.with_user_gain(authored, gain)
-            }));
+            })
+        };
+        playback.volume = bevy::audio::Volume::Linear(value);
         if let Some(mut sink) = sink {
             sink.set_volume(playback.volume);
         }
@@ -181,7 +210,7 @@ fn click_descriptor(bytes: &[u8], maximum: f32) -> Result<(String, f32, bool), S
 struct ClickSound;
 
 #[derive(Component)]
-struct MenuMusic;
+pub(crate) struct MenuMusic;
 
 /// One campaign music track on the user's music volume. It keeps playing under the
 /// campaign camera, unlike [`MenuMusic`].
@@ -838,5 +867,70 @@ mod script_volume_tests {
     pub fn browser_script_audio_volume_gate() -> u32 {
         script_voices_follow_effects_gain_and_mute_before_sink_creation();
         1
+    }
+    #[test]
+    #[ignore = "requires explicit PCX_WAR3_EXE and PCX_MUSIC_BACKEND local selected images"]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn regular_music_pending_gain_applies_user_before_curve_and_leaves_thematic_bus() {
+        use bevy::ecs::system::RunSystemOnce;
+        use std::sync::Arc;
+        let rules = Arc::new(crate::campaign_audio_probe::selected_regular_volume_rules());
+        let mut world = World::new();
+        let mut settings = crate::menu_settings::Backend::default();
+        settings.audio.music_gain = 0.5;
+        world.insert_resource(settings);
+        let request = pcx_play::playercolor_host::RegularMusicVolumeRequest {
+            level: rules.maximum_level(),
+            rules: Arc::clone(&rules),
+            revision: 1,
+        };
+        let regular = world
+            .spawn((
+                CampaignMusic {
+                    member: "synthetic-regular.mp3".into(),
+                },
+                AuthoredVolume(1.0),
+                PlaybackSettings::LOOP,
+                RegularMusicGain {
+                    request,
+                    group: 1.0,
+                },
+            ))
+            .id();
+        let theme = world
+            .spawn((
+                CampaignMusic {
+                    member: "synthetic-theme.mp3".into(),
+                },
+                AuthoredVolume(1.0),
+                PlaybackSettings::LOOP,
+            ))
+            .id();
+        world.run_system_once(apply_user_volume).unwrap();
+        let expected = rules.gain(rules.maximum_level(), 1.0, 0.5).unwrap();
+        assert_ne!(expected, 0.5, "regular curve precedes the backend mixer");
+        assert_eq!(
+            world.get::<PlaybackSettings>(regular).unwrap().volume,
+            bevy::audio::Volume::Linear(expected)
+        );
+        assert_eq!(
+            world.get::<PlaybackSettings>(theme).unwrap().volume,
+            bevy::audio::Volume::Linear(0.5)
+        );
+        world
+            .get_mut::<RegularMusicGain>(regular)
+            .unwrap()
+            .request
+            .level = 0;
+        world.run_system_once(apply_user_volume).unwrap();
+        assert_eq!(
+            world.get::<PlaybackSettings>(regular).unwrap().volume,
+            bevy::audio::Volume::Linear(0.0)
+        );
+        assert!(!world.get::<PlaybackSettings>(regular).unwrap().paused);
+        assert_eq!(
+            world.get::<PlaybackSettings>(theme).unwrap().volume,
+            bevy::audio::Volume::Linear(0.5)
+        );
     }
 }

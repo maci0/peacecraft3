@@ -165,6 +165,7 @@ pub struct CampaignRecipe {
     huffman: pcx_mpq::huffman::HuffmanTable,
     generation: Arc<ArchiveGeneration>,
     image: Arc<[u8]>,
+    client_sources: Option<Arc<crate::client_module::ClientSources>>,
 }
 
 impl fmt::Debug for CampaignRecipe {
@@ -219,6 +220,7 @@ impl CampaignRecipe {
             huffman,
             generation,
             image: Arc::from(image),
+            client_sources: None,
         })
     }
 
@@ -273,6 +275,35 @@ impl CampaignRecipe {
         self.open(&info)
     }
 
+    /// Attach the one auxiliary role to this exact pinned image/archive generation.
+    pub fn with_client_modules(
+        mut self,
+        demand: crate::client_module::ImportDemand,
+        module: Result<Option<crate::client_module::ModuleInput>, String>,
+    ) -> Result<Self, Error> {
+        let hashes: Vec<_> = self
+            .generation
+            .opened
+            .values()
+            .map(|v| v.snapshot_sha256)
+            .collect();
+        let member = Path::new(&self.rules.origin.source)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or_else(|| Error::Message("client main member identity absent".into()))?;
+        self.client_sources = Some(Arc::new(crate::client_module::ClientSources::checked(
+            self.image.clone(),
+            self.rules.origin.clone(),
+            member,
+            &hashes,
+            demand,
+            module,
+        )?));
+        Ok(self)
+    }
+    pub fn client_sources(&self) -> Option<Arc<crate::client_module::ClientSources>> {
+        self.client_sources.clone()
+    }
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -1055,7 +1086,7 @@ impl SnapshotBudget {
 
 #[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
-struct SourceStamp {
+pub(crate) struct SourceStamp {
     len: u64,
     device: u64,
     inode: u64,
@@ -1064,7 +1095,7 @@ struct SourceStamp {
 }
 
 #[cfg(unix)]
-fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
+pub(crate) fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
     use std::os::unix::fs::MetadataExt;
     SourceStamp {
         len: metadata.len(),
@@ -1077,13 +1108,13 @@ fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
 
 #[cfg(not(unix))]
 #[derive(Debug, PartialEq, Eq)]
-struct SourceStamp {
+pub(crate) struct SourceStamp {
     len: u64,
     modified: Option<std::time::SystemTime>,
 }
 
 #[cfg(not(unix))]
-fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
+pub(crate) fn stamp_of(metadata: &std::fs::Metadata) -> SourceStamp {
     SourceStamp {
         len: metadata.len(),
         modified: metadata.modified().ok(),

@@ -7511,3 +7511,28 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Receipt: `/tmp/pc3-case-substring-main-validation/acceptance.json`.
   Full native locale/rendered-string parity, S2I/S2R and full save/root source
   admission remain unfinished.
+
+
+- 2026-11-13: Optional auxiliary client modules are pinned to their selected
+  engine image through the bounded owner of a PE import thunk. Desktop reads
+  only the unique same-install sibling; browser local/ISO/installer imports use
+  separate checked staging and generation receipts. Main-engine selection and
+  MPQ lookup roles remain separate. Source-derived regular music volume now
+  applies the user/channel gain before the selected nonlinear curve and backend
+  scaling, including pending/live/future tracks and thematic retirement.
+  Missing or unsupported module policy remains explicit. See
+  [module sources](docs/re-notes/auxiliary-client-modules.md) and
+  [regular volume](docs/re-notes/script-regular-music-volume.md).
+
+  Combined main validation passes 3,615 package tests, zero failures, 178
+  explicit ignores, twenty-six selected source/witness gates, 368 application
+  executions and all 102 JavaScript tests. Strict native/WASM checks, core
+  library builds, actual main WASM generation with the pinned 0.2.129 CLI and
+  three local import/worker runs pass. The selected-byte container admits its
+  module; the supplied older installer retains unsupported policy explicitly.
+  The native byte-string probe conversion and generated codec-loader omission
+  were corrected with failed receipts retained. A final wrapping-only formatter
+  delta has separate native/WASM checks; scoped reuse and final index hashes are
+  explicit in `/tmp/pc3-module-volume-main-validation/acceptance.json`.
+  Audible/native-amplitude parity, full music play/stop/fades, complete source
+  registry restore, normal native clock adoption and full tick parity remain open.

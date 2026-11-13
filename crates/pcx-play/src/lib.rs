@@ -80,6 +80,7 @@ pub mod campaign_progress;
 pub mod campaign_slow_chopping_policy;
 pub mod campaign_targeting_policy;
 pub mod cinematics;
+pub mod client_module;
 pub mod command_hotkey;
 pub mod command_layout;
 pub mod custom_scripts;

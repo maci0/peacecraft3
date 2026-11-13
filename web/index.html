@@ -62,6 +62,10 @@
           <button id="preview-size" type="button" aria-pressed="false">Actual size</button>
         </div>
         <div class="row" style="margin-top:1em">
+          <label>Optional client module <input id="client-module" type="file" aria-describedby="client-module-request" /></label>
+          <output id="client-module-request" role="status" aria-live="polite">Choose a main client file to identify its optional module.</output>
+        </div>
+        <div class="row" style="margin-top:1em">
           <label>Local ISO <input id="iso" type="file" accept=".iso,application/x-iso9660-image" /></label>
           <button id="iso-import" type="button" disabled>Import selected MPQs</button>
           <button id="iso-cancel" type="button" disabled>Cancel import</button>
