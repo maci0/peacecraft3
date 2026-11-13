@@ -3,6 +3,9 @@ use super::{Pending, Point, QueueError, Rules as ClockRules, Segment, call, real
 use crate::script_numeric::NumericPolicy;
 use std::time::Duration;
 
+#[path = "native_frame_checkpoint.rs"]
+mod checkpoint;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameInput {
     pub game_elapsed: Duration,

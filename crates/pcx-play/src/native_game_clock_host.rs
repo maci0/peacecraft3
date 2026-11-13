@@ -5,6 +5,11 @@ use crate::native_game_clock::{
 };
 use std::time::Duration;
 
+#[path = "native_sleep_checkpoint.rs"]
+mod checkpoint;
+#[path = "native_clock_host_checkpoint.rs"]
+mod clock_checkpoint;
+
 impl ObjectHost {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn test_native_clock_state(&self) -> Option<State> {

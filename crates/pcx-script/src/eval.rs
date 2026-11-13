@@ -70,6 +70,10 @@ pub const MAX_SPAWN_DEPTH: u32 = 64;
 /// guard, not a game rule.
 pub const MAX_STEPS: u64 = 20_000_000;
 
+#[path = "checkpoint_vm.rs"]
+mod checkpoint_vm;
+pub use checkpoint_vm::{Projection as CheckpointProjection, Reference as CheckpointReference};
+
 /// Arithmetic and literal conversion qualified by the caller's selected runtime.
 pub trait RealOps {
     fn literal(&self, spelling: &str) -> Result<f32, String>;
@@ -178,6 +182,13 @@ pub trait Host {
     fn suspend(&mut self, _name: &str, _args: &[Value]) -> bool {
         false
     }
+
+    /// A retained delivery fault refuses a new externally initiated script entry.
+    fn script_entry_error(&self) -> Option<String> {
+        None
+    }
+    /// Preserve the caller's source diagnostic after host context cleanup.
+    fn retain_script_failure(&mut self, _diagnostic: &str) {}
 
     /// Stop at this native's return hole for the whole-world checkpoint owner.
     /// The host retains the request; this neither sleeps nor writes a save.

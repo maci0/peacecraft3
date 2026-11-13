@@ -316,3 +316,74 @@ fn native_property_edits_change_the_list_the_explicit_rarity_path_reads() {
         Value::Null
     );
 }
+
+#[test]
+fn random_root_candidate_retains_independent_animation_draws_and_refuses_partial_restore() {
+    use pcx_script::checkpoint::{Budget, Reader, Writer};
+    const BUDGET: Budget = Budget {
+        bytes: 1 << 20,
+        items: 16384,
+        depth: 16,
+    };
+    fn bytes(host: &ObjectHost) -> Vec<u8> {
+        let mut out = Writer::new(BUDGET).unwrap();
+        host.write_random_checkpoint(&mut out).unwrap();
+        out.finish()
+    }
+    fn restore(host: &mut ObjectHost, bytes: &[u8]) -> Result<(), String> {
+        let mut input = Reader::new(bytes, BUDGET)?;
+        host.restore_random_checkpoint(&mut input)?;
+        input.finish()
+    }
+    let mut live = open(Ok(FieldValue::Cell("_".into())));
+    for _ in 0..7 {
+        let rarity = live.vm.global("FREQUENT");
+        live.vm.call("choose", &[rarity]).unwrap();
+        live.vm
+            .host()
+            .inner
+            .native("GetRandomInt", &[Value::Int(-7), Value::Int(71)])
+            .unwrap();
+    }
+    let saved = bytes(&live.vm.host().inner);
+    let mut loaded = open(Ok(FieldValue::Cell("_".into())));
+    loaded
+        .vm
+        .host()
+        .inner
+        .native("SetRandomSeed", &[Value::Int(-313)])
+        .unwrap();
+    let before = bytes(&loaded.vm.host().inner);
+    let mut malformed = saved.clone();
+    *malformed.last_mut().unwrap() = 255;
+    assert!(
+        restore(&mut loaded.vm.host().inner, &malformed)
+            .unwrap_err()
+            .contains("lane")
+    );
+    assert_eq!(
+        bytes(&loaded.vm.host().inner),
+        before,
+        "failed independent stream decode must not publish gameplay state"
+    );
+    restore(&mut loaded.vm.host().inner, &saved).unwrap();
+    assert_eq!(bytes(&loaded.vm.host().inner), saved);
+    for _ in 0..31 {
+        let rarity = live.vm.global("FREQUENT");
+        live.vm.call("choose", &[rarity]).unwrap();
+        let rarity = loaded.vm.global("FREQUENT");
+        loaded.vm.call("choose", &[rarity]).unwrap();
+        assert_eq!(index(&mut loaded), index(&mut live));
+        let args = [Value::Int(-9), Value::Int(101)];
+        assert_eq!(
+            loaded
+                .vm
+                .host()
+                .inner
+                .native("GetRandomInt", &args)
+                .unwrap(),
+            live.vm.host().inner.native("GetRandomInt", &args).unwrap()
+        );
+        assert_eq!(bytes(&loaded.vm.host().inner), bytes(&live.vm.host().inner));
+    }
+}

@@ -242,6 +242,13 @@ impl<H: Host> Host for RecordingHost<H> {
         self.inner.real_ops()
     }
 
+    fn script_entry_error(&self) -> Option<String> {
+        self.inner.script_entry_error()
+    }
+    fn retain_script_failure(&mut self, diagnostic: &str) {
+        self.inner.retain_script_failure(diagnostic);
+    }
+
     fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
         self.inner.checkpoint(name, args)
     }

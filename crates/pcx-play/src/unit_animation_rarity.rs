@@ -2,6 +2,9 @@
 use crate::{neutral_player::sha256, pe_image::PeSections, scripts::AssetIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 
+#[path = "unit_animation_checkpoint.rs"]
+mod checkpoint;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
     pub origin: AssetIdentity,

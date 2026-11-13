@@ -12,6 +12,10 @@ const CONVERT_EVENT: &str = "ConvertPlayerEvent";
 const LIMIT_EVENT: &str = "EVENT_PLAYER_STATE_LIMIT";
 
 impl ObjectHost {
+    pub(crate) fn synchronous_frame_depth(&self) -> usize {
+        self.synchronous_frames.len()
+    }
+
     /// Intercept an admitted `SetPlayerState` so its callbacks run before the
     /// native returns. Events stay routed through the shared delivery context.
     pub(crate) fn begin_synchronous_player_state_call(
@@ -223,7 +227,14 @@ impl ObjectHost {
     }
 
     pub(crate) fn abort_synchronous_delivery(&mut self) {
-        while let Some(frame) = self.synchronous_frames.pop() {
+        self.abort_synchronous_delivery_to(0);
+    }
+    pub(crate) fn abort_synchronous_delivery_to(&mut self, depth: usize) {
+        while self.synchronous_frames.len() > depth {
+            let frame = self
+                .synchronous_frames
+                .pop()
+                .expect("owned synchronous frame");
             if frame.active {
                 self.finish_fired_event();
             }

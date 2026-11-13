@@ -128,6 +128,9 @@ const RESPONSES: [&str; 32] = [
 ];
 
 impl ObjectHost {
+    pub(crate) fn event_callback_depth(&self) -> usize {
+        self.events.previous.len()
+    }
     pub(super) fn reserve_game_event_delivery(&mut self, count: usize) -> Result<(), Error> {
         let pending = self
             .events

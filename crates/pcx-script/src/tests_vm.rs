@@ -1963,7 +1963,7 @@ fn spawned_threads_park_alone_and_resume_with_their_remaining_callbacks() {
     assert!(plain.run_thread(&[id("b")]).is_ok());
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct SpawnProbe {
     observed: Vec<i32>,
     next: u64,
@@ -2562,6 +2562,317 @@ fn checkpoint_resume_preserves_execution_fuel() {
     assert_eq!(vm.call("safe", &[]).unwrap(), Value::Int(71));
 }
 
+const VM_WIRE_BUDGET: crate::checkpoint::Budget = crate::checkpoint::Budget {
+    bytes: 1 << 20,
+    items: 1 << 16,
+    depth: 32,
+};
+fn checkpoint_fixture_reference(
+    host: &SpawnProbe,
+    reference: crate::eval::CheckpointReference<'_>,
+) -> Result<(), String> {
+    match reference {
+        crate::eval::CheckpointReference::Thread(ticket) if host.sleepers.contains(&ticket) => {
+            Ok(())
+        }
+        crate::eval::CheckpointReference::Handle { identity, .. } if identity.token() == 7 => {
+            Ok(())
+        }
+        _ => Err("foreign synthetic checkpoint reference".into()),
+    }
+}
+
+#[test]
+fn parked_vm_wire_restores_nested_control_and_expression_holes_without_replay() {
+    let prefix = format!(
+        "{SPAWN_PROBE}globals\ninteger g=0\ninteger result=0\ninteger array a\nendglobals\nfunction hop takes integer n returns integer\ncall Observe(n)\ncall Sleep(1.0)\nreturn n+1\nendfunction\nfunction tag takes integer n returns integer\nreturn n+2\nendfunction\nfunction inner takes integer n returns integer\nreturn hop(n)+tag(n)\nendfunction\nfunction choose takes integer n returns integer\nif hop(n)>0 then\nreturn inner(n)\nelse\nreturn hop(n)\nendif\nendfunction\n"
+    );
+    let bodies = [
+        "set g=tag(1)+inner(tag(2))+hop(tag(3))\nreturn g\n",
+        "set a[hop(tag(1))]=inner(tag(5))\nreturn a[hop(tag(1))]\n",
+        "local integer k=inner(hop(2))\nset g=hop(k)+choose(hop(0))\nreturn g\n",
+        "if hop(0)>1 then\nset g=100\nelseif hop(1)==2 then\nset g=choose(2)\nelse\nset g=200\nendif\nreturn g\n",
+        "loop\nexitwhen hop(g)>2\nif hop(g)>0 then\nset g=g+1\nendif\nendloop\nreturn inner(g)\n",
+        "debug if hop(1)>0 then\ndebug set g=inner(1)\nendif\nreturn hop(g)\n",
+        "loop\nif hop(g)>0 then\nreturn inner(hop(g))\nendif\nendloop\n",
+        "if (hop(0)==1 and hop(1)==2) or hop(99)==0 then\nset g=hop(2)\nendif\nreturn g\n",
+        "if false and hop(99)==0 then\nset g=1\nendif\nif true or hop(98)==0 then\nset g=hop(0)\nendif\nreturn g\n",
+    ];
+    for body in bodies {
+        for debug in [false, true] {
+            let source = format!(
+                "{prefix}function main takes nothing returns integer\n{body}endfunction\nfunction run takes nothing returns nothing\nset result=main()\nendfunction\n"
+            );
+            let program = program_of(&source);
+            let callbacks = [
+                program.function_id("run").unwrap(),
+                program.function_id("tail").unwrap(),
+            ];
+            let mut control = Vm::new(&program, SpawnProbe::default());
+            control.set_debug(debug);
+            control.run_thread(&callbacks).unwrap();
+            let mut count = 0;
+            loop {
+                let next = control.parked_threads().next();
+                let Some(ticket) = next else {
+                    break;
+                };
+                count += 1;
+                assert!(count < 128);
+                control.resume_thread(ticket).unwrap();
+            }
+            let expected = control.global("result");
+            let expected_effects = control.host().observed.clone();
+            let mut restored = Vm::new(&program, SpawnProbe::default());
+            restored.set_debug(debug);
+            restored.run_thread(&callbacks).unwrap();
+            let mut count = 0;
+            loop {
+                let next = restored.parked_threads().next();
+                let Some(ticket) = next else {
+                    break;
+                };
+                count += 1;
+                assert!(count < 128);
+                let bytes = restored
+                    .checkpoint_state_bytes(
+                        [7; 32],
+                        crate::eval::CheckpointProjection::Idle,
+                        VM_WIRE_BUDGET,
+                    )
+                    .unwrap_or_else(|e| panic!("{body}: {e}"));
+                // This fixture's host state is separate from the VM section under test.
+                let host = restored.host().clone();
+                let mut candidate = Vm::new(&program, host);
+                assert_eq!(
+                    candidate
+                        .restore_checkpoint_state(
+                            &bytes,
+                            [7; 32],
+                            VM_WIRE_BUDGET,
+                            checkpoint_fixture_reference
+                        )
+                        .unwrap_or_else(|e| panic!("{body}: {e}")),
+                    crate::eval::CheckpointProjection::Idle
+                );
+                assert_eq!(
+                    candidate
+                        .checkpoint_state_bytes(
+                            [7; 32],
+                            crate::eval::CheckpointProjection::Idle,
+                            VM_WIRE_BUDGET
+                        )
+                        .unwrap(),
+                    bytes
+                );
+                restored = candidate;
+                restored.resume_thread(ticket).unwrap();
+            }
+            assert!(count > 0);
+            assert_eq!(restored.global("result"), expected, "{body}");
+            assert_eq!(restored.host().observed, expected_effects, "{body}");
+        }
+    }
+}
+
+#[test]
+fn vm_wire_keeps_complete_values_and_never_reinitializes_globals() {
+    let source = format!(
+        "{SPAWN_PROBE}globals\ninteger initialized=initial()\nreal payload=0.0\nstring text=null\nstring absent=null\nstring empty=\"\"\nhandle identity=null\ncode callback=null\nreal array values\nendglobals\nfunction initial takes nothing returns integer\ncall Observe(55)\nreturn 17\nendfunction\nfunction seed takes real r,string s,handle h,code c returns nothing\nset payload=r\nset text=s\nset identity=h\nset callback=c\nset values[37]=r\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut live = Vm::new(&program, SpawnProbe::default());
+    let real = f32::from_bits(0x7fc01234);
+    let handle = crate::HandleId::new(std::num::NonZeroU64::new(7).unwrap());
+    live.call(
+        "seed",
+        &[
+            Value::Real(real),
+            Value::Str("é\0TRIGSTR_7^^tag^^".into()),
+            Value::Handle(handle),
+            Value::Code(program.function_id("tail").unwrap()),
+        ],
+    )
+    .unwrap();
+    let bytes = live
+        .checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::Idle,
+            VM_WIRE_BUDGET,
+        )
+        .unwrap();
+    let host = live.host().clone();
+    let mut candidate = Vm::new(&program, host);
+    candidate
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+    candidate.init_globals().unwrap();
+    assert_eq!(candidate.host().observed, [55]);
+    assert_eq!(candidate.global("initialized"), Value::Int(17));
+    assert_eq!(
+        candidate.global("text"),
+        Value::Str("é\0TRIGSTR_7^^tag^^".into())
+    );
+    assert_eq!(candidate.global("absent"), Value::Null);
+    assert_eq!(candidate.global("empty"), Value::Str(String::new().into()));
+    for value in [
+        candidate.global("payload"),
+        candidate.global_at("values", 37),
+    ] {
+        let Value::Real(value) = value else {
+            panic!("real payload");
+        };
+        assert_eq!(value.to_bits(), real.to_bits());
+    }
+    assert_eq!(candidate.global("identity"), Value::Handle(handle));
+    assert_eq!(
+        candidate.global("callback"),
+        Value::Code(program.function_id("tail").unwrap())
+    );
+    assert!(
+        candidate
+            .restore_checkpoint_state(
+                &bytes,
+                [7; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference
+            )
+            .is_err()
+    );
+    let mut foreign = Vm::new(&program, live.host().clone());
+    assert!(
+        foreign
+            .restore_checkpoint_state(
+                &bytes,
+                [8; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference
+            )
+            .is_err()
+    );
+    assert!(
+        foreign
+            .restore_checkpoint_state(&bytes, [7; 32], VM_WIRE_BUDGET, |_, reference| {
+                match reference {
+                    crate::eval::CheckpointReference::Handle { .. } => Err("foreign arena".into()),
+                    _ => Ok(()),
+                }
+            })
+            .unwrap_err()
+            .contains("foreign arena")
+    );
+    foreign
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+    for end in [0, 6, 7, bytes.len() / 2, bytes.len() - 1] {
+        let mut candidate = Vm::new(&program, live.host().clone());
+        assert!(
+            candidate
+                .restore_checkpoint_state(
+                    &bytes[..end],
+                    [7; 32],
+                    VM_WIRE_BUDGET,
+                    checkpoint_fixture_reference
+                )
+                .is_err()
+        );
+        candidate
+            .restore_checkpoint_state(
+                &bytes,
+                [7; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference,
+            )
+            .unwrap();
+    }
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    let mut candidate = Vm::new(&program, live.host().clone());
+    assert!(
+        candidate
+            .restore_checkpoint_state(
+                &trailing,
+                [7; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference
+            )
+            .is_err()
+    );
+    candidate
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+}
+
+#[test]
+fn native_vm_wire_omits_active_save_tree_but_keeps_parked_continuation() {
+    let source = format!(
+        "{SPAWN_PROBE}globals\ninteger phase=0\nendglobals\nfunction old takes nothing returns nothing\nlocal integer kept=477\ncall Sleep(1.0)\ncall Observe(kept)\nendfunction\nfunction saving takes nothing returns nothing\nset phase=11\ncall Checkpoint(1)\nset phase=12\nendfunction\n"
+    );
+    let program = program_of(&source);
+    let mut live = Vm::new(&program, SpawnProbe::default());
+    live.run_thread(&[
+        program.function_id("old").unwrap(),
+        program.function_id("tail").unwrap(),
+    ])
+    .unwrap();
+    assert_eq!(live.invoke("saving", &[]).unwrap(), crate::Exec::Checkpoint);
+    assert!(
+        live.checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::Idle,
+            VM_WIRE_BUDGET
+        )
+        .is_err()
+    );
+    let bytes = live
+        .checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::NativeSave,
+            VM_WIRE_BUDGET,
+        )
+        .unwrap();
+    let host = live.host().clone();
+    assert_eq!(
+        live.resume_checkpoint(Ok(Value::Null)).unwrap(),
+        crate::Exec::Finished(Value::Null)
+    );
+    assert_eq!(live.global("phase"), Value::Int(12));
+    let mut candidate = Vm::new(&program, host);
+    assert_eq!(
+        candidate
+            .restore_checkpoint_state(
+                &bytes,
+                [7; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference
+            )
+            .unwrap(),
+        crate::eval::CheckpointProjection::NativeSave
+    );
+    assert_eq!(candidate.global("phase"), Value::Int(11));
+    assert_eq!(candidate.parked_threads().collect::<Vec<_>>(), [1]);
+    assert!(candidate.resume_checkpoint(Ok(Value::Null)).is_err());
+    assert_eq!(candidate.call("safe", &[]).unwrap(), Value::Int(71));
+    candidate.resume_thread(1).unwrap();
+    assert_eq!(candidate.host().observed, [477, 4]);
+    assert_eq!(candidate.global("phase"), Value::Int(11));
+}
+
 #[test]
 fn empty_spawn_boundary_returns_through_parent_expression_once() {
     let source = format!(
@@ -3040,6 +3351,108 @@ fn byte_strings_use_raw_equality_and_native_c_prefix_without_utf8_fallback() {
             .unwrap(),
         Value::Bool(false)
     );
+}
+
+#[test]
+fn raw_vm_wire_keeps_non_utf8_arrays_and_return_zipper_across_repark_and_refuses_v1() {
+    let script = format!(
+        "{SPAWN_PROBE}\
+globals
+string prefix=null
+string suffix=null
+string joined=null
+string copied=null
+endglobals
+function seed takes string first,string second returns nothing
+set prefix=first
+set suffix=second
+endfunction
+function waitString takes nothing returns string
+local string array rows
+set rows[4]=suffix
+call Sleep(1.0)
+return rows[4]
+endfunction
+function parked takes nothing returns nothing
+set joined=prefix+waitString()
+call Sleep(2.0)
+set copied=joined
+endfunction
+"
+    );
+    let program = program_of(&script);
+    let mut live = Vm::new(&program, SpawnProbe::default());
+    live.call(
+        "seed",
+        &[
+            Value::Str(vec![0xc3].into()),
+            Value::Str(vec![0xa9, 0, 0xff].into()),
+        ],
+    )
+    .unwrap();
+    let parked = program.function_id("parked").unwrap();
+    let tail = program.function_id("tail").unwrap();
+    live.run_thread(&[parked, tail]).unwrap();
+    let bytes = live
+        .checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::Idle,
+            VM_WIRE_BUDGET,
+        )
+        .unwrap();
+    assert_eq!(&bytes[..7], b"PC3VM\0\x02");
+    let mut legacy = bytes.clone();
+    legacy[6] = 1;
+    let mut candidate = Vm::new(&program, live.host().clone());
+    assert!(
+        candidate
+            .restore_checkpoint_state(
+                &legacy,
+                [7; 32],
+                VM_WIRE_BUDGET,
+                checkpoint_fixture_reference
+            )
+            .unwrap_err()
+            .contains("header")
+    );
+    candidate
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+    candidate.resume_thread(1).unwrap();
+    let expected = Value::Str(vec![0xc3, 0xa9, 0, 0xff].into());
+    assert_eq!(candidate.global("joined"), expected);
+    assert_eq!(candidate.global("copied"), Value::Null);
+    assert_eq!(candidate.parked_threads().collect::<Vec<_>>(), [2]);
+    let bytes = candidate
+        .checkpoint_state_bytes(
+            [7; 32],
+            crate::eval::CheckpointProjection::Idle,
+            VM_WIRE_BUDGET,
+        )
+        .unwrap();
+    let mut loaded = Vm::new(&program, candidate.host().clone());
+    loaded
+        .restore_checkpoint_state(
+            &bytes,
+            [7; 32],
+            VM_WIRE_BUDGET,
+            checkpoint_fixture_reference,
+        )
+        .unwrap();
+    loaded.resume_thread(2).unwrap();
+    assert_eq!(loaded.global("copied"), expected);
+    assert_eq!(loaded.global("prefix"), Value::Str(vec![0xc3].into()));
+    assert_eq!(
+        loaded.global("suffix"),
+        Value::Str(vec![0xa9, 0, 0xff].into())
+    );
+    assert_eq!(loaded.host().observed, [4]);
+    assert_eq!(loaded.parked_threads().count(), 0);
 }
 
 #[test]

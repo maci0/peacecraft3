@@ -28,6 +28,9 @@ use pcx_sim::world::{
 };
 use std::sync::Arc;
 
+#[path = "unit_random_checkpoint.rs"]
+mod random_checkpoint;
+
 #[path = "unit_hero_host.rs"]
 mod hero;
 

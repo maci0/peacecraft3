@@ -7,6 +7,9 @@ use crate::script_random::{
 use pcx_script::Value;
 use std::sync::Arc;
 
+#[path = "script_random_checkpoint.rs"]
+mod checkpoint;
+
 pub(super) struct Random {
     policy: Arc<Policy>,
     max_secondary: usize,

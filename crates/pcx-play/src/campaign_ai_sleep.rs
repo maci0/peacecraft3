@@ -25,6 +25,7 @@ pub(crate) enum AiWakeDelivery {
     Internal,
     RetriedPaused,
     Resumed,
+    MapBridge,
 }
 
 fn combined<T>(result: Result<T, String>, cleanup: Result<(), String>) -> Result<T, String> {
@@ -262,7 +263,9 @@ impl<W: AiWorld> Runtime<W> {
         world: &mut Option<W>,
         wake: AiWake,
         work: &mut usize,
+        captured: &mut bool,
     ) -> Result<AiWakeDelivery, String> {
+        *captured = false;
         if self.pending_retirement.contains(&wake.player) {
             return Err("campaign AI context is pending retirement".into());
         }
@@ -319,9 +322,21 @@ impl<W: AiWorld> Runtime<W> {
             .expect("checked AI context");
         vm.host().world = Some(borrowed);
         let result = vm
-            .resume_thread(wake.ticket)
-            .map_err(|e| format!("campaign AI player {}: {e}", wake.player));
+            .resume_thread_until_checkpoint(wake.ticket)
+            .map(|_| ())
+            .map_err(|error| {
+                format!(
+                    "campaign AI player {}: {}",
+                    wake.player,
+                    super::script_error(&mut vm, &error)
+                )
+            });
+        *captured = vm.host().pending_map.is_some();
         *world = vm.host().world.take();
+        if result.is_ok() && vm.host().pending_map.is_some() {
+            self.active.insert(wake.player, vm);
+            return Ok(AiWakeDelivery::MapBridge);
+        }
         let returned = world.as_mut().expect("AI returns its canonical world");
         let cleanup = returned.ai_end_native_domain_callback();
         if result.is_ok() {

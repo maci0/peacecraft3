@@ -1,6 +1,6 @@
 use super::*;
 
-fn rules() -> Rules {
+pub(super) fn rules() -> Rules {
     Rules {
         simple: clock::Rules {
             origin: 0.,

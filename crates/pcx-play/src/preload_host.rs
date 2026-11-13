@@ -252,6 +252,13 @@ impl MapStartupHost {
 }
 struct Shared<'a>(&'a mut MapStartupHost);
 impl Host for Shared<'_> {
+    fn script_entry_error(&self) -> Option<String> {
+        self.0.script_entry_error()
+    }
+    fn retain_script_failure(&mut self, diagnostic: &str) {
+        self.0.retain_script_failure(diagnostic);
+    }
+
     fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
         self.0.string_case(bytes, upper)
     }

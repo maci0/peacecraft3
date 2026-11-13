@@ -473,3 +473,153 @@ Thus the observed Resume post-handler work cannot be projected using the
 ordinary periodic-expiry fresh-replay policy. This qualifies one cold-loaded
 case over a bounded two-second interval, not permanent inactivity or every
 reentrant replacement/resume variant. Full recreation saves remain unsupported.
+
+## Recreation continuation sections under implementation
+
+The recreation now has component codecs for a program-bound VM, script and
+secondary RNG streams, the independent animation RNG, live unit ability state,
+and in-memory game caches. They are sections for an unpublished whole-world
+candidate, not a complete save format or an enabled `SaveGame`/`LoadGame` route.
+The remaining arena, world jobs, AI contexts, clocks, application presentation,
+storage and publication must join the same transaction before those routes can
+be enabled. Original save-payload interoperability remains separate.
+
+The VM section binds source identity and reconstructs parked frame continuations
+from the verified program, preserving globals, sparse arrays, return holes and
+remaining callbacks. Its native-save projection omits the active save-calling
+execution while retaining already parked threads. This does not implement the
+host's timer-family or Slow disk projections described above. The component
+checks exercise fresh VM candidates without rerunning global initializers.
+
+The RNG section stores every retained generator word and lane, caller order,
+secondary-channel records and independent animation stream. It verifies locally
+rebound source policies rather than serializing their authored tables. Both
+script and animation state validate before either is assigned to the candidate.
+The primary-only rollback helper remains a separate native-call mechanism.
+
+The world ability section preserves the exact live ability iteration order,
+including ordinary additions, removals and re-additions, hero progress and
+optional XP, cooldown bits, alarm flags, and autocast flags and revision context.
+It checks source learn-slot bindings and prepares every unit before assignment.
+This preserves current observable world state as a reconstruction choice;
+arbitrary ordinary-ability persistence in original full saves has not been
+qualified. It deliberately does not reuse `StoreUnit`'s source/learn-slot
+projection. A synthetic command-card regression verifies that a re-added
+ordinary ability keeps its live first-occupant result after this section is
+restored, while the separate campaign-cache regression still reconstructs the
+fresh-source result.
+
+The cache section preserves unsaved profile memory, allocation policy and
+accounting, and a retained storage error. It binds the candidate's existing
+storage provider without reading or replacing its external profile. A synthetic
+regression distinguishes saved disk value 37 from unsaved world value 93 and
+checks that a later native save uses the candidate provider. This is component
+reconstruction evidence, not original-client cache/full-save parity.
+
+The VM component now uses internal section version 2 for `ScriptString` byte
+payloads. It retains non-UTF-8 bytes and embedded NULs in values, arrays and
+parked expression continuations; metadata remains checked UTF-8. The provisional
+version-1 VM section is refused rather than reinterpreted. No durable whole-game
+format was published before this change. A combined byte/clock regression parks
+a string-returning call with a non-UTF-8 array value and a retained concatenation
+operand, reconstructs it, re-parks it and reconstructs it again. A cache-section
+regression also exercises the profile codec's raw stored strings. These checks
+do not establish original save-payload compatibility.
+
+The AI component retains each requested canonical path and exact compiled
+sources before globals and `main`, with an ordered SHA-256 binding of common,
+AI common, entry and raw optional WTS bytes. Diagnostic locations do not define
+that content identity. Initial and resumed errors use the retained source even
+after the future-context loader changes.
+
+Candidate source lookup receives each saved path, edition, version and content
+fingerprint independently of the loader used for future starts. A synthetic
+regression reconstructs fresh programs for two generations at the same path,
+resumes both old contexts and then starts a third with the future loader.
+Unavailable old content is refused. The outer source registry and complete
+cold-publication path still need to supply that lookup from pinned local inputs.
+
+Its candidate section preserves parked VM frames, captured difficulty results
+separately from future difficulty inputs, pause depth, pending sleep results,
+sleep tickets and deadlines, retirement ownership and remaining source-load
+budget. A synthetic round trip compares nested locals, re-parking, resource
+writes and later AI starts without re-running globals or `main`. Truncation,
+foreign-source and retained-error cases exercise refusal before candidate
+publication. The canonical world must already be returned from its AI loan.
+Active AI save projection is refused pending qualification.
+
+Native sleep records retain their original queue domain and origin, current
+raw entry and complete extended epoch, including remaining count and the
+unchanged legacy expiry shadow. Source-bound synthetic regressions cover an
+internal entry and queue rebase without deriving time from a public `f64` view.
+These are component reconstruction checks. The whole clock/world/application
+graph, complete checkpoint owner, durable storage and cold publication remain
+incomplete; SaveGame/LoadGame and menu
+save/load remain unsupported.
+
+The native clock candidate section preserves both completed queue positions,
+source-derived pending wrap halves, selected callback domain and position, the
+ordered paired/counter frame FIFO and phase, pacing credit, turn credit and
+fractional carry, sub-millisecond counter remainder, platform selection and
+committed counter duration. Its policy fingerprint includes every admitted
+clock operand and the source speed-table digest; the table and image bytes stay
+in the local source provider. Candidate decoding validates source identity,
+frame ownership, exact source segment splits, counter low-DWORD conversion and
+allocation budgets before replacing this section. Sleep and timer sections must
+then resolve against that restored queue state in the unpublished whole root.
+
+Synthetic continuation regressions compare every next segment across both
+queues and wrap halves, including active callback scopes and queued counter
+inputs. A candidate-world regression restores the clock before a rebased sleep
+record and compares its next internal entry. Truncated or foreign sections leave
+the candidate clock unchanged. These are recreation component checks; no new
+original-client save behavior is claimed. They do not capture the application's
+outer delivery cursor, the complete world graph or durable storage, and do not
+enable SaveGame/LoadGame.
+
+Clock admission also permits a frame enqueued behind an already pending
+game-only segment, as the current producer API does. Real duration validation
+walks the exact source chunk-subtraction words, charging the codec item budget;
+a positive but unreachable remainder is refused. Exhausting that proof budget
+refuses the candidate rather than approximating or silently dropping time.
+
+
+The unfinished, fixture-only AI resource-observer bridge returns the canonical world loan
+and reinserts the paused AI VM before the owning map VM executes the captured
+`ScriptCall` batch. The AI native return resumes after that entire batch. A
+native Game wake retains its selected queue scope across map conditions,
+actions, nested ordinary triggers and the AI continuation; the Legacy path uses
+the same callback ownership. The initial map call uses its VM's resident native
+call boundary. Wake delivery retains a separate session phase before dispatch.
+
+Native-code evidence joins the player-state setter's immediate listener call;
+the local runtime witness for image SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`,
+version 1.29.2.9231, records the AI's immediate read of the observer's resource
+write, including after Sleep, with disabled observers as a control. Synthetic
+published-session regressions exercise that contract in Native and Legacy
+paths. Their re-park and timer-query checks also test preservation of the
+selected Game scope. These are reconstruction checks against that bounded
+contract, not new original-client save observations.
+
+Sleeping observers, sound waits, reentrant AI starts and AI-global initializer
+writes requiring map callbacks remain explicitly refused before their effects.
+A callback error preserves its original map diagnostic, returns the world and
+attempts retirement once, retaining failed cleanup ownership; retained faults
+refuse script entry and producer retries before VM or queue mutation. Candidate AI sections preserve callback
+admission in internal version 2 and explicitly refuse active or faulted bridge
+ownership. Full active-AI disk projection, the whole root, storage and cold
+publication remain unfinished, and SaveGame/LoadGame remain unsupported.
+
+
+Wrap-up checkpoint: normal `StartCampaignAI` dispatch remains strict for map
+resource callbacks. The experimental bridge requires an explicit test-fixture
+builder; it has no production admission. The initial six diagnostic app cases
+and earlier entry/cause fix passed, but the subsequent broad clock run found an
+over-broad fault gate (42 passed, one existing ordinary-AI refusal case failed).
+The capture-attempt/scoped-cleanup refinement then stopped at compilation
+privacy errors before any focused tests ran. Those visibility paths and the
+production safety gate were corrected for this checkpoint without another build
+or test run. The current refinement, new no-capture/queue/boundary cases and
+final native/WASM checks therefore remain unvalidated. This work must not be
+reported as a completed observer bridge or full Save/Load implementation.

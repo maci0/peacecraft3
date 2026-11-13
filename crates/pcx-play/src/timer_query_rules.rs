@@ -6,6 +6,9 @@ use crate::{
     neutral_rule_input::Pe,
 };
 
+#[path = "timer_query_checkpoint.rs"]
+mod checkpoint;
+
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub image_sha256: Sha256Digest,
