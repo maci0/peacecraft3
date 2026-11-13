@@ -10,6 +10,7 @@ pub struct Rules {
     pub to_radians: f32,
     pub to_degrees: f32,
     pub minimum_turn: f32,
+    pub timed_instant_limit: f32,
     pub zero: f32,
     pub selector_mask: u32,
     pub direction: super::direction::Rules,
@@ -93,6 +94,8 @@ impl Rules {
         if word(&radians, 1)? != word(&setter, 1)? {
             return Err("heading authored and script angle scales differ".into());
         }
+        let timed_instant_limit =
+            Self::read_timed_instant_limit(read, word(&setter, 1)?, numeric.multiplication_va())?;
         let degrees = read(0x4976a5, 15, true)?;
         shape(&degrees, 0, &[0x68])?;
         call(&degrees, 0x4976a5, 10, numeric.multiplication_va())?;
@@ -126,10 +129,58 @@ impl Rules {
             to_radians: value(word(&radians, 1)?)?,
             to_degrees: value(word(&degrees, 1)?)?,
             minimum_turn: value(word(&minimum, 3)?)?,
+            timed_instant_limit,
             zero,
             selector_mask: u32::from(index[2]),
             direction: super::direction::Rules::read(read, numeric)?,
         })
+    }
+
+    fn read_timed_instant_limit(
+        read: &mut impl FnMut(u32, usize, bool) -> Result<Vec<u8>, String>,
+        radians_operand: u32,
+        multiplication: u32,
+    ) -> Result<f32, String> {
+        let branch = read(0x4ab443, 20, true)?;
+        shape(&branch, 0, &[0xf3, 0x0f, 0x10, 0x05])?;
+        shape(
+            &branch,
+            8,
+            &[
+                0x83, 0xec, 0x14, 0x56, 0x8b, 0x75, 0x10, 0x0f, 0x2f, 0x06, 0x72, 0x45,
+            ],
+        )?;
+        let short = read(0x4ab474, 35, true)?;
+        shape(&short, 0, &[0x68])?;
+        shape(
+            &short,
+            5,
+            &[0xff, 0x75, 0x0c, 0x8b, 0xf0, 0x8d, 0x45, 0xf4, 0x50],
+        )?;
+        call(&short, 0x4ab474, 14, multiplication)?;
+        shape(
+            &short,
+            19,
+            &[
+                0x83, 0xc4, 0x0c, 0x8d, 0x45, 0xf4, 0x8b, 0xce, 0x6a, 0, 0x50,
+            ],
+        )?;
+        let direct = read(0x4ab424, 13, true)?;
+        shape(
+            &direct,
+            0,
+            &[0x8d, 0x45, 0xfc, 0x8b, 0xce, 0x6a, 0, 0x50, 0xe8],
+        )?;
+        let setter = 0x4ab431_u32.wrapping_add(word(&direct, 9)?);
+        call(&short, 0x4ab474, 30, setter)?;
+        if word(&short, 1)? != radians_operand {
+            return Err("timed and direct facing angle scales differ".into());
+        }
+        let value = f32::from_bits(word(&read(word(&branch, 4)?, 4, false)?, 0)?);
+        if !value.is_finite() {
+            return Err("timed facing duration threshold is not finite".into());
+        }
+        Ok(value)
     }
 
     pub(crate) fn authored(&self, numeric: &NumericPolicy, cell: &str) -> Result<f32, String> {
@@ -162,6 +213,78 @@ impl Rules {
 mod tests {
     use super::*;
 
+    fn timed_fixture(limit: f32) -> Vec<(u32, Vec<u8>)> {
+        let relative = |bytes: &mut Vec<u8>, base: u32, target: u32| {
+            let at = bytes.len() as u32;
+            bytes.push(0xe8);
+            bytes.extend(target.wrapping_sub(base + at + 5).to_le_bytes());
+        };
+        let mut branch = vec![0xf3, 0x0f, 0x10, 0x05];
+        branch.extend(0x82000_u32.to_le_bytes());
+        branch.extend([
+            0x83, 0xec, 0x14, 0x56, 0x8b, 0x75, 0x10, 0x0f, 0x2f, 0x06, 0x72, 0x45,
+        ]);
+        let mut short = vec![0x68];
+        short.extend(0x83000_u32.to_le_bytes());
+        short.extend([0xff, 0x75, 0x0c, 0x8b, 0xf0, 0x8d, 0x45, 0xf4, 0x50]);
+        relative(&mut short, 0x4ab474, 0x90100);
+        short.extend([
+            0x83, 0xc4, 0x0c, 0x8d, 0x45, 0xf4, 0x8b, 0xce, 0x6a, 0, 0x50,
+        ]);
+        relative(&mut short, 0x4ab474, 0x90200);
+        let mut direct = vec![0x8d, 0x45, 0xfc, 0x8b, 0xce, 0x6a, 0, 0x50];
+        relative(&mut direct, 0x4ab424, 0x90200);
+        vec![
+            (0x4ab443, branch),
+            (0x4ab474, short),
+            (0x4ab424, direct),
+            (0x82000, limit.to_le_bytes().to_vec()),
+        ]
+    }
+
+    fn timed_decode(memory: &[(u32, Vec<u8>)]) -> Result<f32, String> {
+        Rules::read_timed_instant_limit(
+            &mut |va, n, code| {
+                let bytes = memory
+                    .iter()
+                    .find(|(at, _)| *at == va)
+                    .ok_or("unprovided timed-facing fixture window")?;
+                if bytes.1.len() != n || code != (va != 0x82000) {
+                    return Err("timed-facing fixture window differs".into());
+                }
+                Ok(bytes.1.clone())
+            },
+            0x83000,
+            0x90100,
+        )
+    }
+
+    #[test]
+    fn timed_facing_threshold_follows_relocated_source_and_rejects_branch_or_setter_drift() {
+        for limit in [-0.03125_f32, 0.21875, 0.6875] {
+            assert_eq!(
+                timed_decode(&timed_fixture(limit)).unwrap().to_bits(),
+                limit.to_bits()
+            );
+        }
+        for (address, at) in [
+            (0x4ab443, 18),
+            (0x4ab474, 1),
+            (0x4ab474, 15),
+            (0x4ab474, 28),
+            (0x4ab474, 31),
+            (0x4ab424, 6),
+        ] {
+            let mut memory = timed_fixture(0.21875);
+            memory.iter_mut().find(|(va, _)| *va == address).unwrap().1[at] ^= 1;
+            assert!(timed_decode(&memory).is_err(), "{address:x}+{at}");
+        }
+        assert!(timed_decode(&timed_fixture(f32::NAN)).is_err());
+        let mut truncated = timed_fixture(0.21875);
+        truncated.last_mut().unwrap().1.pop();
+        assert!(timed_decode(&truncated).is_err());
+    }
+
     #[test]
     fn nonstock_heading_profile_keeps_marker_default_distinct_from_numeric_zero() {
         let (image, binding, budget) = crate::script_numeric::tests::fixture();
@@ -173,6 +296,7 @@ mod tests {
             to_radians: 0.125,
             to_degrees: 8.,
             minimum_turn: 0.25,
+            timed_instant_limit: 0.21875,
             zero: 7.,
             selector_mask: 3,
             direction: super::super::direction::tests::nonstock(),
