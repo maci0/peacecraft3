@@ -2450,3 +2450,147 @@ fn app_counter_factory_selects_before_global_config_and_main_timer_requests() {
     assert_eq!(session.global("config_at"), Some(Value::Real(0.125)));
     assert_eq!(session.global("main_at"), Some(Value::Real(0.1875)));
 }
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_long_wall_frame_budget_retry_preserves_pause_real_wake_and_next_grant() {
+    let script = "globals\ntrigger action=CreateTrigger()\ntimer starter=CreateTimer()\ntimer during=CreateTimer()\ntimer after=CreateTimer()\ninteger trace=0\nreal wakeGame=0.0\nendglobals\nfunction done takes nothing returns nothing\nset trace=trace*10+4\nendfunction\nfunction wait takes nothing returns nothing\nset trace=trace*10+1\ncall PauseGame(true)\ncall TriggerSleepAction(0.125)\nset wakeGame=TimerGetElapsed(starter)\nset trace=trace*10+3\ncall PauseGame(false)\ncall TimerStart(after,0.0625,false,function done)\nendfunction\nfunction begin takes nothing returns nothing\ncall TriggerExecute(action)\nendfunction\nfunction middle takes nothing returns nothing\nset trace=trace*10+2\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TriggerAddAction(action,function wait)\ncall TimerStart(starter,0.0625,false,function begin)\ncall TimerStart(during,0.125,false,function middle)\nendfunction\n";
+    let run = |budget| {
+        let mut app = timer_app();
+        publish_counter_map(&mut app, script);
+        let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), budget);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_secs(1));
+        if budget == 1 {
+            assert_eq!(runtime.tick(), 0);
+            assert_eq!(runtime.pending(), Duration::from_secs(1));
+        }
+        // Diagnostic retry bound; only the original nonzero interval supplies time.
+        for _ in 0..64 {
+            if runtime.pending().is_zero() {
+                break;
+            }
+            assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+            runtime.advance(&mut session, Duration::ZERO);
+        }
+        assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        assert!(runtime.pending().is_zero());
+        assert_eq!(runtime.tick(), 40);
+        assert_eq!(session.global("trace"), Some(Value::Int(123)));
+        let point = session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap();
+        assert_eq!(point.local, 0.25f32.to_bits());
+        runtime.advance(&mut session, Duration::from_millis(25));
+        assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        assert_eq!(runtime.tick(), 41);
+        assert_eq!(session.global("trace"), Some(Value::Int(1234)));
+        let objects = session.host().unwrap().objects();
+        (
+            objects.native_game_point(),
+            objects.native_queue_point(clock::Domain::Real),
+        )
+    };
+    assert_eq!(run(1), run(64));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_timer_budget_retry_preserves_blocked_and_follow_route_continuations() {
+    use peacecraft3::map_script_session::TimerSessionError;
+    const SCRIPT: &str = r#"
+globals
+unit A=null
+unit B=null
+integer trace=0
+real firstX=0.0
+real firstY=0.0
+real secondX=0.0
+real secondY=0.0
+endglobals
+function first takes nothing returns nothing
+set trace=trace*10+1
+set firstX=GetUnitX(A)
+set firstY=GetUnitY(A)
+endfunction
+function second takes nothing returns nothing
+set trace=trace*10+2
+set secondX=GetUnitX(A)
+set secondY=GetUnitY(A)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+set A=CreateUnit(Player(0),'UNIT',16.0,16.0,0.0)
+ORDERS
+call TimerStart(CreateTimer(),0.5,false,function first)
+call TimerStart(CreateTimer(),0.5,false,function second)
+endfunction
+"#;
+    for follow in [false, true] {
+        let orders = if follow {
+            "set B=CreateUnit(Player(0),'UNIT',48.0,16.0,0.0)\ncall IssueTargetOrder(A,\"gamma\",B)\ncall IssuePointOrder(B,\"gamma\",48.0,64.0)"
+        } else {
+            "call IssuePointOrder(A,\"gamma\",72.0,16.0)\nset B=CreateUnit(Player(0),'UNIT',24.0,16.0,0.0)"
+        };
+        let script = SCRIPT.replace("ORDERS", orders);
+        let run = |budget| {
+            let mut session =
+                super::super::unit_range_cases::session_with_inputs(&script, true, |inputs| {
+                    inputs.timer_time = Some(0.);
+                    inputs.numeric = Some(numeric(true));
+                });
+            let frame = clock::FrameInput {
+                game_elapsed: Duration::from_millis(250),
+                real_elapsed_ms: 0,
+            };
+            session.advance_native_frame(Some(frame), 64).unwrap();
+            assert_eq!(session.global("trace"), Some(Value::Int(0)));
+            let result = session.advance_native_frame(Some(frame), budget);
+            if budget == 1 {
+                let error = result.unwrap_err();
+                assert!(
+                    matches!(error, TimerSessionError::QueueBudget("timer delivery")),
+                    "{error}"
+                );
+                assert!(session.native_pacing_can_resume(&error));
+                assert_eq!(session.global("trace"), Some(Value::Int(1)));
+                session.advance_native_frame(None, 64).unwrap();
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(session.global("trace"), Some(Value::Int(12)));
+            let snapshot = |session: &mut MapScriptSession<MapStartupHost>| {
+                let objects = session.host().unwrap().objects();
+                objects
+                    .executed_units()
+                    .map(|(id, record)| {
+                        (
+                            id,
+                            record.position,
+                            record.face.to_bits(),
+                            record.activity.clone(),
+                            objects.current_unit_order(id).unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let at_deadline = snapshot(&mut session);
+            let events = ["trace", "firstX", "firstY", "secondX", "secondY"]
+                .map(|name| session.global(name));
+            session.advance_native_frame(Some(frame), 64).unwrap();
+            assert_eq!(session.global("trace"), Some(Value::Int(12)));
+            (at_deadline, events, snapshot(&mut session))
+        };
+        assert_eq!(
+            run(1),
+            run(64),
+            "follow={follow}: budget refusal must retain deferred routes"
+        );
+    }
+}

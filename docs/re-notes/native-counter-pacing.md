@@ -22,6 +22,14 @@ projection, physics or VM execution remain sticky. This accounting does not
 claim that application ticks equal native game ticks. Loading time and a retired
 session's duration are excluded when a new session binds.
 
+Safe native budget refusals also retain deferred blocked-path and follow
+refreshes from successful mandatory projection. Retrying at the same queue point
+does not repeat that projection, so discarding those continuations would lose a
+replan. The paired-session regression compares both route families under a
+one-callback allowance and an unlimited diagnostic allowance, including complete
+activity state, callback observations and positions after the next frame.
+Legacy error cleanup and hard-fault cleanup retain their existing behavior.
+
 `campaign_startup::install_native_counter` selects the platform after host
 creation and before VM globals, `config` and `main`. Generic `install` preserves
 its existing Fresh/Legacy contract. This bounded entry point is not yet selected
