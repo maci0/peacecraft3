@@ -58,7 +58,7 @@ pub struct Rules {
     pub slow: Option<slow::Rules>,
 }
 /// Native class names whose getter, class ABI and OFF handler are read from the selected client.
-const CLASS_NAMES: [&str; 20] = [
+const CLASS_NAMES: [&str; 21] = [
     "CAbilitySlow",
     "CAbilityInnerFire",
     "CAbilityHeal",
@@ -79,6 +79,7 @@ const CLASS_NAMES: [&str; 20] = [
     "CAbilityNeutralHeal",
     "CAbilitySpellSteal",
     "CAbilityFlamingAttack",
+    "CAbilityParasite",
 ];
 const SCANS_PER_CLASS: usize = 3;
 /// One data scan for the vtables that share an ON handler.

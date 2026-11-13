@@ -291,3 +291,71 @@ The initial failed image-discovery run is preserved separately as
 `autocast-failed-anchor.log` and `autocast-failed-anchor-receipt.json` under the
 same local prefix. No application rebuild or unchanged-mission horizon was run
 in this branch; native clock alignment, acquisition and spell effects remain open.
+
+## Parasite default activation (2026-11-13)
+
+After the Spell Steal admission, unchanged TFT HumanX03Interlude and UndeadX04
+startup replays refused default `ANpa` activation while creating `nnsw` at map
+lines 226 and 1692. These are parent recreation receipts under
+`/tmp/pc3-resident-lifecycle-horizons/`, not original-client observations.
+
+The exact map headers, selected common version constant and native selection
+operands derive `Custom_V1` for both chapters. That namespace's
+`UnitAbilities.slk` lists `nnsw` with default `ANpa` and present ability `ANpa`;
+`AbilityData.slk` resolves that alias to class code `ANpa`. The authored `ACpa`
+alias also uses code `ANpa`, but the two failing callers carry `ANpa` itself.
+The earlier V0 witness must not stand in for these expansion units. The new
+ignored production source gate in `campaign_inputs.rs` uses the actual
+`CampaignRecipe`, selected archive resolver, `defaults` and `MetadataCatalog`
+for both unchanged map headers. It checks the default/list/code join and
+reconciles selected profile orders against the image-derived order registry,
+retaining exact map/table/profile provenance in the local test output. It adds
+no alternate archive loader or production data-selection behavior.
+
+Static PE/disassembly of the same reviewed Legacy image identifies
+`CAbilityParasite`: vtable `fbc67c`, name getter `c99da0`, code getter `c99db0`,
+factory `c9b260`. The factory calls `b2ac80`; its complete post-base embedded
+timer initialization before the class-vtable write equals Heal's. Its toggle
+wrappers/handlers, update hooks, activate/deactivate, timer-event dispatcher and
+retry/minimum getters equal the admitted ordinary path. The first delay and
+group continue to come from the existing image decoder. The native cast/ON/OFF
+getters `c99e10`/`c99df0`/`c99e00` join registry `parasite`/`parasiteon`/
+`parasiteoff`; these match the examined `ANpa` profile. No profile alias, timing,
+spell effect or successful no-op is invented.
+
+The only production behavior change adds this named class to the existing
+admission list. The selected-image gate now includes all 21 classes and checks
+Parasite's activation/timing against decoded peers. A dedicated public caller
+case feeds the parsed native code/delay into the existing synthetic definition
+with a different ability alias. Shared assertions cover creation at nonzero
+time, no issued ON order, just-before/exact-first-boundary behavior, repeated
+strict unsupported-work refusal without unit/RNG/handle/event changes, and
+OFF/removal disarming. Existing Spell Steal/Orb gate names and coverage remain.
+
+Clock adoption, Script/AI wakes, acquisition, damage, buffs, summoned units and
+native deadline alignment are unchanged and unqualified here. Passing these
+source/caller gates does not complete a chapter or establish Parasite casting
+parity. Parent owns the unchanged-map startup/horizon reruns after intake.
+Local static source/image receipts remain at
+`/tmp/pc3-sol61-08-anpa-qualification.{md,json}`.
+
+Validation on the released `2bce5832` baseline passes all 54 focused autocast
+checks, zero failed or ignored, with all six source-image gates explicitly run.
+These include
+`selected_original_parasite_default_activation_reaches_boundary_and_disarms`
+and
+`selected_original_parasite_autocast_production_sources_follow_both_tft_headers`.
+The production gate observes `War3x.mpq::Custom_V1/Units/UnitAbilities.slk` and
+`Custom_V1/Units/AbilityData.slk` for both maps, with the profile from
+`War3x.mpq::Units/CampaignAbilityFunc.txt`. Exact map/table/image SHA256 and
+profile locators are in the local output. This closes the earlier read-only
+qualification's unresolved production resolver join.
+
+Strict native all-target/all-feature Clippy, WASM all-feature Clippy, both
+all-feature library builds, and formatting of the four changed Rust files pass.
+The five-stage driver used the isolated range cache, two jobs and verified
+private Xvfb/null audio. Checked Rust hashes remained unchanged; receipts,
+exact named-gate results and full output remain at
+`/tmp/pc3-sol61-08-anpa-{sources.sha256,validation-receipt.json,verified.log}`.
+No application rebuild or chapter horizon was run in this branch. Actual cast
+and native clock/wake parity remain open.
