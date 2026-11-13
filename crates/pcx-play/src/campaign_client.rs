@@ -290,6 +290,7 @@ pub fn read(
     .and_then(|numeric| numeric.with_math(image, &math, BUDGET))
     .and_then(|numeric| numeric.with_formatting(image, &formatting, BUDGET))
     .and_then(|numeric| numeric.with_timer_queries(image, &timer_queries, BUDGET))
+    .and_then(|numeric| numeric.with_native_game_clock(image, BUDGET))
     .map_err(|e| e.to_string())?;
     let script_hash = crate::playercolor_host::ScriptHashPolicy::read(
         image,

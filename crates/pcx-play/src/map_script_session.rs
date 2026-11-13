@@ -264,6 +264,8 @@ pub enum TimerSessionError {
     PendingDelivery,
     #[error("campaign AI: {0}")]
     Ai(String),
+    #[error("native queue: {0}")]
+    NativeQueue(String),
     #[error("range callback work budget exhausted")]
     RangeBudget,
     #[error("thread wake budget exhausted")]
@@ -277,6 +279,112 @@ pub enum TimerSessionError {
 }
 
 impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
+    /// Admit one independently supplied frame, or resume retained frame work.
+    /// This transport does not infer game speed or real time from a legacy horizon.
+    pub fn advance_native_frame(
+        &mut self,
+        input: Option<crate::native_game_clock::FrameInput>,
+        mut budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        use crate::native_game_clock::Domain;
+        let mut work = 65536;
+        if let Some(input) = input {
+            let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+            let fresh = host.objects().native_game_point().is_some()
+                && !host.objects().native_clock_driving();
+            let prepared = if fresh {
+                Some(
+                    host.prepare_native_ai_sleep_admission(&mut work)
+                        .map_err(TimerSessionError::Ai)?,
+                )
+            } else {
+                None
+            };
+            host.objects_mut().enqueue_native_frame(input, &mut work)?;
+            if let Some(rows) = prepared {
+                host.commit_native_ai_sleep_rows(rows);
+            }
+        }
+        let mut delivered = 0;
+        loop {
+            let segment = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects_mut()
+                .next_native_frame_segment(&mut work)?;
+            let Some((domain, segment)) = segment else {
+                return Ok(delivered);
+            };
+            match domain {
+                Domain::Game => {
+                    let objects = self.host().ok_or(ScriptSessionError::NoSession)?.objects();
+                    let until = objects.native_game_clock_seconds(segment.point)?;
+                    delivered += self.advance_native_timers(until, &mut budget, &mut work)?;
+                }
+                Domain::Real => loop {
+                    let wake = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects()
+                        .next_native_thread_wake(segment.point, &mut work)?;
+                    let Some(wake) = wake else { break };
+                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    let objects = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut();
+                    objects.validate_native_thread_wake(&wake)?;
+                    if !wake.terminal {
+                        objects.commit_native_thread_wake(wake)?;
+                        continue;
+                    }
+                    objects.begin_native_domain_callback(domain, wake.point)?;
+                    let resumed = objects
+                        .commit_native_thread_wake(wake)
+                        .map_err(TimerSessionError::from)
+                        .and_then(|_| {
+                            self.resume_thread(wake.ticket)
+                                .map_err(TimerSessionError::from)
+                        })
+                        .and_then(|_| self.advance_queued_events(budget));
+                    let cleanup = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut()
+                        .end_native_domain_callback();
+                    let events = match (resumed, cleanup) {
+                        (Err(error), Err(cleanup)) => {
+                            return Err(TimerSessionError::NativeQueue(format!(
+                                "{error}; scope cleanup: {cleanup}"
+                            )));
+                        }
+                        (Err(error), Ok(())) => return Err(error),
+                        (Ok(_), Err(error)) => return Err(error.into()),
+                        (Ok(events), Ok(())) => events,
+                    };
+                    budget = budget
+                        .checked_sub(events)
+                        .ok_or(TimerSessionError::WakeBudget)?;
+                    delivered += 1 + events;
+                },
+            }
+            let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+            let ai = if domain == Domain::Game && segment.ends_cycle {
+                Some(
+                    host.prepare_native_ai_sleep_rebase(domain, &mut work)
+                        .map_err(TimerSessionError::Ai)?,
+                )
+            } else {
+                None
+            };
+            host.objects_mut()
+                .finish_native_frame_segment(domain, segment, &mut work)?;
+            if let Some(rows) = ai {
+                host.commit_native_ai_sleep_rows(rows);
+            }
+        }
+    }
+
     /// Sample admitted shared vision after script delivery. A blocked admission
     /// is retried, so placement or day/night that arrives later can still admit.
     /// An already live ledger is left in place. Sessions that stay blocked are
@@ -313,9 +421,22 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     pub fn advance_timers(
         &mut self,
         until: f64,
-        budget: usize,
+        mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
-        let result = self.advance_timers_inner(until, budget);
+        let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+        let advances_clock = host.objects().game_paused() != Some(true);
+        host.objects_mut()
+            .select_legacy_clock_domain(until, advances_clock)?;
+        self.advance_native_timers(until, &mut budget, &mut 65536)
+    }
+
+    pub(crate) fn advance_native_timers(
+        &mut self,
+        until: f64,
+        budget: &mut usize,
+        activity_work: &mut usize,
+    ) -> Result<usize, TimerSessionError> {
+        let result = self.advance_timers_inner(until, budget, activity_work);
         if result.is_err()
             && let Some(host) = self.host()
         {
@@ -327,14 +448,14 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     fn advance_timers_inner(
         &mut self,
         until: f64,
-        mut budget: usize,
+        budget: &mut usize,
+        activity_work: &mut usize,
     ) -> Result<usize, TimerSessionError> {
         self.host()
             .ok_or(ScriptSessionError::NoSession)?
             .objects()
             .validate_timer_target(until)?;
         let mut delivered = 0;
-        let mut activity_work = 65536;
         loop {
             if self
                 .host()
@@ -347,8 +468,8 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .objects()
                     .has_queued_mirror_events()
             {
-                let events = self.advance_queued_events(budget)?;
-                budget = budget
+                let events = self.advance_queued_events(*budget)?;
+                *budget = budget
                     .checked_sub(events.max(1))
                     .ok_or(TimerSessionError::WakeBudget)?;
                 delivered += events;
@@ -359,49 +480,103 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .objects()
                 .game_paused()
                 == Some(true)
+                && !self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects()
+                    .native_frame_active()
             {
                 return Ok(delivered);
             }
-            let ai_wake = self
-                .host()
-                .ok_or(ScriptSessionError::NoSession)?
-                .next_ai_wake(until);
-            let step_until = ai_wake.map_or(until, |(at, _, _)| at);
+            let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+            let paired = host.objects().native_frame_active();
+            let native_ai = if paired {
+                let point = host
+                    .objects()
+                    .native_game_point()
+                    .expect("native frame Game point");
+                host.next_native_ai_wake(point, activity_work)
+                    .map_err(TimerSessionError::Ai)?
+            } else {
+                None
+            };
+            let ai_wake = if paired {
+                None
+            } else {
+                host.next_ai_wake(until)
+            };
+            let native_limit = paired.then(|| {
+                host.objects()
+                    .native_game_point()
+                    .expect("native frame Game point")
+            });
+            let native_target = if let Some(limit) = native_limit {
+                host.objects()
+                    .next_native_timer_boundary(limit, activity_work)?
+                    .into_iter()
+                    .chain(native_ai.map(|wake| wake.point))
+                    .min_by_key(|point| point.local)
+                    .or(Some(limit))
+            } else {
+                None
+            };
+            let step_until = if let Some(point) = native_target {
+                host.objects().native_game_clock_seconds(point)?
+            } else {
+                ai_wake.map_or(until, |(at, _, _)| at)
+            };
             let activity_wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects()
                 .next_timer_activity_boundary(step_until);
             let step_until = activity_wake.unwrap_or(step_until);
-            let wake = self
+            let objects = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
-                .objects_mut()
-                .next_thread_wake(step_until)?;
+                .objects_mut();
+            let wake = if objects.native_frame_active() {
+                None
+            } else {
+                objects.next_thread_wake(step_until)?
+            };
             if let Some(ticket) = wake {
                 let objects = self
                     .host()
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.advance_unit_activity_mandatory(now, &mut activity_work)?;
-                budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                objects.advance_unit_activity_mandatory(now, activity_work)?;
+                *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                 self.resume_thread(ticket)?;
                 delivered += 1;
                 continue;
+            }
+            let objects = self.host().ok_or(ScriptSessionError::NoSession)?.objects();
+            // shortcut: an AI deadline needs its native game-queue entry before it can enter the callback scope.
+            if objects.native_clock_driving()
+                && ai_wake.is_some_and(|(at, _, _)| at == step_until)
+                && activity_wake != Some(step_until)
+                && objects
+                    .next_timer_deadline()
+                    .is_none_or(|at| at > step_until)
+            {
+                return Err(TimerSessionError::Ai(
+                    "parked AI wake has no native game-queue entry".into(),
+                ));
             }
             let expiry = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_timer_expiry(step_until, &mut budget)?;
+                .next_timer_expiry(step_until, budget)?;
             let movement = {
                 let objects = self
                     .host()
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.advance_unit_activity_mandatory(now, &mut activity_work)
+                objects.advance_unit_activity_mandatory(now, activity_work)
             };
             if let Err(error) = movement {
                 if let Some(expiry) = expiry {
@@ -414,11 +589,25 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             }
             let Some(expiry) = expiry else {
                 if activity_wake == Some(step_until) {
-                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    continue;
+                }
+                if let Some(wake) = native_ai.filter(|wake| Some(wake.point) == native_target) {
+                    *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    let outcome = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .deliver_native_ai_wake(wake, activity_work)
+                        .map_err(TimerSessionError::Ai)?;
+                    delivered +=
+                        usize::from(outcome == crate::campaign_ai::AiWakeDelivery::Resumed);
+                    continue;
+                }
+                if paired && native_target != native_limit {
                     continue;
                 }
                 if let Some((_, player, ticket)) = ai_wake {
-                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     self.host()
                         .ok_or(ScriptSessionError::NoSession)?
                         .resume_ai(player, ticket)
@@ -431,7 +620,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects_mut();
                 let now = objects.timer_game_time().expect("selected timer clock");
-                objects.flush_unit_activity_routes(now, &mut activity_work)?;
+                objects.flush_unit_activity_routes(now, activity_work)?;
                 return Ok(delivered);
             };
             self.deliver_timer_expiry(expiry)?;

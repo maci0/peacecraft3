@@ -55,7 +55,7 @@ absent-player index/removal, negative/out-of-range indices or size, non-byte
 color arguments, NUL text and wrong handle families refuse explicitly, except
 for the qualified item-label-color behavior above. Null/stale board handles
 refuse except for item-label color and the display/destruction wrappers below.
-These are safe reconstruction contracts where original
+Except for the source-admitted index/value path below, these are safe reconstruction contracts where original
 invalid-input behavior is unqualified. A player may explicitly disassociate
 with `PlayerSetLeaderboard(player, null)`; an unassigned player query returns
 null. Original-client null and disassociation parity has not been measured.
@@ -185,3 +185,53 @@ renderer retirement paths remain unchanged.
 Regression checks distinguish live, destroyed, null, wrong-family and unknown
 identities, preserve a separate live board, retain stale getter/setter errors,
 and verify fresh creation can reuse reclaimed budgets with a distinct identity.
+
+
+## Missing player rows and value updates (2026-11-13)
+
+The unchanged selected TFT HumanX03Secret replay reached
+`LeaderboardSetPlayerItemValueBJ`, which calls `LeaderboardGetPlayerIndex` before
+`LeaderboardSetItemValue`. Refusing an absent player row stopped that ordinary
+shipped-script path. Static inspection of the selected 1.29.2.9231 executable
+(SHA256 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+qualifies both native branches:
+
+- Registration `49ff27` binds the index query to `4a1e80`. The wrapper returns
+  its negative sentinel when the board/player/presentation is absent. Its ordered
+  row lookup `635cf0` counts from zero, compares the player number at row `64`,
+  and returns the same sentinel when no row matches.
+- Registration `49ff8e` binds the value setter to `4a2090`. It returns when the
+  board or presentation is absent. The row resolver `52d670` returns null for
+  negative indices or indices at/above the row count. Setter `64f000` writes the
+  signed value at row `54` and invalidates the list only when a row exists.
+
+The existing source-admitted leaderboard rules now derive the sentinel from
+those instruction operands, check agreement with both wrapper returns and the
+HasPlayerItem comparison, and validate the getter/setter call and branch joins.
+The production campaign factory already attaches these rules. No duplicate
+startup flag or detached row state is introduced. With these rules, a missing
+player query returns the parsed sentinel; a value update to an absent board or
+invalid row leaves state, handle allocation and revision unchanged. Live rows
+still update through the existing canonical value field. Unknown boards, wrong board families and malformed ABIs remain explicit host
+errors. A live-board query also validates the player identity/family; an absent
+board returns before resolving the player, as the native wrapper does. Standalone hosts
+without the source rules retain their previous strict unqualified contract.
+
+Synthetic rules use a different negative sentinel, exercise branch drift and
+nonnegative-sentinel rejection, and run the compiled helper through the actual
+VM/host. Public-host tests cover missing/null/retired inputs, unchanged revision
+and handles on ignored updates, present-row updates and strict malformed input.
+Explicit local-image gates require `PCX_WAR3_EXE`; they do not embed original
+bytes. The retained five-function native evidence bundle and snapshot are local
+only: `/tmp/pc3-leaderboard-row-native-evidence.json` and
+`/tmp/pc3-leaderboard-row-native.snap`. This is native-code and host-execution
+qualification; no new original-client runtime probe or rendered comparison is
+claimed. Other row setters/removal retain their separately qualified contracts.
+
+
+The full package suite also exposed an existing coverage-report omission when
+it observed the new wrapper branches. Leaderboard coverage now reads the same
+native admission/dispatch table, rather than maintaining a partial second list.
+A table-completeness regression supplements the existing whole-dispatch audit;
+no audit assertion is relaxed. Coverage reports host dispatch, not native or
+rendered fidelity.

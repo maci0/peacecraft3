@@ -2379,6 +2379,93 @@ impl ObjectHost {
         self.prepare_training_change(owner, [-gold, -lumber], food, pending)
     }
 
+    pub(super) fn prepare_structure_upgrade_payment(
+        &mut self,
+        owner: HandleId,
+        amounts: [i32; 2],
+        refund: bool,
+        pending: usize,
+    ) -> Result<Option<TrainingDebit>, Error> {
+        self.training_queue_slots()?;
+        let fail = |why| {
+            self.inner
+                .error("upgrade resources", Failure::PlayerState(why))
+        };
+        let rules = &self
+            .players
+            .as_ref()
+            .expect("admitted")
+            .resources
+            .as_ref()
+            .expect("admitted")
+            .rules;
+        if rules.money_scale <= 0 || rules.money_maximum < 0 {
+            return Err(fail("upgrade money bounds not admitted"));
+        }
+        let mut money = [0; 2];
+        for (index, name) in ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"]
+            .into_iter()
+            .enumerate()
+        {
+            let current = self
+                .player_resource_value(owner, name)?
+                .ok_or_else(|| fail("upgrade bank not admitted"))?;
+            if !refund && current < amounts[index] {
+                return Ok(None);
+            }
+            let delta = if refund {
+                amounts[index]
+            } else {
+                amounts[index]
+                    .checked_neg()
+                    .ok_or_else(|| fail("upgrade debit overflow"))?
+            };
+            let next = current
+                .checked_add(delta)
+                .ok_or_else(|| fail("upgrade bank overflow"))?;
+            next.checked_mul(rules.money_scale)
+                .ok_or_else(|| fail("upgrade scaled bank overflow"))?;
+            money[index] = rules
+                .money(next)
+                .checked_sub(current)
+                .ok_or_else(|| fail("upgrade bank change overflow"))?;
+        }
+        self.prepare_training_change(owner, money, 0, pending)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_policy_fixture(&mut self, mut training: crate::training_rules::Rules) {
+        let resources = self.players.as_mut().unwrap().resources.as_mut().unwrap();
+        training.image_sha256 = resources.rules.image_sha256;
+        training.ai_production = resources
+            .rules
+            .training
+            .as_ref()
+            .unwrap()
+            .ai_production
+            .clone();
+        resources.rules.training = Ok(training);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_clear_numeric_fixture(&mut self) {
+        self.numeric = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_money_fixture(&mut self, scale: i32, maximum: i32) {
+        let rules = &mut self
+            .players
+            .as_mut()
+            .unwrap()
+            .resources
+            .as_mut()
+            .unwrap()
+            .rules;
+        rules.money_scale = scale;
+        rules.money_maximum = maximum;
+    }
+
     pub(super) fn prepare_training_change(
         &mut self,
         owner: HandleId,

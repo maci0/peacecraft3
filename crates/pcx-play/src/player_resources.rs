@@ -729,8 +729,15 @@ mod tests {
     #[test]
     #[ignore = "requires PCX_PLAYER_RESOURCE_IMAGE selecting a locally supplied client executable"]
     fn supplied_image_discovers_state_defaults_and_money_bounds() {
+        use std::io::Read;
         let path = std::env::var("PCX_PLAYER_RESOURCE_IMAGE").expect("PCX_PLAYER_RESOURCE_IMAGE");
-        let bytes = std::fs::read(&path).unwrap();
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .take((32 << 20) + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(bytes.len() <= 32 << 20);
         let rules = Rules::discover(
             &bytes,
             AssetIdentity {

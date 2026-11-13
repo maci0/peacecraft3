@@ -20,6 +20,7 @@ pub(crate) struct UpgradePolicy {
     pub refund_rate: f32,
     pub relative_cost: bool,
     pub damage_penalty: bool,
+    pub in_progress_id_change: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +135,7 @@ impl Rules {
             (0xb63e0a, 0x430620),
             (0xb63e1b, 0x4304c0),
             (0xb635d2, 0x4304c0),
+            (0xb63603, 0x4304c0),
             (0xb63b6a, 0x4304c0),
             (0xb635af, 0x6939c0),
             (0xb635bc, 0x6971a0),
@@ -165,6 +167,7 @@ impl Rules {
             (0xb63dfd, "UpgradeRefundRate"),
             (0xb63e11, "UpgradeDamageRefundPenalty"),
             (0xb635c5, "RelativeUpgradeCost"),
+            (0xb635f9, "UpgradeInProgressIdChange"),
             (0xb63b5d, "RelativeUpgradeCost"),
         ] {
             let pointer = word(immediate(&mut read, address, &[0x68], 4)?)?;
@@ -173,18 +176,11 @@ impl Rules {
                 return Err(format!("{key} refund profile key differs"));
             }
         }
-        let ([rate, research_rate, upgrade_rate, relative, damage], profile_sources) =
-            pcx_objects::editor::misc::misc_scalars(
-                profiles,
-                [
-                    "TrainRefundRate",
-                    "ResearchRefundRate",
-                    "UpgradeRefundRate",
-                    "RelativeUpgradeCost",
-                    "UpgradeDamageRefundPenalty",
-                ],
-                profile_bytes,
-            )?;
+        let ([rate, research_rate], profile_sources) = pcx_objects::editor::misc::misc_scalars(
+            profiles,
+            ["TrainRefundRate", "ResearchRefundRate"],
+            profile_bytes,
+        )?;
         let boolean = |key: &str, value: Option<f32>| match value {
             Some(0.) => Ok(false),
             Some(1.) => Ok(true),
@@ -192,10 +188,22 @@ impl Rules {
             None => Err(format!("missing Misc/{key}")),
         };
         let upgrade = (|| {
+            let ([upgrade_rate, relative, damage, in_progress_id_change], _) =
+                pcx_objects::editor::misc::misc_scalars(
+                    profiles,
+                    [
+                        "UpgradeRefundRate",
+                        "RelativeUpgradeCost",
+                        "UpgradeDamageRefundPenalty",
+                        "UpgradeInProgressIdChange",
+                    ],
+                    profile_bytes,
+                )?;
             Ok(UpgradePolicy {
                 refund_rate: upgrade_rate.ok_or("missing Misc/UpgradeRefundRate")?,
                 relative_cost: boolean("RelativeUpgradeCost", relative)?,
                 damage_penalty: boolean("UpgradeDamageRefundPenalty", damage)?,
+                in_progress_id_change: boolean("UpgradeInProgressIdChange", in_progress_id_change)?,
             })
         })();
         Ok(Self {
@@ -211,10 +219,16 @@ impl Rules {
     }
 
     pub fn refund(&self, numeric: &NumericPolicy, cost: i32) -> Result<i32, String> {
+        if cost < 0 {
+            return Err("negative training refund cost".into());
+        }
         self.refund_at_rate(numeric, cost, self.refund_rate)
     }
 
     pub fn research_refund(&self, numeric: &NumericPolicy, cost: i32) -> Result<i32, String> {
+        if cost < 0 {
+            return Err("negative research refund cost".into());
+        }
         self.refund_at_rate(
             numeric,
             cost,
@@ -225,6 +239,9 @@ impl Rules {
 
     pub(crate) fn upgrade_policy(&self) -> Result<UpgradePolicy, String> {
         let policy = *self.upgrade.as_ref().map_err(Clone::clone)?;
+        if policy.in_progress_id_change {
+            return Err("enabled UpgradeInProgressIdChange pending form is not qualified".into());
+        }
         if policy.damage_penalty {
             return Err("upgrade damage refund penalty is not qualified".into());
         }
@@ -242,11 +259,6 @@ impl Rules {
             let original = original.ok_or("original upgrade cost not admitted")?;
             for (cost, original) in costs.iter_mut().zip(original) {
                 *cost = cost.checked_sub(original).ok_or("upgrade cost overflow")?;
-            }
-        }
-        for cost in costs {
-            if cost < 0 {
-                return Err("negative upgrade cost is not qualified".into());
             }
         }
         Ok(costs)
@@ -268,8 +280,8 @@ impl Rules {
     }
 
     fn refund_at_rate(&self, numeric: &NumericPolicy, cost: i32, rate: f32) -> Result<i32, String> {
-        if numeric.image_sha256() != &self.image_sha256 || cost < 0 {
-            return Err("training refund source identity or cost differs".into());
+        if numeric.image_sha256() != &self.image_sha256 {
+            return Err("training refund source identity differs".into());
         }
         let Value::Real(value) = numeric.binary(BinOp::Mul, numeric.integer(cost)?, rate)? else {
             return Err("training refund product is not real".into());
@@ -319,7 +331,7 @@ impl Rules {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
@@ -353,6 +365,7 @@ mod tests {
             (0xb63e0a, 0x430620),
             (0xb63e1b, 0x4304c0),
             (0xb635d2, 0x4304c0),
+            (0xb63603, 0x4304c0),
             (0xb63b6a, 0x4304c0),
             (0xb635af, 0x6939c0),
             (0xb635bc, 0x6971a0),
@@ -396,6 +409,7 @@ mod tests {
             (0xb63dfd, 0x3456_u32, "UpgradeRefundRate"),
             (0xb63e11, 0x4567, "UpgradeDamageRefundPenalty"),
             (0xb635c5, 0x5678, "RelativeUpgradeCost"),
+            (0xb635f9, 0x6789, "UpgradeInProgressIdChange"),
             (0xb63b5d, 0x5678, "RelativeUpgradeCost"),
         ] {
             data.insert(
@@ -420,6 +434,10 @@ mod tests {
                     .ok_or("missing test window".into())
             },
         )
+    }
+
+    pub(crate) fn fixture_from_profiles(profiles: &[(&str, &[u8])]) -> Result<Rules, String> {
+        decode(&instructions(3), profiles)
     }
 
     #[test]
@@ -511,7 +529,7 @@ mod tests {
     #[test]
     fn upgrade_cost_modes_and_rates_follow_ordered_profiles_without_training_fallback() {
         let source = instructions(5);
-        let base = b"[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\nUpgradeRefundRate=.83\nRelativeUpgradeCost=0\nUpgradeDamageRefundPenalty=0\n";
+        let base = b"[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\nUpgradeRefundRate=.83\nRelativeUpgradeCost=0\nUpgradeDamageRefundPenalty=0\nUpgradeInProgressIdChange=0\n";
         let rules = decode(&source, &[("base", base)]).unwrap();
         assert_eq!(
             rules.upgrade_costs(Some([31, 7]), [74, 23]).unwrap(),
@@ -538,11 +556,9 @@ mod tests {
         assert_eq!(overridden.upgrade_policy().unwrap().refund_rate, 0.23);
         assert_eq!(overridden.refund_rate, 0.37);
         assert_eq!(overridden.research_refund_rate, Some(0.61));
-        assert!(
-            rules
-                .upgrade_costs(Some([75, 7]), [74, 23])
-                .unwrap_err()
-                .contains("negative")
+        assert_eq!(
+            rules.upgrade_costs(Some([75, 7]), [74, 23]).unwrap(),
+            [-1, 16]
         );
         assert!(
             rules
@@ -560,6 +576,7 @@ mod tests {
         for (key, value) in [
             ("RelativeUpgradeCost", "2"),
             ("UpgradeDamageRefundPenalty", "2"),
+            ("UpgradeInProgressIdChange", "2"),
         ] {
             let map = format!("[Misc]\n{key}={value}\n");
             let rules = decode(&source, &[("base", base), ("bad", map.as_bytes())]).unwrap();
@@ -582,10 +599,129 @@ mod tests {
     }
 
     #[test]
+    fn pending_upgrade_form_selector_requires_bound_source_and_preserves_other_refunds() {
+        let base = "[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\nUpgradeRefundRate=.23\nRelativeUpgradeCost=0\nUpgradeDamageRefundPenalty=0\n";
+        let source = instructions(3);
+        let (image, binding, budget) = crate::script_numeric::tests::fixture();
+        let numeric = NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        for mode in [None, Some("0"), Some("1"), Some("2")] {
+            let map = mode.map_or_else(String::new, |mode| {
+                format!("[Misc]\nUpgradeInProgressIdChange={mode}\n")
+            });
+            let mut rules = decode(
+                &source,
+                &[("base", base.as_bytes()), ("map", map.as_bytes())],
+            )
+            .unwrap();
+            rules.image_sha256 = *numeric.image_sha256();
+            assert_eq!(rules.refund(&numeric, 43).unwrap(), 15);
+            assert_eq!(rules.research_refund(&numeric, 43).unwrap(), 26);
+            if mode == Some("0") {
+                assert_eq!(
+                    rules.upgrade_costs(Some([31, 7]), [74, 23]).unwrap(),
+                    [43, 16]
+                );
+            } else {
+                assert!(
+                    rules
+                        .upgrade_costs(Some([31, 7]), [74, 23])
+                        .unwrap_err()
+                        .contains("UpgradeInProgressIdChange")
+                );
+            }
+        }
+        let profile = format!("{base}UpgradeInProgressIdChange=0\n");
+        let mut changed = source;
+        changed.get_mut(&0xb635f9).unwrap()[1] ^= 1;
+        assert!(decode(&changed, &[("base", profile.as_bytes())]).is_err());
+    }
+
+    #[test]
+    fn malformed_upgrade_scalars_preserve_other_refund_families() {
+        let (image, binding, budget) = crate::script_numeric::tests::fixture();
+        let numeric = NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        for key in [
+            "UpgradeRefundRate",
+            "RelativeUpgradeCost",
+            "UpgradeDamageRefundPenalty",
+            "UpgradeInProgressIdChange",
+        ] {
+            for value in ["bogus", "NaN", "1,0"] {
+                let profile =
+                    format!("[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\n{key}={value}\n");
+                let mut rules =
+                    decode(&instructions(3), &[("bad upgrade", profile.as_bytes())]).unwrap();
+                rules.image_sha256 = *numeric.image_sha256();
+                assert_eq!(rules.refund(&numeric, 43).unwrap(), 15);
+                assert_eq!(rules.research_refund(&numeric, 43).unwrap(), 26);
+                assert!(rules.upgrade_policy().unwrap_err().contains(key));
+            }
+        }
+        for profile in [
+            b"[Misc\nTrainRefundRate=.37\n".as_slice(),
+            b"[Misc]\nTrainRefundRate=NaN\n",
+            b"[Misc]\nTrainRefundRate=.37\nResearchRefundRate=bogus\n",
+        ] {
+            assert!(decode(&instructions(3), &[("invalid common", profile)]).is_err());
+        }
+    }
+
+    #[test]
+    fn signed_upgrade_refunds_keep_training_and_research_costs_independent() {
+        let (image, binding, budget) = crate::script_numeric::tests::fixture();
+        let numeric = NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        let mut rules = Rules::fixture(3, 0.37).with_upgrade_fixture(Some(UpgradePolicy {
+            refund_rate: 0.23,
+            relative_cost: false,
+            damage_penalty: false,
+            in_progress_id_change: false,
+        }));
+        assert!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::StructureUpgrade)
+                .is_err()
+        );
+        rules.image_sha256 = *numeric.image_sha256();
+        assert_eq!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::StructureUpgrade)
+                .unwrap(),
+            -9
+        );
+        assert_eq!(
+            rules
+                .refund_for(&numeric, -1, RefundKind::StructureUpgrade)
+                .unwrap(),
+            0
+        );
+        assert!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::Training)
+                .is_err()
+        );
+        assert!(
+            rules
+                .refund_for(&numeric, -43, RefundKind::Research)
+                .is_err()
+        );
+    }
+
+    #[test]
     #[ignore = "requires PCX_WAR3_EXE and PCX_TRAINING_MISC original inputs"]
     fn reviewed_original_image_and_profile_decode() {
-        let image = std::fs::read(std::env::var("PCX_WAR3_EXE").unwrap()).unwrap();
-        let profile = std::fs::read(std::env::var("PCX_TRAINING_MISC").unwrap()).unwrap();
+        fn bounded(variable: &str, limit: u64) -> Vec<u8> {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(std::env::var(variable).unwrap())
+                .unwrap()
+                .take(limit + 1)
+                .read_to_end(&mut bytes)
+                .unwrap();
+            assert!(bytes.len() as u64 <= limit);
+            bytes
+        }
+        let image = bounded("PCX_WAR3_EXE", 32 << 20);
+        let profile = bounded("PCX_TRAINING_MISC", 8 << 20);
         let rules = Rules::read(
             &image,
             AssetIdentity {

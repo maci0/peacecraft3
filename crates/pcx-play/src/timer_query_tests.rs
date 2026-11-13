@@ -265,3 +265,156 @@ fn timer_query_rules_derive_nonstock_segment_minimum_and_refuse_bad_input() {
             .is_err()
     );
 }
+
+#[test]
+fn extended_entries_preserve_original_timeout_across_nonstock_rebases() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    let original = rules.begin(&p, 1.0, 40.0, 8).unwrap();
+    let mut current = original;
+    assert_eq!(
+        (
+            current.entry_deadline(),
+            current.whole,
+            current.remaining_count
+        ),
+        (9.0, 5, 5)
+    );
+    assert!(!rules.advance_entry(&p, &mut current).unwrap());
+    assert_eq!(
+        (current.entry_deadline(), current.remaining_count),
+        (17.0, 4)
+    );
+    rules
+        .rebase_epoch(&p, &mut current, 16.0f32.to_bits())
+        .unwrap();
+    assert_eq!(
+        (
+            current.entry_deadline(),
+            current.whole,
+            current.remaining_count
+        ),
+        (1.0, 5, 4)
+    );
+    assert_eq!(
+        rules.remaining(&p, current, 0.5).unwrap(),
+        rules.remaining(&p, original, 16.5).unwrap()
+    );
+    assert!(!rules.advance_entry(&p, &mut current).unwrap());
+    assert!(!rules.advance_entry(&p, &mut current).unwrap());
+    assert_eq!(
+        (current.entry_deadline(), current.remaining_count),
+        (17.0, 2)
+    );
+    rules
+        .rebase_epoch(&p, &mut current, 16.0f32.to_bits())
+        .unwrap();
+    let remaining = rules.remaining(&p, current, 0.5).unwrap();
+    assert_eq!(remaining, 8.5);
+    assert_eq!(rules.elapsed(&p, current, remaining).unwrap(), 31.5);
+    assert_eq!(current.expiry, original.expiry); // A legacy projection is not a native entry.
+    assert!(!rules.advance_entry(&p, &mut current).unwrap());
+    assert_eq!(
+        (current.entry_deadline(), current.remaining_count),
+        (9.0, 1)
+    );
+    assert!(!rules.advance_entry(&p, &mut current).unwrap());
+    assert_eq!(
+        (current.entry_deadline(), current.remaining_count),
+        (9.125, 0)
+    );
+    assert_eq!(rules.remaining(&p, current, 9.0).unwrap(), 0.125);
+    assert!(rules.advance_entry(&p, &mut current).unwrap());
+    assert_eq!(current.whole, 5);
+}
+
+#[test]
+fn entry_rebase_and_advance_refusals_preserve_the_epoch() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    let original = rules.begin(&p, 1.0, 24.0, 8).unwrap();
+    for cycle in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::from_bits(1)] {
+        let mut current = original;
+        assert!(
+            rules
+                .rebase_epoch(&p, &mut current, cycle.to_bits())
+                .is_err()
+        );
+        assert_eq!(current, original);
+    }
+    let other = policy(16, 0.125);
+    let other_rules = other.timer_queries().unwrap();
+    let mut current = original;
+    assert!(other_rules.advance_entry(&other, &mut current).is_err());
+    assert_eq!(current, original);
+    assert!(
+        other_rules
+            .rebase_epoch(&other, &mut current, 16.0f32.to_bits())
+            .is_err()
+    );
+    assert_eq!(current, original);
+    let direct = rules.begin(&p, 1.0, 0.375, 8).unwrap();
+    let mut current = direct;
+    assert!(rules.advance_entry(&p, &mut current).unwrap());
+    assert_eq!(current, direct);
+}
+
+#[test]
+fn current_entry_readpoint_does_not_consume_an_equal_deadline() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    let mut epoch = rules.begin(&p, 7.9999995, 16.0, 4).unwrap();
+    let at = epoch.entry_deadline();
+    let before = rules.remaining_current(&p, epoch, at).unwrap();
+    assert_eq!(before, 8.0);
+    assert!(!rules.advance_entry(&p, &mut epoch).unwrap());
+    let after = rules.remaining_current(&p, epoch, at).unwrap();
+    assert!(
+        after < before,
+        "source addition/subtraction order must remain visible: {after} < {before}"
+    );
+}
+
+#[test]
+fn sleep_minimum_uses_the_selected_domain_origin_and_keeps_timer_validation() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    for delay in [-7.5, -0.25, -0.0, 0.0, 0.0625] {
+        let game = rules.begin_sleep(&p, 1.0, delay, 8).unwrap();
+        let real = rules.begin_sleep(&p, 3.0, delay, 8).unwrap();
+        assert_eq!(game.entry_deadline(), 1.125);
+        assert_eq!(real.entry_deadline(), 3.125);
+        assert_eq!(game.remaining_count, 0);
+        assert_eq!(real.remaining_count, 0);
+    }
+    assert!(rules.begin(&p, 1.0, -0.25, 8).is_err());
+    for delay in [
+        -8.0,
+        -9.0,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NAN,
+        f32::from_bits(1),
+    ] {
+        assert!(rules.begin_sleep(&p, 1.0, delay, 8).is_err());
+    }
+}
+
+#[test]
+fn segmented_sleep_keeps_current_entries_and_refuses_insufficient_preparation_work() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    assert!(rules.begin_sleep(&p, 1.0, 16.0, 0).is_err());
+    assert!(rules.begin(&p, 1.0, 16.0, 1).is_err());
+    let mut epoch = rules.begin_sleep(&p, 1.0, 16.0, 1).unwrap();
+    assert_eq!(epoch.expiry, epoch.entry_deadline());
+    assert_eq!((epoch.entry_deadline(), epoch.remaining_count), (9.0, 2));
+    assert!(!rules.advance_entry(&p, &mut epoch).unwrap());
+    rules
+        .rebase_epoch(&p, &mut epoch, 16.0f32.to_bits())
+        .unwrap();
+    assert_eq!((epoch.entry_deadline(), epoch.remaining_count), (1.0, 1));
+    assert!(!rules.advance_entry(&p, &mut epoch).unwrap());
+    assert_eq!((epoch.entry_deadline(), epoch.remaining_count), (1.125, 0));
+    assert!(rules.advance_entry(&p, &mut epoch).unwrap());
+}

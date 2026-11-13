@@ -470,6 +470,41 @@ impl MapStartupHost {
         self
     }
 
+    pub(crate) fn prepare_native_ai_sleep_admission(
+        &mut self,
+        work: &mut usize,
+    ) -> Result<crate::campaign_ai::PreparedAiSleepRows, String> {
+        self.ai
+            .prepare_native_admission(self.inner.as_ref().ok_or("AI world is lent")?, work)
+    }
+    pub(crate) fn prepare_native_ai_sleep_rebase(
+        &mut self,
+        domain: crate::native_game_clock::Domain,
+        work: &mut usize,
+    ) -> Result<crate::campaign_ai::PreparedAiSleepRows, String> {
+        self.ai
+            .prepare_native_rebase(self.inner.as_ref().ok_or("AI world is lent")?, domain, work)
+    }
+    pub(crate) fn commit_native_ai_sleep_rows(
+        &mut self,
+        rows: crate::campaign_ai::PreparedAiSleepRows,
+    ) {
+        self.ai.commit_native_sleep_rows(rows);
+    }
+    pub(crate) fn next_native_ai_wake(
+        &mut self,
+        until: crate::native_game_clock::Point,
+        work: &mut usize,
+    ) -> Result<Option<crate::campaign_ai::AiWake>, String> {
+        self.ai.next_native_wake(until, work)
+    }
+    pub(crate) fn deliver_native_ai_wake(
+        &mut self,
+        wake: crate::campaign_ai::AiWake,
+        work: &mut usize,
+    ) -> Result<crate::campaign_ai::AiWakeDelivery, String> {
+        self.ai.deliver_native_wake(&mut self.inner, wake, work)
+    }
     pub(crate) fn next_ai_wake(&mut self, until: f64) -> Option<(f64, i32, u64)> {
         self.ai.next_wake(until)
     }
@@ -989,6 +1024,7 @@ fn assemble_inner(
     }
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
+        object.admit_native_game_clock()?;
     }
     if let Some(policy) = script_hash {
         object = object.with_script_hash(policy);
