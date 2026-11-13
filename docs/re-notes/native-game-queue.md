@@ -261,3 +261,21 @@ are still only partially qualified. The new caller supplies nominal game-duratio
 pacing; it does not reproduce those unqualified outer scheduler inputs. Full save
 continuation must include the active queue and pending caller budget/phase;
 this change does not enable a partial save format.
+
+## Phased physics integration
+
+Paired Game delivery now arbitrates the retained physics request against the
+current timer and AI entries before installing any callback scope. Physics
+callbacks drain before visual state publication and periodic rearm. Equal
+physics deadlines win under the documented recreation ordering; native
+cross-family tie order remains unqualified. Fresh counter admission and the
+pre-startup selector prepare physics alongside the other family plans before
+publishing the source clock.
+
+Mandatory timer projection faults and physics callback faults refuse producer
+entry before credit, queued inputs or caller admission can change. A paired
+timer delivery-budget refusal remains a separate preselection result. Synthetic
+published-session regressions exercise earlier timer/AI/physics entries, equal
+deadlines, retained AI origins, timer identity and query time, zero-work
+admission and nonzero pacing retries after a callback fault. These checks do
+not implement the normal application counter adapter or automatic casting.

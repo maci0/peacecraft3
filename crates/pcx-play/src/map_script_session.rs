@@ -378,6 +378,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     ) -> Result<usize, TimerSessionError> {
         use crate::native_game_clock::Domain;
         self.check_pending_projection()?;
+        self.host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects()
+            .check_native_physics_fault()?;
         let mut work = 65536;
         if let Some(input) = input {
             let host = self.host().ok_or(ScriptSessionError::NoSession)?;

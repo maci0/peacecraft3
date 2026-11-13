@@ -934,15 +934,47 @@ fn published_native_slow_heading_callback_fault_retains_phase_without_replay_or_
     );
     assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
     assert!(objects.unit_buffs(target).unwrap().is_empty());
-    assert!(
-        crate::campaign_host::advance_paced_tick(&mut session, std::time::Duration::ZERO, 0., 100,)
-            .is_err()
-    );
-    assert_eq!(session.global("HeadingEvents"), Some(Value::Int(1)));
-    let objects = session.host().unwrap().objects_mut();
-    assert!(objects.pending_native_physics().is_some());
-    assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
-    assert!(objects.unit_buffs(target).unwrap().is_empty());
+    let state = format!("{:?}", objects.test_native_clock_state());
+    for producer in 0..4 {
+        let retry = match producer {
+            0 => crate::campaign_host::advance_paced_tick(
+                &mut session,
+                std::time::Duration::ZERO,
+                0.,
+                100,
+            ),
+            1 => crate::campaign_host::advance_paced_tick(
+                &mut session,
+                std::time::Duration::from_millis(333),
+                1.,
+                100,
+            ),
+            2 => session
+                .advance_native_counter_frame(Some(std::time::Duration::from_millis(333)), 100),
+            _ => session.advance_native_counter_frame(None, 100),
+        }
+        .unwrap_err();
+        assert!(
+            retry.to_string().contains("HeadingUnsupported"),
+            "producer {producer}: {retry}"
+        );
+        assert_eq!(session.global("HeadingEvents"), Some(Value::Int(1)));
+        let objects = session.host().unwrap().objects_mut();
+        assert_eq!(
+            format!("{:?}", objects.test_native_clock_state()),
+            state,
+            "producer {producer} changed source pacing before refusing the retained fault"
+        );
+        assert!(objects.pending_native_physics().is_some());
+        assert_eq!(
+            objects
+                .native("GetUnitFacing", &[Value::Handle(caster)])
+                .unwrap(),
+            facing
+        );
+        assert_eq!(objects.unit_vitals(caster).unwrap().unwrap().mana, 200.);
+        assert!(objects.unit_buffs(target).unwrap().is_empty());
+    }
 }
 
 #[test]
