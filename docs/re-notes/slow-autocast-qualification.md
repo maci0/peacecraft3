@@ -260,6 +260,27 @@ These error/lifecycle checks add no native parity claim.
 
 ## Selected-code findings and remaining gates
 
+The four attack-target ownership controls in
+`/tmp/pc3-sol04-autotarget-verified.json` passed 512 ordered snapshots. Idle enemy
+workers emit no spell events. An enemy worker explicitly attacking the caster,
+or a paused friendly unit owned by the caster's player, triggers automatic Slow:
+CHANNEL/CAST at short-clock `0.020000`, EFFECT at `0.490000`, FINISH/END at
+`1.050000`. The otherwise matched worker attacking a paused unrelated player's
+unit emits no spell events, despite an accepted attack order and observed victim
+damage. No arm issues a manual Slow order. All four private containers independently
+validate stopped/PID zero, no OOM and display/audio isolation in
+`/tmp/pc3-sol04-autotarget-cleanup.json`.
+
+The selected assembly resolves the candidate's current attack target into a
+temporary reference, then reads that victim's owner. At `0xbf7d22`, ECX is the
+ability owner (caster), not the temporary victim: `0x69bd70` calls `0x47d060`
+with caster owner first and victim owner second. This is the same directed ally
+mask relationship used by `IsUnitAlly(victim, casterPlayer)` at `0x499980`.
+The decompiler's reused parameter name obscures that receiver distinction.
+These controls qualify the bounded attack-target/ally relationship; common
+readiness, visibility, multi-candidate selection and enumeration order still
+need independent admission before positive automatic execution is enabled.
+
 Slow candidate filter `0xbf7c20`, evidence
 `ev_e9dcd1079529fac94010a7c184f236580704a43cbe956974964894b80055ca9b`,
 first applies the common filter, mobility gate and existing Slow-class check.
