@@ -6,6 +6,8 @@ use pcx_sim::world::{Definition, FieldValue};
 
 #[path = "unit_follow_host.rs"]
 mod follow;
+#[path = "unit_heading_host.rs"]
+mod heading_runtime;
 #[path = "unit_speed.rs"]
 mod speed_state;
 pub(crate) use speed_state::MoveSpeed;
@@ -22,6 +24,7 @@ pub(super) struct State {
     projected_through: f64,
     pending_blocked: Vec<PendingBlocked>,
     pending_refresh: Vec<PendingRefresh>,
+    physics: Option<heading_runtime::Request>,
 }
 
 impl State {
@@ -47,10 +50,18 @@ pub struct UnitActivity {
     patrol: Option<Patrol>,
     follow: Option<Follow>,
     turn: Option<Turn>,
+    heading: Option<heading_runtime::Heading>,
     /// `SetUnitPathing(false)`: no occupancy, straight motion, no collision checks.
     pathing_off: bool,
     /// Point rally from `setrally`. Target rally and the placement marker are separate.
     pub(crate) rally: Option<[f32; 2]>,
+}
+
+#[derive(Clone)]
+pub(super) struct FormProfile {
+    movable: bool,
+    move_speed: MoveSpeed,
+    heading: Option<heading_runtime::Properties>,
 }
 
 /// Script facing change: linear over the requested duration along the shorter
@@ -199,21 +210,44 @@ fn emit(
 }
 
 impl UnitActivity {
+    fn validate_form_profile(&self, source: &Self) -> Result<(), &'static str> {
+        if self.heading.is_some() != source.heading.is_some() {
+            return Err("form changes admitted heading capability");
+        }
+        Ok(())
+    }
+
     /// A form change takes the new unit type's movement class, base speed and speed bounds.
     /// Buff multipliers and item bonuses stay (see [`MoveSpeed::replace_form`]).
     pub(super) fn replace_form_profile(&mut self, source: &Self) {
         self.movable = source.movable;
         self.move_speed.replace_form(&source.move_speed);
+        if let Some(profile) = source.heading {
+            self.heading
+                .as_mut()
+                .expect("prepared native heading profile")
+                .set_properties(profile.properties());
+        }
     }
 
     /// The movement class and speed state a polymorph replaces and later restores.
-    pub(super) fn form_profile(&self) -> (bool, MoveSpeed) {
-        (self.movable, self.move_speed.clone())
+    pub(super) fn form_profile(&self) -> FormProfile {
+        FormProfile {
+            movable: self.movable,
+            move_speed: self.move_speed.clone(),
+            heading: self.heading.map(|h| h.properties()),
+        }
     }
 
-    pub(super) fn restore_form_profile(&mut self, (movable, move_speed): (bool, MoveSpeed)) {
-        self.movable = movable;
-        self.move_speed = move_speed;
+    pub(super) fn restore_form_profile(&mut self, profile: FormProfile) {
+        self.movable = profile.movable;
+        self.move_speed = profile.move_speed;
+        if let Some(properties) = profile.heading {
+            self.heading
+                .as_mut()
+                .expect("retained native heading state")
+                .set_properties(properties);
+        }
     }
 
     pub(super) fn resume_after_pause(&mut self, since: f64, now: f64) {
@@ -612,6 +646,7 @@ impl ObjectHost {
             pending_blocked: Vec::new(),
             pending_refresh: Vec::new(),
             projected_through: self.timer_game_time().expect("admitted clock"),
+            physics: None,
         });
         Ok(())
     }
@@ -619,6 +654,7 @@ impl ObjectHost {
     pub(super) fn prepare_unit_activity(
         &self,
         definition: &Definition,
+        face: f32,
     ) -> Result<Option<UnitActivity>, Error> {
         if self.unit_activity.is_none() {
             return Ok(None);
@@ -662,9 +698,24 @@ impl ObjectHost {
             patrol: None,
             follow: None,
             turn: None,
+            heading: self.prepare_unit_heading(definition, face)?,
             pathing_off: false,
             rally: None,
         }))
+    }
+
+    pub(super) fn validate_form_activity(
+        &self,
+        unit: HandleId,
+        activity: Option<&UnitActivity>,
+    ) -> Result<(), Error> {
+        let original = self.executed_unit(unit)?.activity.as_ref();
+        let result = match (original, activity) {
+            (Some(original), Some(activity)) => original.validate_form_profile(activity),
+            (None, None) => Ok(()),
+            _ => Err("form changes admitted activity capability"),
+        };
+        result.map_err(|e| self.inner.error("morph", Failure::UnitActivity(e.into())))
     }
 
     pub(super) fn activity_native(
@@ -2394,7 +2445,18 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(name, e.failure))?
             .face;
         if name == "GetUnitFacing" {
-            return Ok(Value::Real(face));
+            return Ok(Value::Real(self.native_unit_facing(unit)?.unwrap_or(face)));
+        }
+        if name == "SetUnitFacing"
+            && let Some(heading) = self.prepare_native_unit_facing(unit, target)?
+        {
+            self.commit_native_heading_target(unit, heading);
+            return Ok(Value::Null);
+        }
+        if name == "SetUnitFacingTimed" && self.native_unit_facing(unit)?.is_some() {
+            return Err(fail(
+                "script timed turning on the native physics clock is not qualified",
+            ));
         }
         let now = self.timer_game_time().ok_or_else(|| fail("game clock"))?;
         let delta = (target - face + 180.0).rem_euclid(360.0) - 180.0;
@@ -2582,6 +2644,12 @@ impl ObjectHost {
                     Failure::UnitActivity("accepted position required".into()),
                 )
             })?;
+            let heading = if delta != [0., 0.] {
+                self.prepare_native_unit_look_at(unit, motion.base, target)?
+            } else {
+                None
+            };
+            let facing = delta[1].atan2(delta[0]).to_degrees().rem_euclid(360.0) as f32;
             let free = self
                 .executed_unit(unit)?
                 .activity
@@ -2610,8 +2678,7 @@ impl ObjectHost {
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     record.position = Some(point);
                     if delta != [0., 0.] {
-                        record.face =
-                            delta[1].atan2(delta[0]).to_degrees().rem_euclid(360.0) as f32;
+                        Self::commit_native_unit_facing(record, facing, heading);
                     }
                     if last && let Some(animation) = &mut record.animation {
                         animation
@@ -2696,8 +2763,7 @@ impl ObjectHost {
                     if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                         record.position = Some(stop);
                         if delta != [0., 0.] {
-                            record.face =
-                                delta[1].atan2(delta[0]).to_degrees().rem_euclid(360.0) as f32;
+                            Self::commit_native_unit_facing(record, facing, heading);
                         }
                     }
                     origin = stop;
@@ -2764,7 +2830,7 @@ impl ObjectHost {
                 record.position = Some(point);
                 // shortcut: instantaneous geometric steering; qualify authored turn-rate and acceleration before fidelity claims.
                 if delta != [0., 0.] {
-                    record.face = delta[1].atan2(delta[0]).to_degrees().rem_euclid(360.0) as f32;
+                    Self::commit_native_unit_facing(record, facing, heading);
                 }
                 if end
                     && motion.next + 1 == motion.path.len()

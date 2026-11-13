@@ -503,6 +503,7 @@ mod tests {
             half_turn: 6.,
             full_turn: 12.,
             visual: None,
+            profile: None,
         };
         let state = State {
             logical: 1.,

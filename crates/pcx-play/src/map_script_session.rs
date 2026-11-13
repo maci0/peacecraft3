@@ -552,6 +552,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .validate_timer_target(until)?;
         let mut delivered = 0;
         loop {
+            self.host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .check_native_physics_fault()?;
             if self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
@@ -563,11 +567,31 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .objects()
                     .has_queued_mirror_events()
             {
-                let events = self.advance_queued_events(*budget)?;
+                let events = match self.advance_queued_events(*budget) {
+                    Ok(events) => events,
+                    Err(error) => {
+                        if let Some(host) = self.host() {
+                            host.objects_mut().fail_native_physics(error.to_string());
+                        }
+                        return Err(error);
+                    }
+                };
                 *budget = budget
                     .checked_sub(events.max(1))
                     .ok_or(TimerSessionError::WakeBudget)?;
                 delivered += events;
+            }
+            if let Some(at) = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects()
+                .pending_native_physics()
+            {
+                self.host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects_mut()
+                    .finish_native_physics(at, activity_work)?;
+                continue;
             }
             if self
                 .host()
@@ -626,7 +650,56 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects()
                 .next_timer_activity_boundary(step_until);
-            let step_until = activity_wake.unwrap_or(step_until);
+            let mut step_until = activity_wake.unwrap_or(step_until);
+            let physics = {
+                let objects = self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects_mut();
+                if let Some(outer) = objects.native_game_point() {
+                    if let Some(at) = objects.next_native_physics_boundary(outer)? {
+                        let seconds = objects.native_physics_seconds(at);
+                        if seconds <= step_until {
+                            if let Some(target) = native_target {
+                                if at.cycle != target.cycle {
+                                    return Err(TimerSessionError::NativeQueue(
+                                        "physics and selected game boundary cycles differ".into(),
+                                    ));
+                                }
+                                (f32::from_bits(at.local) <= f32::from_bits(target.local))
+                                    .then_some(at)
+                            } else {
+                                let timer =
+                                    objects.next_native_timer_boundary(outer, activity_work)?;
+                                if let Some(timer) = timer.filter(|timer| {
+                                    f32::from_bits(timer.local) < f32::from_bits(at.local)
+                                }) {
+                                    step_until =
+                                        step_until.min(objects.native_physics_seconds(timer));
+                                    None
+                                } else {
+                                    Some(at)
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            // shortcut: physics wins equal-family deadlines until native cross-family heap order is qualified.
+            if let Some(at) = physics {
+                *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                self.host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects_mut()
+                    .begin_native_physics(at, activity_work)?;
+                continue;
+            }
             let objects = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?

@@ -181,7 +181,7 @@ struct ActivePolymorph {
     expires_at: f64,
     original: pcx_sim::world::Definition,
     abilities: Option<super::UnitAbilities>,
-    profile: (bool, super::unit_activity::MoveSpeed),
+    profile: super::unit_activity::FormProfile,
 }
 
 pub(super) struct State {
@@ -757,6 +757,7 @@ impl ObjectHost {
             return Ok(false);
         }
         let acceptance = if kind == Kind::Slow {
+            self.prepare_native_heading_target(caster, target)?;
             Some(self.prepare_slow_acceptance(caster)?)
         } else {
             None
@@ -795,6 +796,7 @@ impl ObjectHost {
     /// Drops a pending cast when its caster takes another order, dies or is removed.
     pub(super) fn forget_curse_cast(&mut self, caster: HandleId) {
         self.end_interrupted_slow(caster);
+        self.clear_unit_heading_target(caster);
         if let Some(state) = &mut self.curses {
             state.pending.remove(&caster);
         }
@@ -1006,15 +1008,11 @@ impl ObjectHost {
             }
             return Ok(());
         }
-        if self.curse_moving(caster) {
-            self.steer_unit(caster, None, NATIVE)?;
+        if kind == Kind::Slow && self.native_heading_waiting(caster) {
+            return Ok(());
         }
-        let delay = self.curse_cast_point(caster)?;
-        let acceptance = if kind == Kind::Slow {
-            Some(match acceptance {
-                Some(prepared) => prepared,
-                None => self.prepare_slow_acceptance(caster)?,
-            })
+        let turn = if kind == Kind::Slow {
+            self.prepare_native_heading_target(caster, target)?
         } else {
             None
         };
@@ -1022,10 +1020,37 @@ impl ObjectHost {
             .atan2(to[0] - from[0])
             .to_degrees()
             .rem_euclid(360.0);
+        let heading = if turn.is_none() {
+            self.prepare_native_unit_look_at(caster, from, to)?
+        } else {
+            None
+        };
+        let ready = turn.is_none_or(|(_, ready)| ready);
+        let delay = ready.then(|| self.curse_cast_point(caster)).transpose()?;
+        let acceptance = if kind == Kind::Slow && ready {
+            Some(match acceptance {
+                Some(prepared) => prepared,
+                None => self.prepare_slow_acceptance(caster)?,
+            })
+        } else {
+            None
+        };
+        if self.curse_moving(caster) {
+            self.steer_unit(caster, None, NATIVE)?;
+        }
+        if let Some((prepared, ready)) = turn {
+            self.commit_native_heading_target(caster, prepared);
+            if !ready {
+                return Ok(());
+            }
+        }
+        let delay = delay.expect("prepared ready cast point");
         let mut started = None;
         let played = match self.inner.entry_mut(caster)? {
             Entry::Unit { record } => {
-                record.face = facing;
+                if turn.is_none() {
+                    Self::commit_native_unit_facing(record, facing, heading);
+                }
                 match &mut record.animation {
                     Some(animation) if animation.has_sequence(CAST_SEQUENCE) => {
                         let selected = animation.select_engine(CAST_SEQUENCE, now, None);
@@ -1056,6 +1081,17 @@ impl ObjectHost {
             return self.apply_curse_cast(caster, target, alias, kind, now);
         }
         Ok(())
+    }
+
+    pub(super) fn resume_slow_heading(&mut self, caster: HandleId, now: f64) -> Result<(), Error> {
+        let Some(cast) = self.curses.as_ref().and_then(|s| s.pending.get(&caster)) else {
+            return Ok(());
+        };
+        if cast.kind != Kind::Slow || !matches!(cast.stage, Stage::Walking) {
+            return Ok(());
+        }
+        let (target, alias) = (cast.target, cast.alias);
+        self.walk_curse_cast(caster, target, alias, Kind::Slow, now, None)
     }
 
     fn curse_moving(&self, unit: HandleId) -> bool {

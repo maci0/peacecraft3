@@ -90,9 +90,18 @@ impl ObjectHost {
                 ),
             ));
         }
+        let fresh = clock.driver() == Driver::Fresh;
+        let physics = if fresh {
+            self.prepare_native_physics_admission()?
+        } else {
+            None
+        };
         let mut next = clock.clone();
         next.select_counter_platform()
             .map_err(|e| self.inner.error("native platform", Failure::GameClock(e)))?;
+        if fresh {
+            self.commit_native_physics_admission(physics);
+        }
         self.native_game_clock = Some(next);
         Ok(true)
     }
@@ -173,13 +182,15 @@ impl ObjectHost {
             Some((
                 self.prepare_native_timer_admission(work)?,
                 self.prepare_native_thread_admission(work)?,
+                self.prepare_native_physics_admission()?,
             ))
         } else {
             None
         };
-        if let Some((timers, threads)) = prepared {
+        if let Some((timers, threads, physics)) = prepared {
             self.commit_native_timer_rebase(timers);
             self.commit_native_thread_rows(threads);
+            self.commit_native_physics_admission(physics);
         }
         self.native_game_clock = Some(next);
         Ok(())
@@ -429,7 +440,15 @@ impl ObjectHost {
         } else {
             Vec::new()
         };
+        let physics = if fresh {
+            self.prepare_native_physics_admission()?
+        } else {
+            None
+        };
         self.commit_native_timer_rebase(timers);
+        if fresh {
+            self.commit_native_physics_admission(physics);
+        }
         self.native_game_clock = Some(next);
         Ok(true)
     }
@@ -486,6 +505,7 @@ impl ObjectHost {
         finished.map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
         if segment.ends_cycle {
             let timers = self.prepare_native_timer_rebase(work)?;
+            let physics = self.prepare_native_physics_rebase(work)?;
             *work = work.checked_sub(self.autocast_ticks.len()).ok_or_else(|| {
                 self.inner
                     .error("native game clock", Failure::Budget("autocast rebase"))
@@ -516,6 +536,7 @@ impl ObjectHost {
                 ));
             }
             self.commit_native_timer_rebase(timers);
+            self.commit_native_physics_admission(physics);
             self.autocast_ticks = auto;
         }
         self.native_game_clock = Some(clock);
