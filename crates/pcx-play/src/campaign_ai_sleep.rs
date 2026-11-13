@@ -314,9 +314,13 @@ impl<W: AiWorld> Runtime<W> {
             .remove(&wake.player)
             .expect("checked AI context");
         vm.host().world = Some(borrowed);
-        let result = vm
-            .resume_thread(wake.ticket)
-            .map_err(|e| format!("campaign AI player {}: {e}", wake.player));
+        let result = vm.resume_thread(wake.ticket).map_err(|error| {
+            format!(
+                "campaign AI player {}: {}",
+                wake.player,
+                super::script_error(&mut vm, &error)
+            )
+        });
         *world = vm.host().world.take();
         let returned = world.as_mut().expect("AI returns its canonical world");
         let cleanup = returned.ai_end_native_domain_callback();

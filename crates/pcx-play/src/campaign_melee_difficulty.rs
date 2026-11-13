@@ -1,4 +1,6 @@
 //! Selected-client creation input and caller-owned melee difficulty snapshot.
+#[path = "campaign_melee_checkpoint.rs"]
+mod checkpoint;
 use crate::{
     menu_lighting::REVIEWED_IMAGE,
     neutral_player::{RuleInputBudget, sha256},

@@ -38,7 +38,7 @@ fn binding(rules: &Rules) -> Result<[u8; 32], String> {
         props,
     } = rules;
     let mut hash = Sha256::new();
-    for value in [&origin.source, &origin.edition, &origin.version] {
+    for value in [&origin.edition, &origin.version] {
         text(&mut hash, value)?;
     }
     hash.update(image_sha256);
@@ -106,7 +106,9 @@ mod tests {
         let mut out = Writer::new(budget).unwrap();
         live.write_checkpoint(&mut out).unwrap();
         let bytes = out.finish();
-        let fresh = State::new(rules.clone(), Arc::clone(&policy)).unwrap();
+        let mut relocated = rules.clone();
+        relocated.origin.source = "different diagnostic location".into();
+        let fresh = State::new(relocated, Arc::clone(&policy)).unwrap();
         let mut input = Reader::new(&bytes, budget).unwrap();
         let mut loaded = fresh.read_checkpoint(&mut input).unwrap();
         input.finish().unwrap();

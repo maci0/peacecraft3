@@ -3,6 +3,9 @@ use super::{Error, Failure, ObjectHost};
 use crate::native_game_clock::{Domain, Driver, FrameInput, Point, Segment, SleepRequest, State};
 use std::time::Duration;
 
+#[path = "native_sleep_checkpoint.rs"]
+mod checkpoint;
+
 impl ObjectHost {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn test_native_clock_state(&self) -> Option<State> {

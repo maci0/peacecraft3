@@ -28,6 +28,7 @@ pub struct SourceDigest {
 pub struct MapScripts {
     pub identity: AssetIdentity,
     pub digests: Vec<SourceDigest>,
+    source_fingerprint: [u8; 32],
     program: Arc<Program>,
     sources: BTreeMap<String, String>,
     map_label: String,
@@ -55,10 +56,19 @@ impl MapScripts {
                 ));
             }
         }
+        use sha2::Digest;
+        let mut fingerprint = sha2::Sha256::new();
+        fingerprint.update(b"PC3SCRIPT\0\x01");
         let mut sources = BTreeMap::new();
         let mut digests = Vec::new();
         let mut trees = Vec::new();
         for asset in [common, blizzard, map] {
+            fingerprint.update(
+                u64::try_from(asset.bytes.len())
+                    .map_err(|_| "script source length overflow")?
+                    .to_le_bytes(),
+            );
+            fingerprint.update(asset.bytes);
             if asset.bytes.is_empty() {
                 return Err(format!("{}: script asset is empty", asset.label));
             }
@@ -98,9 +108,16 @@ impl MapScripts {
                 None => format!("{label}:{}", diagnostic.error),
             }
         })?;
+        fingerprint.update([u8::from(wts.is_some())]);
         let wts_label = wts.map(|w| w.label.to_string());
         let wts = wts
             .map(|asset| {
+                fingerprint.update(
+                    u64::try_from(asset.bytes.len())
+                        .map_err(|_| "WTS source length overflow")?
+                        .to_le_bytes(),
+                );
+                fingerprint.update(asset.bytes);
                 if asset.label.is_empty() || sources.contains_key(asset.label) {
                     return Err(format!("missing or duplicate WTS source {:?}", asset.label));
                 }
@@ -119,12 +136,18 @@ impl MapScripts {
         Ok(Self {
             identity,
             digests,
+            source_fingerprint: fingerprint.finalize().into(),
             program: Arc::new(program),
             sources,
             map_label: map.label.into(),
             wts,
             wts_label,
         })
+    }
+    /// Ordered source content and optional raw WTS, independent of diagnostic locations.
+    /// Other map assets and selected native policies belong to the whole-root source manifest.
+    pub fn source_fingerprint(&self) -> [u8; 32] {
+        self.source_fingerprint
     }
     pub fn program(&self) -> &Program {
         &self.program
@@ -167,7 +190,11 @@ impl MapScripts {
     pub fn diagnostic<H: Host>(&self, vm: &Vm<'_, H>, error: &pcx_script::Error) -> String {
         self.render_diagnostic(vm.error_source(), error)
     }
-    fn render_diagnostic(&self, source: Option<&str>, error: &pcx_script::Error) -> String {
+    pub(crate) fn render_diagnostic(
+        &self,
+        source: Option<&str>,
+        error: &pcx_script::Error,
+    ) -> String {
         let label = match source {
             Some("the map script") | None => &self.map_label,
             Some(label) => label,
@@ -596,5 +623,73 @@ mod local_original_tests {
             "{error}"
         );
         println!("actual original-source execution boundary: {error}");
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_source_tests {
+    use super::*;
+
+    fn compile(moved: bool, common: &[u8], library: &[u8], wts: Option<&[u8]>) -> MapScripts {
+        let labels = if moved {
+            ["new/common", "new/library", "new/map", "new/table"]
+        } else {
+            ["old/common", "old/library", "old/map", "old/table"]
+        };
+        MapScripts::compile(
+            AssetIdentity {
+                edition: "synthetic".into(),
+                version: "fixture".into(),
+                source: if moved {
+                    "new diagnostic location".into()
+                } else {
+                    "old diagnostic location".into()
+                },
+            },
+            ScriptAsset {
+                label: labels[0],
+                bytes: common,
+            },
+            ScriptAsset {
+                label: labels[1],
+                bytes: library,
+            },
+            ScriptAsset {
+                label: labels[2],
+                bytes: b"function main takes nothing returns nothing\nendfunction\n",
+            },
+            wts.map(|bytes| ScriptAsset {
+                label: labels[3],
+                bytes,
+            }),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn checkpoint_source_fingerprint_binds_ordered_content_and_raw_wts_not_diagnostic_locations() {
+        let common = b"// synthetic common\n";
+        let library = b"// synthetic library\n";
+        let wts = b"STRING 7\r\n{\r\nunused raw body\r\n}\r\n";
+        let original = compile(false, common, library, Some(wts));
+        let moved = compile(true, common, library, Some(wts));
+        assert_eq!(original.source_fingerprint(), moved.source_fingerprint());
+        assert_ne!(original.identity.source, moved.identity.source);
+        assert_ne!(original.digests[0].label, moved.digests[0].label);
+        assert_ne!(
+            original.source_fingerprint(),
+            compile(false, library, common, Some(wts)).source_fingerprint()
+        );
+        assert_ne!(
+            original.source_fingerprint(),
+            compile(false, common, library, None).source_fingerprint()
+        );
+        let raw = b"STRING 7\r\n{\r\n\xff\r\n}\r\n";
+        let raw = compile(false, common, library, Some(raw));
+        assert_ne!(raw.source_fingerprint(), original.source_fingerprint());
+        assert!(
+            raw.table_string(7).is_err(),
+            "unused raw WTS bytes are still fingerprinted"
+        );
     }
 }

@@ -525,3 +525,27 @@ a string-returning call with a non-UTF-8 array value and a retained concatenatio
 operand, reconstructs it, re-parks it and reconstructs it again. A cache-section
 regression also exercises the profile codec's raw stored strings. These checks
 do not establish original save-payload compatibility.
+
+The AI component retains each requested canonical path and exact compiled
+sources before globals and `main`, with an ordered SHA-256 binding of common,
+AI common, entry and raw optional WTS bytes. Diagnostic locations do not define
+that content identity. Initial and resumed errors use the retained source even
+after the future-context loader changes.
+
+Its candidate section preserves parked VM frames, captured difficulty results
+separately from future difficulty inputs, pause depth, pending sleep results,
+sleep tickets and deadlines, retirement ownership and remaining source-load
+budget. A synthetic round trip compares nested locals, re-parking, resource
+writes and later AI starts without re-running globals or `main`. Truncation,
+foreign-source and retained-error cases exercise refusal before candidate
+publication. The canonical world must already be returned from its AI loan.
+Active AI save projection is refused pending qualification.
+
+Native sleep records retain their original queue domain and origin, current
+raw entry and complete extended epoch, including remaining count and the
+unchanged legacy expiry shadow. Source-bound synthetic regressions cover an
+internal entry and queue rebase without deriving time from a public `f64` view.
+These are component reconstruction checks. The whole clock/world/application
+graph, immediate AI-to-map observer bridge, complete checkpoint owner, durable
+storage and cold publication remain incomplete; SaveGame/LoadGame and menu
+save/load remain unsupported.

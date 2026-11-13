@@ -1,5 +1,7 @@
 //! Caller-qualified map host: one object arena and six neutral wrappers.
 //! Asset bytes, profiles, budgets and runtime observations stay with the caller.
+#[path = "map_startup_ai_checkpoint.rs"]
+mod ai_checkpoint;
 use crate::camera_margins::CameraMargins;
 use crate::day_night;
 use crate::file_sounds;
