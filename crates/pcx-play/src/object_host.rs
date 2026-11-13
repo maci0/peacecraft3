@@ -1478,6 +1478,15 @@ pub use music::{MapMusicSelection, ThematicMusicRequest};
 mod play_music;
 pub use play_music::volume_rules::Rules as RegularMusicVolumeRules;
 pub use play_music::{PlayMusicRequest, RegularMusicVolumeRequest, ThematicMusicExRequest};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use play_music::{
+    controller::{
+        Controller as RegularMusicController, Effect as RegularMusicEffect,
+        Operation as RegularMusicOperation, Role as MusicRole, Voice as MusicVoice,
+    },
+    random::AudioRandom,
+    rules::Rules as RegularMusicRules,
+};
 
 #[path = "sound_environment_host.rs"]
 mod environments;

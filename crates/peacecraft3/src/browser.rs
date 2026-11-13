@@ -378,6 +378,50 @@ pub(crate) fn with_committed_client_image<T>(read: impl FnOnce(&str, &[u8]) -> T
     Some(read(source, bytes))
 }
 
+/// Clone the attested source generation for this process revision without retaining a lock.
+/// Absence and source errors remain observable even when the revision did not change.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub(crate) fn committed_client_sources()
+-> Option<Result<(u32, Arc<pcx_play::client_module::ClientSources>), String>> {
+    let current = *revision();
+    let selected = {
+        let images = client_images();
+        images.committed_at(current)?;
+        images
+            .committed_sources
+            .as_ref()?
+            .as_ref()
+            .map(|bundle| (current, Arc::clone(bundle)))
+            .map_err(Clone::clone)
+    };
+    Some(selected)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[wasm_bindgen]
+pub fn browser_music_source_attestation_test_gate(
+    expected_revision: u32,
+    expected_status: u32,
+) -> u32 {
+    let observed = committed_client_sources();
+    match observed {
+        None => assert_eq!(expected_status, 0),
+        Some(Err(_)) => assert_eq!(expected_status, 1),
+        Some(Ok((revision, bundle))) => {
+            assert_eq!(expected_status, 2);
+            assert_eq!(revision, expected_revision);
+            assert!(bundle.main().1.len() <= pcx_play::client_module::CLIENT_IMAGE_BYTES);
+            let retained = Arc::clone(&bundle);
+            let Some(Ok((again, current))) = committed_client_sources() else {
+                panic!("attestation changed during synchronous getter");
+            };
+            assert_eq!(again, revision);
+            assert!(Arc::ptr_eq(&retained, &current));
+        }
+    }
+    1
+}
+
 /// No priority is inferred from arrival order or filenames. Equal duplicates
 /// are safe; distinct bytes at one member path require installation evidence.
 fn extract_unique(set: &mut [pcx_mpq::MpqArchive], path: &str) -> Result<Vec<u8>, String> {
@@ -1820,6 +1864,27 @@ mod tests {
             client_image_input("fixture", 0),
             Err("client image is empty")
         );
+    }
+
+    #[test]
+    fn music_client_sources_getter_requires_current_attestation_and_preserves_errors() {
+        let saved = std::mem::take(&mut *client_images());
+        let current = *revision();
+        {
+            let mut slot = client_images();
+            slot.committed = Some(CommittedClientImage {
+                revision: current,
+                source: "fixture".into(),
+                bytes: Arc::from(&b"fixture"[..]),
+            });
+        }
+        let absent = committed_client_sources().is_none();
+        client_images().committed_sources = Some(Err("fixture unsupported source".into()));
+        let error = matches!(committed_client_sources(), Some(Err(message)) if message == "fixture unsupported source");
+        client_images().committed.as_mut().unwrap().revision = current.wrapping_add(1);
+        let stale = committed_client_sources().is_none();
+        *client_images() = saved;
+        assert!(absent && error && stale);
     }
 
     #[wasm_bindgen]

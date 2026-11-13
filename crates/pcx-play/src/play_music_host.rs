@@ -12,6 +12,17 @@ use std::sync::Arc;
 #[path = "regular_music_volume_rules.rs"]
 pub(crate) mod volume_rules;
 
+// Candidate controller remains outside native dispatch until its app consumers are qualified.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "regular_music_controller.rs"]
+pub(crate) mod controller;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "regular_music_random.rs"]
+pub(crate) mod random;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "regular_music_rules.rs"]
+pub(crate) mod rules;
+
 #[derive(Clone, Debug)]
 pub struct RegularMusicVolumeRequest {
     pub rules: Arc<volume_rules::Rules>,
