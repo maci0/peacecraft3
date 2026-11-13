@@ -138,6 +138,20 @@ pub trait Host {
         Err("StringHash source policy is not admitted".into())
     }
 
+    /// Initial-C case conversion after this native's one map lookup.
+    fn string_case(&self, _bytes: &[u8], _upper: bool) -> Result<crate::ScriptString, String> {
+        Err("StringCase source policy is not admitted".into())
+    }
+    /// Raw byte slicing; null is distinct from an allocated empty result.
+    fn substring(
+        &self,
+        _bytes: &[u8],
+        _start: i32,
+        _end: i32,
+    ) -> Result<Option<crate::ScriptString>, String> {
+        Err("SubString source policy is not admitted".into())
+    }
+
     /// Optional callback dispatch. `None` uses ordinary native dispatch.
     /// A callback takes no arguments; its return reaches `continue_script_call`.
     fn begin_script_call(
@@ -163,6 +177,12 @@ pub trait Host {
     /// native produces when the thread continues.
     fn suspend(&mut self, _name: &str, _args: &[Value]) -> bool {
         false
+    }
+
+    /// Stop at this native's return hole for the whole-world checkpoint owner.
+    /// The host retains the request; this neither sleeps nor writes a save.
+    fn checkpoint(&mut self, _name: &str, _args: &[Value]) -> Result<bool, String> {
+        Ok(false)
     }
 
     /// A thread parked at a thread boundary. Return a fresh ticket that a later
@@ -225,6 +245,7 @@ impl Host for NullHost {
 pub enum Exec {
     Finished(Value),
     Suspended,
+    Checkpoint,
 }
 
 /// One variable: a scalar or an array, plus the type its declaration spelled.
@@ -434,6 +455,7 @@ pub struct Vm<'a, H: Host, P: Deref<Target = Program> = &'a Program> {
     /// Set for the duration of `invoke`, `resume` and `init_globals`.
     busy: bool,
     suspended_span: Option<Span>,
+    checkpoint_span: Option<Span>,
     /// Parked threads by host ticket.
     parked: BTreeMap<u64, Thread>,
     spawns: Vec<Spawn>,
@@ -481,6 +503,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             error_source: None,
             busy: false,
             suspended_span: None,
+            checkpoint_span: None,
             parked: BTreeMap::new(),
             spawns: Vec::new(),
             thread_entry: None,
@@ -572,6 +595,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, crate::Error> {
         match self.invoke(name, args)? {
             Exec::Finished(value) => Ok(value),
+            Exec::Checkpoint => Err(self.checkpoint_owner_error()),
             Exec::Suspended => {
                 self.error_source = self.stack.last().map(|frame| frame.source.clone());
                 Err(crate::Error::run(
@@ -617,6 +641,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// or after an error cleared it, is an error.
     pub fn resume(&mut self, value: Value) -> Result<Exec, crate::Error> {
         self.refuse_reentry()?;
+        if self.checkpoint_span.is_some() {
+            return Err(self.checkpoint_owner_error());
+        }
         if self.stack.is_empty() {
             return Err(crate::Error::run(
                 Span::EMPTY,
@@ -635,6 +662,47 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         result
     }
 
+    /// Continue the exact checkpoint return hole after the root owner commits or fails.
+    /// A failure aborts only the active execution; older parked threads remain owned.
+    pub fn resume_checkpoint(
+        &mut self,
+        value: Result<Value, String>,
+    ) -> Result<Exec, crate::Error> {
+        self.refuse_reentry()?;
+        let Some(span) = self.checkpoint_span.take() else {
+            return Err(crate::Error::run(
+                Span::EMPTY,
+                "no VM checkpoint is pending",
+            ));
+        };
+        let value = match value {
+            Ok(value) => value,
+            Err(why) => return self.exit_thread(Err(crate::Error::run(span, why))),
+        };
+        self.busy = true;
+        self.suspended_span = None;
+        self.error_source = None;
+        self.stack
+            .last_mut()
+            .expect("checkpoint activation")
+            .incoming = Some(value);
+        let result = if self.thread_entry.is_some() {
+            let result = self.drive_thread();
+            self.finish_thread_entry(result)
+        } else {
+            self.drive_until(0)
+        };
+        self.exit_thread(result)
+    }
+
+    fn checkpoint_owner_error(&mut self) -> crate::Error {
+        self.error_source = self.stack.last().map(|a| a.source.clone());
+        crate::Error::run(
+            self.checkpoint_span.unwrap_or(Span::EMPTY),
+            "whole-world checkpoint pending; resume through its owning caller",
+        )
+    }
+
     /// Start `functions` in order as one new thread on an idle VM. A park stores
     /// the thread for [`Vm::resume_thread`]; the host keeps its own context.
     /// The step budget restarts here.
@@ -642,6 +710,18 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         &mut self,
         functions: &[crate::value::FunctionId],
     ) -> Result<(), crate::Error> {
+        match self.run_thread_until_checkpoint(functions)? {
+            Exec::Finished(_) => Ok(()),
+            Exec::Checkpoint => Err(self.checkpoint_owner_error()),
+            Exec::Suspended => Err(broken(Span::EMPTY, "thread park was not retained")),
+        }
+    }
+
+    /// Start a thread while allowing its owner to capture the complete world at a checkpoint.
+    pub fn run_thread_until_checkpoint(
+        &mut self,
+        functions: &[crate::value::FunctionId],
+    ) -> Result<Exec, crate::Error> {
         let mut remaining = std::collections::VecDeque::new();
         remaining.try_reserve(functions.len()).map_err(|_| {
             crate::Error::run(Span::EMPTY, "script thread callback allocation failed")
@@ -659,6 +739,15 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// Continue a parked thread by its ticket. `TriggerSleepAction`-style parks
     /// produce no value, so the parked native receives `null`.
     pub fn resume_thread(&mut self, ticket: u64) -> Result<(), crate::Error> {
+        match self.resume_thread_until_checkpoint(ticket)? {
+            Exec::Finished(_) => Ok(()),
+            Exec::Checkpoint => Err(self.checkpoint_owner_error()),
+            Exec::Suspended => Err(broken(Span::EMPTY, "thread park was not retained")),
+        }
+    }
+
+    /// Resume a parked thread without treating a checkpoint as a sleep or completion.
+    pub fn resume_thread_until_checkpoint(&mut self, ticket: u64) -> Result<Exec, crate::Error> {
         self.enter_thread()?;
         let Some(thread) = self.parked.remove(&ticket) else {
             self.busy = false;
@@ -705,7 +794,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         Ok(())
     }
 
-    fn exit_thread(&mut self, result: Result<(), crate::Error>) -> Result<(), crate::Error> {
+    fn exit_thread<T>(&mut self, result: Result<T, crate::Error>) -> Result<T, crate::Error> {
         self.busy = false;
         if result.is_err() {
             if self.error_source.is_none() {
@@ -716,6 +805,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.thread_entry = None;
             self.depth = 0;
             self.suspended_span = None;
+            self.checkpoint_span = None;
             self.host.abort_script_calls();
         }
         result
@@ -723,28 +813,39 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
 
     /// Drive the current stack, then each remaining callback, until the thread
     /// finishes or parks. A park moves the whole stack into `parked`.
-    fn run_functions(&mut self, entry: ThreadEntry) -> Result<(), crate::Error> {
+    fn run_functions(&mut self, entry: ThreadEntry) -> Result<Exec, crate::Error> {
         if self.thread_entry.is_some() {
             return Err(broken(entry.span, "script thread entry is already active"));
         }
         self.thread_entry = Some(entry);
         let result = self.drive_thread();
+        self.finish_thread_entry(result)
+    }
+
+    fn finish_thread_entry(
+        &mut self,
+        result: Result<Exec, crate::Error>,
+    ) -> Result<Exec, crate::Error> {
+        if matches!(result, Ok(Exec::Checkpoint)) {
+            return result;
+        }
         let entry = self
             .thread_entry
             .take()
             .expect("active script thread entry");
-        result.and_then(|()| {
+        result.and_then(|outcome| {
             if entry.leave_on_finish {
                 self.host
                     .leave_thread()
-                    .map_err(|why| crate::Error::run(entry.span, why))
+                    .map_err(|why| crate::Error::run(entry.span, why))?;
+                Ok(outcome)
             } else {
-                Ok(())
+                Ok(outcome)
             }
         })
     }
 
-    fn drive_thread(&mut self) -> Result<(), crate::Error> {
+    fn drive_thread(&mut self) -> Result<Exec, crate::Error> {
         loop {
             let entry = self
                 .thread_entry
@@ -753,11 +854,15 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             let span = entry.span;
             if self.stack.is_empty() {
                 let Some(id) = entry.remaining.pop_front() else {
-                    return Ok(());
+                    return Ok(Exec::Finished(Value::Null));
                 };
                 self.push_thread_callback(id, span)?;
             }
-            if let Exec::Suspended = self.drive_until(0)? {
+            let outcome = self.drive_until(0)?;
+            if outcome == Exec::Checkpoint {
+                return Ok(outcome);
+            }
+            if let Exec::Suspended = outcome {
                 let at = self.suspended_span.unwrap_or(span);
                 let ticket = self
                     .host
@@ -778,7 +883,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     ),
                 };
                 self.parked.insert(ticket, thread);
-                return Ok(());
+                return Ok(Exec::Finished(Value::Null));
             }
         }
     }
@@ -818,6 +923,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.spawns.clear();
             self.depth = 0;
             self.suspended_span = None;
+            self.checkpoint_span = None;
         }
         result
     }
@@ -977,6 +1083,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             self.spawns.clear();
             self.depth = 0;
             self.suspended_span = None;
+            self.checkpoint_span = None;
         }
         result
     }
@@ -992,6 +1099,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             }
             match self.run_top()? {
                 TopStop::Suspended => {
+                    if self.checkpoint_span.is_some() {
+                        return Ok(Exec::Checkpoint);
+                    }
                     let Some(spawn) = self.spawns.last() else {
                         return Ok(Exec::Suspended);
                     };
@@ -1822,7 +1932,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     let base = self.stack.len() - 1;
                     match self.drive_until(base)? {
                         Exec::Finished(value) => out = self.finish_zip(zip, value, frame)?,
-                        Exec::Suspended => {
+                        Exec::Suspended | Exec::Checkpoint => {
                             self.stack.clear();
                             self.depth = 0;
                             return Err(crate::Error::run(
@@ -2105,6 +2215,14 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                 let declared_at = native.span;
                 self.check_native_arity(callee, arity, argv.len(), span)?;
                 let argv = self.coerce_params(&native.params, argv, span)?;
+                if self
+                    .host
+                    .checkpoint(callee, &argv)
+                    .map_err(|why| crate::Error::run(span, why))?
+                {
+                    self.checkpoint_span = Some(span);
+                    return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));
+                }
                 if self.host.suspend(callee, &argv) {
                     self.suspended_span = Some(span);
                     return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));
@@ -2455,7 +2573,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
         }
         // A trigger string spelled as an identifier.
         if trigstr_id(name.as_str()).is_some() {
-            return Ok(Value::Str(name.as_str().to_string()));
+            return Ok(Value::Str(name.as_str().into()));
         }
         if self.program.function(name.as_str()).is_some()
             || self.program.natives().get(name.as_str()).is_some()
@@ -2553,7 +2671,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
             },
             NativeImpl::IntToString => match args[0] {
                 // The original formats with `%d`: signed decimal, no padding.
-                Value::Int(i) => Ok(Value::Str(i.to_string())),
+                Value::Int(i) => Ok(Value::Str(i.to_string().into())),
                 ref v => Err(crate::Error::run(
                     span,
                     format!("I2S takes an integer, got {}", v.type_name()),
@@ -2575,7 +2693,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                         crate::Error::run(span, "real formatting requires a selected runtime")
                     })?
                     .real_to_string(value, width_precision)
-                    .map(Value::Str)
+                    .map(|text| Value::Str(text.into()))
                     .map_err(|why| crate::Error::run(span, why))
             }
             NativeImpl::StringHash => {
@@ -2597,6 +2715,46 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     .map(Value::Int)
                     .map_err(|why| crate::Error::run(span, why))
             }
+            NativeImpl::StringCase => {
+                let [text, Value::Bool(upper)] = args else {
+                    return Err(crate::Error::run(span, "invalid StringCase arguments"));
+                };
+                let bytes = match text {
+                    Value::Null => return Ok(Value::Null),
+                    Value::Str(text) => crate::text::native_c_bytes(text.as_bytes()),
+                    _ => return Err(crate::Error::run(span, "StringCase requires a string")),
+                };
+                if bytes.is_empty() {
+                    return Ok(Value::Null);
+                }
+                let source = |id| self.host.native_table_string(id);
+                let bytes = crate::text::native_map_bytes(bytes, Some(&source))
+                    .map_err(|why| crate::Error::run(span, why))?;
+                if bytes.is_empty() {
+                    return Ok(Value::Null);
+                }
+                self.host
+                    .string_case(&bytes, *upper)
+                    .map(Value::Str)
+                    .map_err(|why| crate::Error::run(span, why))
+            }
+            NativeImpl::SubString => {
+                let [text, Value::Int(start), Value::Int(end)] = args else {
+                    return Err(crate::Error::run(span, "invalid SubString arguments"));
+                };
+                let bytes = match text {
+                    Value::Null => return Ok(Value::Null),
+                    Value::Str(text) => crate::text::native_c_bytes(text.as_bytes()),
+                    _ => return Err(crate::Error::run(span, "SubString requires a string")),
+                };
+                if bytes.is_empty() {
+                    return Ok(Value::Null);
+                }
+                self.host
+                    .substring(bytes, *start, *end)
+                    .map(|result| result.map_or(Value::Null, Value::Str))
+                    .map_err(|why| crate::Error::run(span, why))
+            }
             NativeImpl::StringLength => {
                 let text = match &args[0] {
                     Value::Null => return Ok(Value::Int(0)),
@@ -2609,13 +2767,9 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     }
                 };
                 let source = |id| self.host.native_table_string(id);
-                let text = crate::text::native_map_string(text, Some(&source))
+                let text = crate::text::native_map_bytes(text.as_bytes(), Some(&source))
                     .map_err(|why| crate::Error::run(span, why))?;
-                let length = text
-                    .bytes()
-                    .position(|byte| byte == 0)
-                    .unwrap_or(text.len());
-                Ok(Value::Int(length as i32))
+                Ok(Value::Int(text.len() as i32))
             }
         }
     }
@@ -2640,7 +2794,7 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
     /// Evaluation preserves text; only the consuming native may localize it.
     fn string(&mut self, s: &StrLit, span: Span) -> Result<Value, crate::Error> {
         s.literal_text()
-            .map(Value::Str)
+            .map(|text| Value::Str(text.into()))
             .map_err(|why| crate::Error::run(span, why))
     }
 

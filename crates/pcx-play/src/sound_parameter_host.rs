@@ -109,7 +109,13 @@ impl ObjectHost {
             let label = label.clone();
             self.sound_admitted(id)
                 .map_err(|e| self.inner.error(name, e.failure))?;
-            let index = self.prepare_sound_parameter_label(name, &label)?;
+            let label = label.as_utf8().map_err(|why| {
+                self.inner.error(
+                    name,
+                    Failure::ScriptString(format!("sound parameter label UTF8: {why}")),
+                )
+            })?;
+            let index = self.prepare_sound_parameter_label(name, label)?;
             let slot = usize::try_from(id.token() - 1)
                 .map_err(|_| self.inner.error(name, Failure::Identity))?;
             let (Entry::Sound { parameters, .. } | Entry::FileSound { parameters, .. }) =

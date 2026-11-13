@@ -1,5 +1,6 @@
 //! Per-player campaign script continuations over the admitted map world.
 use crate::map_startup_host::NeutralStack;
+use crate::native_game_clock::{Domain, Point, SleepRequest};
 use crate::scripts::MapScripts;
 use pcx_assets::AssetPath;
 use pcx_script::{Host, OwnedVm, ScriptCall, Value};
@@ -120,6 +121,41 @@ impl SourceNames {
 type Loader = Box<dyn FnMut(&str) -> Result<Arc<MapScripts>, String> + Send + Sync>;
 
 pub(crate) trait AiWorld: Host {
+    fn ai_native_queue_point(&self, _domain: Domain) -> Option<Point> {
+        None
+    }
+    fn ai_prepare_native_sleep(
+        &self,
+        _domain: Domain,
+        _delay: f32,
+        _work: &mut usize,
+    ) -> Result<Option<SleepRequest>, String> {
+        Ok(None)
+    }
+    fn ai_activate_native_sleep(
+        &self,
+        _request: SleepRequest,
+        _work: &mut usize,
+    ) -> Result<SleepRequest, String> {
+        Err("AI native clock is not admitted".into())
+    }
+    fn ai_advance_native_sleep(&self, _request: &mut SleepRequest) -> Result<bool, String> {
+        Err("AI native clock is not admitted".into())
+    }
+    fn ai_rebase_native_sleep(&self, _request: &mut SleepRequest) -> Result<(), String> {
+        Err("AI native clock is not admitted".into())
+    }
+    fn ai_begin_native_domain_callback(
+        &mut self,
+        _domain: Domain,
+        _point: Point,
+    ) -> Result<(), String> {
+        Err("AI native clock is not admitted".into())
+    }
+    fn ai_end_native_domain_callback(&mut self) -> Result<(), String> {
+        Err("AI native clock is not admitted".into())
+    }
+
     fn ai_clock(&self) -> Option<f64>;
     fn ai_init_assault(&mut self, player: i32) -> Result<(), String>;
     fn ai_add_assault(&mut self, player: i32, quantity: i32, kind: i32) -> Result<bool, String>;
@@ -351,6 +387,88 @@ impl AiWorld for NeutralStack {
             .inner()
             .inner()
             .ai_debug_text()
+            .map_err(|e| e.to_string())
+    }
+    fn ai_native_queue_point(&self, domain: Domain) -> Option<Point> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .native_queue_point(domain)
+    }
+    fn ai_prepare_native_sleep(
+        &self,
+        domain: Domain,
+        delay: f32,
+        work: &mut usize,
+    ) -> Result<Option<SleepRequest>, String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .prepare_native_sleep(domain, delay, work)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_activate_native_sleep(
+        &self,
+        request: SleepRequest,
+        work: &mut usize,
+    ) -> Result<SleepRequest, String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .activate_native_sleep(request, work)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_advance_native_sleep(&self, request: &mut SleepRequest) -> Result<bool, String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .advance_native_sleep(request)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_rebase_native_sleep(&self, request: &mut SleepRequest) -> Result<(), String> {
+        self.inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .inner()
+            .rebase_native_sleep(request)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_begin_native_domain_callback(
+        &mut self,
+        domain: Domain,
+        point: Point,
+    ) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .begin_native_domain_callback(domain, point)
+            .map_err(|e| e.to_string())
+    }
+    fn ai_end_native_domain_callback(&mut self) -> Result<(), String> {
+        self.inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .inner_mut()
+            .end_native_domain_callback()
             .map_err(|e| e.to_string())
     }
     fn ai_clock(&self) -> Option<f64> {
@@ -730,6 +848,11 @@ impl AiWorld for NeutralStack {
     }
 }
 
+#[path = "campaign_ai_sleep.rs"]
+mod native_sleep;
+use native_sleep::AiSleep;
+pub(crate) use native_sleep::{AiWake, AiWakeDelivery, PreparedAiSleepRows};
+
 pub(crate) struct Runtime<W: AiWorld> {
     loader: Option<Loader>,
     active: BTreeMap<i32, OwnedVm<AiHost<W>>>,
@@ -885,8 +1008,12 @@ impl<W: AiWorld> Runtime<W> {
                 vm.host()
                     .sleepers
                     .iter()
-                    .filter(|(_, deadline)| **deadline <= until)
-                    .map(move |(&ticket, &deadline)| (deadline, player, ticket))
+                    .filter_map(move |(&ticket, sleep)| {
+                        sleep
+                            .legacy_deadline
+                            .filter(|&deadline| deadline <= until)
+                            .map(|deadline| (deadline, player, ticket))
+                    })
                     .min_by(|a, b| a.0.total_cmp(&b.0).then(a.2.cmp(&b.2)))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)))
@@ -900,6 +1027,16 @@ impl<W: AiWorld> Runtime<W> {
     ) -> Result<(), String> {
         if self.pending_retirement.contains(&player) {
             return Err("campaign AI context is pending retirement".into());
+        }
+        if self
+            .active
+            .get_mut(&player)
+            .and_then(|vm| vm.host().sleepers.get(&ticket))
+            .and_then(|sleep| sleep.native)
+            .and_then(SleepRequest::boundary)
+            .is_some()
+        {
+            return Err("native AI sleep requires native Game delivery".into());
         }
         if let Some(vm) = self.active.get_mut(&player)
             && vm.host().pause_depth.is_some_and(|depth| depth != 0)
@@ -922,10 +1059,13 @@ impl<W: AiWorld> Runtime<W> {
                 .sleepers
                 .get_mut(&ticket)
                 .ok_or("PauseCompAI wake ticket is missing")?;
-            if now < *deadline {
+            let legacy = deadline
+                .legacy_deadline
+                .ok_or("PauseCompAI legacy deadline is absent")?;
+            if now < legacy {
                 return Err("PauseCompAI clock has not reached wake deadline".into());
             }
-            *deadline = next;
+            deadline.legacy_deadline = Some(next);
             return Ok(());
         }
         if !self.active.contains_key(&player) {
@@ -1198,9 +1338,9 @@ pub(crate) struct AiHost<W: AiWorld> {
     player: i32,
     melee_difficulty: Result<i32, String>,
     world: Option<W>,
-    pending_sleep: Option<f64>,
+    pending_sleep: Option<Result<AiSleep, String>>,
     pause_depth: Option<i32>,
-    sleepers: BTreeMap<u64, f64>,
+    sleepers: BTreeMap<u64, AiSleep>,
     next_ticket: u64,
 }
 
@@ -1231,6 +1371,17 @@ impl<W: AiWorld> AiHost<W> {
 }
 
 impl<W: AiWorld> Host for AiHost<W> {
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.world()?.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.world()?.substring(bytes, start, end)
+    }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.world()?.string_hash(bytes)
     }
@@ -1256,49 +1407,13 @@ impl<W: AiWorld> Host for AiHost<W> {
     }
 
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
-        if name != "Sleep" {
-            return false;
-        }
-        let [seconds] = args else { return false };
-        let Some(seconds) = seconds.as_real() else {
-            return false;
-        };
-        let Ok(world) = self.world() else {
-            return false;
-        };
-        let Some(now) = world.ai_clock() else {
-            return false;
-        };
-        let deadline = now + f64::from(seconds);
-        if seconds <= 0.0 || !deadline.is_finite() || self.sleepers.len() >= MAX_SLEEPERS {
-            return false;
-        }
-        self.pending_sleep = Some(deadline);
-        true
+        name == "Sleep" && self.suspend_sleep(args)
     }
-
     fn park_thread(&mut self) -> Result<u64, String> {
-        let deadline = self
-            .pending_sleep
-            .take()
-            .ok_or("Sleep: no pending deadline")?;
-        self.next_ticket = self
-            .next_ticket
-            .checked_add(1)
-            .ok_or("Sleep: ticket budget")?;
-        self.sleepers.insert(self.next_ticket, deadline);
-        Ok(self.next_ticket)
+        self.park_sleep()
     }
-
     fn resume_thread(&mut self, ticket: u64) -> Result<(), String> {
-        let deadline = self
-            .sleepers
-            .remove(&ticket)
-            .ok_or("Sleep: unknown ticket")?;
-        if self.world()?.ai_clock().is_none_or(|now| now < deadline) {
-            return Err("Sleep: game clock has not reached the wake deadline".into());
-        }
-        Ok(())
+        self.resume_sleep(ticket)
     }
 
     fn leave_thread(&mut self) -> Result<(), String> {
@@ -1729,7 +1844,7 @@ impl<W: AiWorld> Host for AiHost<W> {
                     .ai_set_produce(player, *quantity, *kind, *town)
                     .map(Value::Bool)
             }
-            "Sleep" => Err("Sleep: invalid duration or thread budget".into()),
+            "Sleep" => Err(self.sleep_refusal()),
             _ => Err(format!(
                 "campaign AI native {name} has no source-qualified world behavior"
             )),
@@ -4268,6 +4383,7 @@ mod tests {
         runtime.set_pause_rules(Ok(crate::campaign_ai_pause_policy::Rules {
             initial: 0,
             retry_seconds: 1.0,
+            retry_word: 1.0f32.to_bits(),
         }));
         let shared = Arc::new(Mutex::new(State::default()));
         let mut world = Some(World(Arc::clone(&shared)));
@@ -4313,6 +4429,7 @@ mod tests {
         runtime.set_pause_rules(Ok(crate::campaign_ai_pause_policy::Rules {
             initial: 0,
             retry_seconds: 1.0,
+            retry_word: 1.0f32.to_bits(),
         }));
         let shared = Arc::new(Mutex::new(State::default()));
         let mut world = Some(World(Arc::clone(&shared)));
@@ -4330,8 +4447,8 @@ mod tests {
         shared.lock().unwrap().clock = 1.0;
         runtime.resume(&mut world, 1, ticket).unwrap();
         assert_eq!(
-            runtime.active.get_mut(&1).unwrap().host().sleepers[&ticket],
-            2.0
+            runtime.active.get_mut(&1).unwrap().host().sleepers[&ticket].legacy_deadline,
+            Some(2.0)
         );
         assert!(shared.lock().unwrap().gold.is_empty());
         shared.lock().unwrap().clock = 2.0;
@@ -4502,6 +4619,36 @@ mod tests {
 #[cfg(test)]
 mod native_string_forwarding_tests {
     use super::*;
+    #[test]
+    fn string_rules_ai_forwards_raw_bytes_and_refuses_unlent_world() {
+        let world = crate::neutral_player::native_case_world_fixture(
+            None,
+            crate::playercolor_host::ScriptStringPolicy::synthetic_fixture(),
+        );
+        let program = world.context().scripts.shared_program();
+        let mut ai = AiHost::new(1, world);
+        let world = ai.world.take().unwrap();
+        assert!(
+            ai.string_case(b"jm", true)
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        assert!(
+            ai.substring(b"x", 0, 1)
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        ai.world = Some(world);
+        let mut vm = pcx_script::Vm::new(&program, ai);
+        assert_eq!(
+            vm.call("change", &[Value::Str("jm".into())]).unwrap(),
+            Value::Str("eh".into())
+        );
+        assert_eq!(
+            vm.call("cut", &[Value::Str(vec![0xff].into())]).unwrap(),
+            Value::Str(vec![0xff].into())
+        );
+    }
     #[test]
     fn string_hash_ai_forwards_raw_to_lent_world_and_refuses_unlent_world() {
         let policy = crate::playercolor_host::ScriptHashPolicy::synthetic_fixture();

@@ -575,6 +575,7 @@ pub fn prepare(
         .map_err(|e| e.to_string())?;
     Ok(MapStartupInputs {
         thematic_music_rules: Some(crate::playercolor_host::ThematicMusicRules::read(image)?),
+        regular_music_volume_rules: None,
         cached_unit_source_maps: cached_unit_source_maps(
             reader,
             &map_sources.map_label,
@@ -788,6 +789,7 @@ pub fn prepare(
         }),
         numeric: Some(source.numeric),
         script_hash: Some(source.script_hash),
+        script_strings: Some(source.script_strings),
         destructable_restore: Some(source.destructable_restore),
         experience_handicap: Some(source.experience),
         health_handicap: Some(source.health),
@@ -1516,4 +1518,139 @@ fn local_original_upgrade_catalog_and_policy_match_the_roc_runtime_witness() {
         "qualified context={context:?} balance_source={:?} price={price:?} refund={refund:?} duration={duration}",
         tables.assets().get(SlkId::UnitBalance.path())
     );
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires PCX_WAR3_EXE inside the reviewed local Legacy installation"]
+fn selected_original_parasite_autocast_production_sources_follow_both_tft_headers() {
+    use crate::campaign_data_set::{CampaignRecipe, ImageRules};
+    use pcx_sim::world::FieldValue;
+    use std::io::Read;
+    let image_path = std::path::PathBuf::from(std::env::var_os("PCX_WAR3_EXE").unwrap());
+    let mut image = Vec::new();
+    std::fs::File::open(&image_path)
+        .unwrap()
+        .take((32 << 20) + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    assert!(image.len() <= 32 << 20);
+    let origin = client_identity(&image, image_path.to_str().unwrap());
+    let recipe = CampaignRecipe::pin(
+        image_path.parent().unwrap(),
+        pcx_assets::GameMode::default(),
+        ImageRules::read(&image, origin.clone()).unwrap(),
+        &image,
+        None,
+        "VERSION_FROZEN_THRONE",
+    )
+    .unwrap();
+    let base = recipe.base_resolver().unwrap();
+    let autocast = crate::autocast_rules::Rules::read(&image, origin.clone()).unwrap();
+    let orders = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
+    for member in [
+        "Maps/FrozenThrone/Campaign/HumanX03Interlude.w3x",
+        "Maps/FrozenThrone/Campaign/UndeadX04.w3x",
+    ] {
+        let map = base.resolve_bounded(member, 64 << 20).unwrap();
+        let reader = recipe
+            .open_map(
+                &map.bytes,
+                member,
+                pcx_mpq::checked::ReadBudget {
+                    max_archive_bytes: 64 << 20,
+                    max_archive_table_bytes: 8 << 20,
+                    max_raw_packed_bytes: 8 << 20,
+                    max_decoded_bytes: 8 << 20,
+                },
+            )
+            .unwrap();
+        assert_eq!(reader.selection.prefix, "Custom_V1");
+        let tables = defaults(&reader.resolver, &origin).unwrap();
+        let overlay = pcx_objects::editor::Overlay::default();
+        let catalog = pcx_sim::world::MetadataCatalog {
+            editor: tables.editor(),
+            units: &overlay,
+            items: &overlay,
+        };
+        let unit = catalog.resolve(*b"nnsw").unwrap();
+        let FieldValue::Cell(default) =
+            unit.column_field("auto").unwrap().1.value.as_ref().unwrap()
+        else {
+            panic!("source auto text")
+        };
+        let FieldValue::Cell(abilities) = unit
+            .column_field("abilList")
+            .unwrap()
+            .1
+            .value
+            .as_ref()
+            .unwrap()
+        else {
+            panic!("source ability list")
+        };
+        let ability = abilities
+            .split(',')
+            .map(str::trim)
+            .map(|alias| tables.object(Family::Ability, alias).unwrap())
+            .find(|ability| {
+                ability.cell(SlkId::AbilityData, "code").unwrap().text == default.as_str()
+            })
+            .unwrap();
+        let source_code = ability.cell(SlkId::AbilityData, "code").unwrap();
+        assert!(source_code.parse_error.is_none());
+        let class = autocast
+            .classes
+            .iter()
+            .find(|class| class.code.as_slice() == source_code.text.as_bytes())
+            .unwrap();
+        assert_eq!(class.code, *b"ANpa");
+        assert_eq!(ability.rawcode(), "ANpa");
+        assert!(class.enable.is_some() && class.tick.is_some());
+        for (key, expected) in [
+            ("Orderon", Some(class.on)),
+            ("Orderoff", Some(class.off)),
+            ("Order", None),
+        ] {
+            let profile = ability.profile(key);
+            assert_eq!(profile.len(), 1, "{member}: {key}");
+            let cell = &profile[0];
+            assert!(cell.parse_error.is_none());
+            let order = orders
+                .id(cell.text)
+                .expect("profile order registered in selected image");
+            if let Some(expected) = expected {
+                assert_eq!(order, expected);
+            } else {
+                assert_ne!(order, class.on);
+                assert_ne!(order, class.off);
+            }
+            let selected = reader
+                .resolver
+                .resolve_bounded(&cell.provenance.asset.member, 4 << 20)
+                .unwrap();
+            eprintln!(
+                "{member} {key}={} profile_source={}",
+                cell.text, selected.provenance.locator
+            );
+        }
+        for id in [SlkId::UnitAbilities, SlkId::AbilityData] {
+            let asset = reader.resolver.resolve_bounded(id.path(), 4 << 20).unwrap();
+            assert!(asset.provenance.locator.contains(&reader.selection.prefix));
+            eprintln!(
+                "{member} namespace={} {} source={} sha256={:02x?}",
+                reader.selection.prefix,
+                id.path(),
+                asset.provenance.locator,
+                crate::neutral_player::sha256(&asset.bytes)
+            );
+        }
+        eprintln!(
+            "qualified {member} map_sha256={:02x?} class={:?} activation={:?} image={}",
+            crate::neutral_player::sha256(&map.bytes),
+            class.code,
+            class.enable,
+            origin.version
+        );
+    }
 }

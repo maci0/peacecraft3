@@ -3,10 +3,21 @@
 //! The eight natives keep their shipped declarations verbatim (all
 //! non-constant; the `frommsecs` parameter spelling is the shipped typo and is
 //! not corrected here). Source-qualified thematic calls update the shared
-//! map-music request. Other calls retain their arguments and refuse until their
-//! playback semantics are qualified and consumed.
+//! map-music request. Regular volume additionally requires the selected client and
+//! backend policy. Other calls retain their arguments and refuse until consumed.
 use super::{Error, Failure, ObjectHost};
 use pcx_script::Value;
+use std::sync::Arc;
+
+#[path = "regular_music_volume_rules.rs"]
+pub(crate) mod volume_rules;
+
+#[derive(Clone, Debug)]
+pub struct RegularMusicVolumeRequest {
+    pub rules: Arc<volume_rules::Rules>,
+    pub level: u32,
+    pub revision: u64,
+}
 
 /// Exact executed `PlayMusic`/`PlayMusicEx` arguments, not a playlist or voice.
 /// `None` comes from `PlayMusic`, which declares no timing arguments; `Some`
@@ -31,22 +42,27 @@ pub(super) struct State {
     stop_fade_out: Option<bool>,
     resumes: u64,
     volume: Option<i32>,
+    volume_rules: Option<Result<Arc<volume_rules::Rules>, String>>,
+    volume_request: Option<RegularMusicVolumeRequest>,
     play_position: Option<i32>,
     thematic_ex: Option<ThematicMusicExRequest>,
     thematic_play_position: Option<i32>,
 }
 
 fn checked_name(
-    text: &str,
+    text: impl AsRef<[u8]>,
     max_name_bytes: usize,
     fail: &dyn Fn(Failure) -> Error,
 ) -> Result<String, Error> {
+    let text = text.as_ref();
     if text.len() > max_name_bytes {
         return Err(fail(Failure::Budget("play music name bytes")));
     }
-    if text.contains('\0') {
+    if text.contains(&0) {
         return Err(fail(Failure::MusicState("embedded NUL is unsupported")));
     }
+    let text = std::str::from_utf8(text)
+        .map_err(|why| fail(Failure::ScriptString(format!("music request UTF8: {why}"))))?;
     let mut name = String::new();
     name.try_reserve_exact(text.len())
         .map_err(|_| fail(Failure::Capacity))?;
@@ -156,12 +172,46 @@ impl ObjectHost {
             stop_fade_out: None,
             resumes: 0,
             volume: None,
+            volume_rules: None,
+            volume_request: None,
             play_position: None,
             thematic_ex: None,
             thematic_play_position: None,
         });
         Ok(self)
     }
+    /// Missing backend policy is retained until the volume native is called.
+    pub fn with_regular_music_volume_rules(
+        mut self,
+        rules: Result<volume_rules::Rules, String>,
+    ) -> Result<Self, Error> {
+        let fail = |reason| {
+            self.inner
+                .error("SetMusicVolume", Failure::MusicState(reason))
+        };
+        let state = self
+            .play_music
+            .as_mut()
+            .ok_or_else(|| fail("play music is not admitted"))?;
+        if state.volume_rules.is_some() {
+            return Err(fail("regular music volume already configured"));
+        }
+        let rules = rules.map(Arc::new);
+        if let Ok(rules) = &rules {
+            state.volume_request = Some(RegularMusicVolumeRequest {
+                level: rules.initial_level(),
+                rules: Arc::clone(rules),
+                revision: 0,
+            });
+        }
+        state.volume_rules = Some(rules);
+        Ok(self)
+    }
+
+    pub fn regular_music_volume_request(&self) -> Option<&RegularMusicVolumeRequest> {
+        self.play_music.as_ref()?.volume_request.as_ref()
+    }
+
     /// Last executed `PlayMusic`/`PlayMusicEx` request, if any.
     pub fn play_music_request(&self) -> Option<&PlayMusicRequest> {
         self.play_music.as_ref()?.request.as_ref()
@@ -250,6 +300,36 @@ impl ObjectHost {
                     });
                 }
                 ("SetMusicVolume", [Value::Int(volume)]) => {
+                    if let Some(rules) = state
+                        .volume_rules
+                        .as_ref()
+                        .filter(|_| self.inner.program.natives().get(name).is_some())
+                    {
+                        let rules = rules
+                            .as_ref()
+                            .map_err(|error| fail(Failure::SoundSource(error.clone())))?;
+                        let level = rules
+                            .level(*volume)
+                            .map_err(|error| fail(Failure::SoundSource(error)))?;
+                        let revision = state
+                            .volume_request
+                            .as_ref()
+                            .ok_or_else(|| {
+                                fail(Failure::MusicState("regular volume state is absent"))
+                            })?
+                            .revision
+                            .checked_add(1)
+                            .ok_or_else(|| {
+                                fail(Failure::Budget("regular music volume revision"))
+                            })?;
+                        state.volume_request = Some(RegularMusicVolumeRequest {
+                            rules: Arc::clone(rules),
+                            level,
+                            revision,
+                        });
+                        state.volume = Some(*volume);
+                        return Ok(Value::Null);
+                    }
                     state.volume = Some(*volume);
                 }
                 ("SetMusicPlayPosition", [Value::Int(position)]) => {

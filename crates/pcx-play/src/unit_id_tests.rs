@@ -99,10 +99,26 @@ fn a_name_answers_its_rawcode_case_insensitively_and_a_miss_or_null_answers_zero
         Value::Int(0)
     );
     assert_eq!(
-        id(&mut h, Value::Str(String::new())).unwrap(),
+        id(&mut h, Value::Str(String::new().into())).unwrap(),
         Value::Int(0)
     );
     assert_eq!(id(&mut h, Value::Null).unwrap(), Value::Int(0));
+}
+
+#[test]
+fn unit_name_bytes_use_c_prefix_without_wts_or_utf8_conversion() {
+    let mut h = host(COMMON)
+        .with_unit_id_lookup(tables(&[["zq01", "Quillbeast"]]))
+        .unwrap();
+    let mut raw = b"QUILLBEAST\0".to_vec();
+    raw.push(0xff);
+    assert_eq!(
+        id(&mut h, Value::Str(raw.into())).unwrap(),
+        Value::Int(i32::from_be_bytes(*b"zq01"))
+    );
+    for raw in [vec![0xff], b"TRIGSTR_7".to_vec()] {
+        assert_eq!(id(&mut h, Value::Str(raw.into())).unwrap(), Value::Int(0));
+    }
 }
 
 #[test]

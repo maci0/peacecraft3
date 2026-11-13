@@ -9,6 +9,7 @@ use crate::{
 pub struct Rules {
     pub(crate) initial: i32,
     pub(crate) retry_seconds: f64,
+    pub(crate) retry_word: u32,
 }
 
 fn word(bytes: &[u8], at: usize) -> Result<u32, String> {
@@ -136,7 +137,8 @@ impl Rules {
             return Err("PauseCompAI retry period initializer join differs".into());
         }
         // A signed-byte integer converts exactly to binary32 through the shared integer-to-real helper.
-        let retry_seconds = f64::from(period[1] as i8);
+        let retry_word = f32::from(period[1] as i8).to_bits();
+        let retry_seconds = f64::from(f32::from_bits(retry_word));
         if retry_seconds <= 0.0 {
             return Err("PauseCompAI retry period is not positive".into());
         }
@@ -172,6 +174,7 @@ impl Rules {
         Ok(Self {
             initial,
             retry_seconds,
+            retry_word,
         })
     }
 }
@@ -182,6 +185,7 @@ pub fn fixture(retry_seconds: i8) -> Rules {
     Rules {
         initial: 0,
         retry_seconds: f64::from(retry_seconds),
+        retry_word: f32::from(retry_seconds).to_bits(),
     }
 }
 

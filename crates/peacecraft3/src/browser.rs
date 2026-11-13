@@ -35,7 +35,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 static MENU_SNAPSHOT: OnceLock<Mutex<String>> = OnceLock::new();
 static MENU_SNAPSHOT_REQUESTED: std::sync::atomic::AtomicBool =
@@ -265,19 +265,37 @@ const CLIENT_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 struct ClientImage {
     source: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
 struct CommittedClientImage {
     revision: u32,
     source: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
 }
 
 #[derive(Default)]
 struct ClientImageTxn {
     pending: Option<ClientImage>,
     committed: Option<CommittedClientImage>,
+    ticket: u64,
+    archive_hashes: Vec<pcx_play::neutral_player::Sha256Digest>,
+    sources: Option<ClientSourceInput>,
+    committed_sources:
+        Option<Result<std::sync::Arc<pcx_play::client_module::ClientSources>, String>>,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientSourceMetadata {
+    kind: String,
+    container: String,
+    main_member: String,
+    module_member: Option<String>,
+    module_source: Option<String>,
+}
+struct ClientSourceInput {
+    metadata: ClientSourceMetadata,
+    module: Option<Arc<[u8]>>,
 }
 
 fn client_image_input(source: &str, len: usize) -> Result<(), &'static str> {
@@ -296,11 +314,16 @@ fn client_image_input(source: &str, len: usize) -> Result<(), &'static str> {
 impl ClientImageTxn {
     fn clear_pending(&mut self) {
         self.pending = None;
+        self.sources = None;
+        self.archive_hashes.clear();
     }
 
     fn clear_all(&mut self) {
         self.pending = None;
         self.committed = None;
+        self.committed_sources = None;
+        self.sources = None;
+        self.archive_hashes.clear();
     }
 
     fn stage(&mut self, active: bool, source: String, bytes: Vec<u8>) -> Result<(), &'static str> {
@@ -311,7 +334,10 @@ impl ClientImageTxn {
         if self.pending.is_some() {
             return Err("client image is already staged");
         }
-        self.pending = Some(ClientImage { source, bytes });
+        self.pending = Some(ClientImage {
+            source,
+            bytes: bytes.into(),
+        });
         Ok(())
     }
 
@@ -330,7 +356,7 @@ impl ClientImageTxn {
         self.committed
             .as_ref()
             .filter(|image| image.revision == revision)
-            .map(|image| (image.source.as_str(), image.bytes.as_slice()))
+            .map(|image| (image.source.as_str(), image.bytes.as_ref()))
     }
 }
 
@@ -475,22 +501,51 @@ pub fn enqueue_map_configuration_json(
     text: &str,
     max_metadata_bytes: usize,
 ) -> Result<u32, peacecraft3::browser_configuration_json::Error> {
-    peacecraft3::browser_configuration_json::decode_and_enqueue(
+    use peacecraft3::browser_configuration_json::Error;
+    let mut source_revision = None;
+    let mut request = peacecraft3::browser_configuration_json::decode_configuration(
         text,
         max_metadata_bytes,
-        map_configuration_inbox(),
         |index, revision, info, names, budget| {
+            if source_revision.is_some_and(|old| old != revision) {
+                return Err(pcx_assets::SourceError::InvalidInput {
+                    detail: "mixed source revisions".into(),
+                });
+            }
+            source_revision = Some(revision);
             let selected = committed_archive_selection(index, revision)?;
             committed_archive_source(selected, info, names, budget)
         },
-    )
+    )?;
+    let current = *revision();
+    if source_revision != Some(current) {
+        return Err(Error::Source {
+            layer: "client generation".into(),
+            source: pcx_assets::SourceError::InvalidInput {
+                detail: "configuration source revision retired".into(),
+            },
+        });
+    }
+    request.client_sources = client_images()
+        .committed_sources
+        .as_ref()
+        .and_then(|v| v.as_ref().ok())
+        .cloned();
+    map_configuration_inbox()
+        .enqueue(request)
+        .map_err(Error::Queue)
 }
 
 /// Starts a transaction without altering visible archives/assets.
 #[wasm_bindgen]
 pub fn begin_archive_import() {
     *pending() = Some(Vec::new());
-    client_images().clear_pending();
+    let mut images = client_images();
+    images.ticket = images
+        .ticket
+        .checked_add(1)
+        .expect("import ticket exhausted");
+    images.clear_pending();
 }
 
 #[wasm_bindgen]
@@ -502,6 +557,8 @@ pub fn cancel_archive_import() {
 /// Validate an archive into the pending transaction; no members become visible.
 #[wasm_bindgen]
 pub fn stage_archive(name: String, bytes: Vec<u8>) -> Result<String, JsValue> {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(&bytes).into();
     let archive = pcx_mpq::MpqArchive::from_bytes(bytes, &name)
         .map_err(|e| JsValue::from_str(&format!("{name}: {e}")))?;
     let mut archive = archive;
@@ -510,7 +567,191 @@ pub fn stage_archive(name: String, bytes: Vec<u8>) -> Result<String, JsValue> {
         .as_mut()
         .ok_or_else(|| JsValue::from_str("no active archive import"))?
         .push(archive);
+    client_images().archive_hashes.push(digest);
     Ok(summary)
+}
+
+fn import_demand(image: &[u8]) -> Result<pcx_play::client_module::ImportDemand, String> {
+    let iat = pcx_play::playercolor_host::RegularMusicVolumeRules::backend_iat(image)?;
+    pcx_play::client_module::ImportDemand::for_iat(image, iat, Default::default())
+}
+fn digest_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+#[wasm_bindgen]
+pub fn client_module_request(image: &[u8]) -> String {
+    match import_demand(image) {
+        Ok(d) => serde_json::json!({"status":"available", "module_name":d.module_name,
+            "import_name":d.import_name, "main_sha256":digest_hex(&d.main_sha256),
+            "descriptor_rva":d.descriptor_rva, "iat_rva":d.iat_rva})
+        .to_string(),
+        Err(e) => serde_json::json!({"status":"unsupported", "reason":e}).to_string(),
+    }
+}
+impl ClientImageTxn {
+    fn prepare_sources(
+        &self,
+    ) -> Result<
+        Option<Result<std::sync::Arc<pcx_play::client_module::ClientSources>, String>>,
+        String,
+    > {
+        use pcx_play::client_module::{ClientSources, ModuleInput};
+        let Some(input) = &self.sources else {
+            return Ok(None);
+        };
+        let image = self
+            .pending
+            .as_ref()
+            .ok_or("client source metadata requires staged main")?;
+        let m = &input.metadata;
+        let demand = match import_demand(&image.bytes) {
+            Ok(v) => v,
+            Err(e) if input.module.is_none() => return Ok(Some(Err(e))),
+            Err(e) => return Err(e),
+        };
+        let identity = |source: String| pcx_play::scripts::AssetIdentity {
+            source,
+            edition: format!("{} stored client source", m.kind),
+            version: "content-pinned".into(),
+        };
+        let module = input.module.as_ref().map(|bytes| ModuleInput {
+            origin: identity(m.module_source.clone().unwrap_or_default()),
+            member: m.module_member.clone().unwrap_or_default(),
+            bytes: bytes.clone(),
+        });
+        let bundle = ClientSources::checked(
+            image.bytes.clone(),
+            identity(image.source.clone()),
+            &m.main_member,
+            &self.archive_hashes,
+            demand,
+            Ok(module),
+        )?;
+        Ok(Some(Ok(std::sync::Arc::new(bundle))))
+    }
+}
+/// Checked tickets retire late async replies without allowing stale cancellation of a new import.
+#[wasm_bindgen]
+pub struct ArchiveImport {
+    ticket: u64,
+}
+#[wasm_bindgen]
+pub fn begin_archive_import_bound() -> Result<ArchiveImport, JsValue> {
+    if client_images().ticket == u64::MAX {
+        return Err(JsValue::from_str("import ticket exhausted"));
+    }
+    begin_archive_import();
+    Ok(ArchiveImport {
+        ticket: client_images().ticket,
+    })
+}
+impl ArchiveImport {
+    fn check(&self) -> Result<(), JsValue> {
+        if client_images().ticket != self.ticket || pending().is_none() {
+            return Err(JsValue::from_str("archive import ticket retired"));
+        }
+        Ok(())
+    }
+}
+#[wasm_bindgen]
+impl ArchiveImport {
+    pub fn stage_archive(&self, name: String, bytes: Vec<u8>) -> Result<String, JsValue> {
+        self.check()?;
+        stage_archive(name, bytes)
+    }
+    pub fn stage_client_sources(
+        &self,
+        source: String,
+        image: Vec<u8>,
+        metadata: String,
+        module: Option<Vec<u8>>,
+    ) -> Result<(), JsValue> {
+        self.check()?;
+        if metadata.len() > 16384 {
+            return Err(JsValue::from_str("client source metadata budget"));
+        }
+        let metadata: ClientSourceMetadata =
+            serde_json::from_str(&metadata).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        if !matches!(metadata.kind.as_str(), "local" | "iso" | "installer")
+            || metadata.container.trim().is_empty()
+            || module.is_some() != metadata.module_member.is_some()
+            || module.is_some() != metadata.module_source.is_some()
+            || module
+                .as_ref()
+                .is_some_and(|b| b.is_empty() || b.len() > CLIENT_IMAGE_BYTES)
+        {
+            return Err(JsValue::from_str(
+                "invalid client source scope/auxiliary budget",
+            ));
+        }
+        let main_member = pcx_play::client_module::member_path(&metadata.main_member)
+            .map_err(|e| JsValue::from_str(&e))?;
+        if metadata.kind == "local"
+            && (main_member.contains('/')
+                || metadata
+                    .module_member
+                    .as_ref()
+                    .is_some_and(|v| v.contains(['/', '\\'])))
+        {
+            return Err(JsValue::from_str(
+                "loose client files must be one explicit leaf co-selection",
+            ));
+        }
+        let mut images = client_images();
+        if images.sources.is_some() {
+            return Err(JsValue::from_str("client sources already staged"));
+        }
+        images
+            .stage(true, source, image)
+            .map_err(JsValue::from_str)?;
+        images.sources = Some(ClientSourceInput {
+            metadata,
+            module: module.map(Arc::from),
+        });
+        if let Err(e) = images.prepare_sources() {
+            images.pending = None;
+            images.sources = None;
+            return Err(JsValue::from_str(&e));
+        }
+        Ok(())
+    }
+    pub fn commit(&self) -> Result<Vec<String>, JsValue> {
+        self.check()?;
+        commit_archive_import()
+    }
+    pub fn cancel(&self) {
+        if client_images().ticket == self.ticket {
+            cancel_archive_import();
+        }
+    }
+}
+#[wasm_bindgen]
+pub fn committed_client_module_identity() -> String {
+    let images = client_images();
+    match images.committed_sources.as_ref() {
+        Some(Ok(bundle)) => {
+            let module = bundle.module(bundle.demand(), CLIENT_IMAGE_BYTES as u64);
+            let policy = module.as_ref().map_err(Clone::clone).and_then(|module| {
+                let module = module.ok_or("demanded module absent".to_string())?;
+                pcx_play::playercolor_host::RegularMusicVolumeRules::read(
+                    bundle.main().1,
+                    &module.bytes,
+                    module.origin.clone(),
+                )
+            });
+            serde_json::json!({"generation":digest_hex(&bundle.generation()),
+                "main_sha256":digest_hex(&bundle.demand().main_sha256),
+                "policy_status":if policy.is_ok() { "available" } else { "unavailable" },
+                "policy_error":policy.err(),
+                "module_name":bundle.demand().module_name,
+                "status": if matches!(module, Ok(Some(_))) {"available"} else {"absent"},
+                "module_sha256":module.ok().flatten().map(|m| digest_hex(&m.receipt.module_sha256)),
+                "source":bundle.module(bundle.demand(), CLIENT_IMAGE_BYTES as u64).ok().flatten().map(|m| &m.origin.source),
+            }).to_string()
+        }
+        Some(Err(e)) => serde_json::json!({"status":"unsupported", "reason":e}).to_string(),
+        None => serde_json::json!({"status":"unattested"}).to_string(),
+    }
 }
 
 /// One client image for the open archive transaction. The bytes stay in this slot.
@@ -1009,6 +1250,9 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
     let set = guard
         .as_mut()
         .ok_or_else(|| JsValue::from_str("no active archive import"))?;
+    let candidate_sources = client_images()
+        .prepare_sources()
+        .map_err(|e| JsValue::from_str(&e))?;
     let codec_notes = {
         let images = client_images();
         attach_codec_source(
@@ -1016,7 +1260,7 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
             images
                 .pending
                 .as_ref()
-                .map(|image| (image.source.as_str(), image.bytes.as_slice())),
+                .map(|image| (image.source.as_str(), image.bytes.as_ref())),
         )
     };
     let (assets, hydrate_notes) = hydrate(set).map_err(|e| JsValue::from_str(&e))?;
@@ -1036,7 +1280,11 @@ pub fn commit_archive_import() -> Result<Vec<String>, JsValue> {
     for (path, bytes) in assets {
         add_asset(path, bytes);
     }
-    client_images().publish(next);
+    {
+        let mut images = client_images();
+        images.publish(next);
+        images.committed_sources = candidate_sources;
+    }
     *rev = next;
     let mut control = demo_control();
     control.enabled = true;
@@ -1190,6 +1438,7 @@ pub fn add_archive(name: String, bytes: Vec<u8>) -> String {
         Ok(mut archive) => {
             let line = describe(&key, &mut archive);
             archives().push(archive);
+            client_images().committed_sources = None;
             line
         }
         Err(e) => format!("✕ {} would not open as an MPQ: {e}", short_name(&key)),
@@ -1423,7 +1672,14 @@ pub fn drop_assets() -> usize {
     *pending() = None;
     let count = clear_store();
     let mut rev = revision();
-    client_images().clear_all();
+    {
+        let mut images = client_images();
+        images.ticket = images
+            .ticket
+            .checked_add(1)
+            .expect("import ticket exhausted");
+        images.clear_all();
+    }
     *rev = rev.checked_add(1).expect("asset revision exhausted");
     let mut control = demo_control();
     control.editions = crate::local_demo::MenuEditions::default();

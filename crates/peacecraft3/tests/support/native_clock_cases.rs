@@ -81,6 +81,25 @@ fn numeric(nonstock: bool) -> NumericPolicy {
             denominator: 8,
             step: 0.125f32.to_bits(),
             wrap_tolerance: 0.00001f32.to_bits(),
+            frame: clock::frame::Rules {
+                unsigned_correction: [0f64.to_bits(), 4294967296f64.to_bits()],
+                scale: 0.001f32.to_bits(),
+                chunk: 8f32.to_bits(),
+            },
+            sleep: clock::sleep::Rules {
+                script: clock::Domain::Real,
+                ai: clock::Domain::Game,
+            },
+            turn: clock::turn::Rules {
+                quantum_ms: 25,
+                credit_cap: 4000,
+                speed_steps: Arc::from([1, 2, 3]),
+                scale: 1f32.to_bits(),
+                modifier: 1,
+                elapsed_numerator: 1,
+                elapsed_denominator: 1,
+                initial_carry: 0,
+            },
         })
     } else {
         numeric
@@ -107,6 +126,126 @@ fn publish(app: &mut App, script: &str, revision: u64, nonstock: bool) {
         session.host().unwrap().objects().native_game_point(),
         Some(clock::Point { cycle: 0, local: 0 })
     );
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_producer_retries_preserve_projection_fault_and_entire_clock_state() {
+    use pcx_script::Host;
+    use peacecraft3::map_script_session::TimerSessionError;
+    const SCRIPT: &str = r#"
+globals
+unit A=null
+timer T=CreateTimer()
+integer fired=0
+endglobals
+function fire takes nothing returns nothing
+set fired=fired+1
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+set A=CreateUnit(Player(0),'UNIT',16.0,16.0,0.0)
+call IssuePointOrder(A,"gamma",72.0,16.0)
+call TimerStart(T,0.25,false,function fire)
+endfunction
+"#;
+    for paired in [false, true] {
+        for periodic in [false, true] {
+            let script = SCRIPT.replace("0.25,false", &format!("0.25,{periodic}"));
+            let mut session =
+                super::super::unit_range_cases::session_with_inputs(&script, true, |inputs| {
+                    inputs.timer_time = Some(0.);
+                    inputs.numeric = Some(numeric(true));
+                });
+            let input = clock::FrameInput {
+                game_elapsed: Duration::from_millis(250),
+                real_elapsed_ms: 250,
+            };
+            let selection = if paired {
+                session.advance_native_frame(Some(input), 0)
+            } else {
+                pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    input.game_elapsed,
+                    0.25,
+                    0,
+                )
+            };
+            if paired {
+                assert!(matches!(
+                    selection,
+                    Err(TimerSessionError::QueueBudget("timer delivery"))
+                ));
+            } else {
+                assert!(matches!(selection, Err(TimerSessionError::Timer(_))));
+            }
+            // The paired selector visits our one timer before world projection.
+            let error = session
+                .test_advance_timers_with_projection_work(0.25, 8, usize::from(paired))
+                .unwrap_err();
+            let TimerSessionError::MandatoryProjection(fault) = error else {
+                panic!("expected retained projection fault: {error}")
+            };
+            let state = format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            );
+            let expired = session
+                .host()
+                .unwrap()
+                .native("GetExpiredTimer", &[])
+                .unwrap();
+            assert_eq!(expired, session.global("T").unwrap());
+            for _ in 0..2 {
+                let retry = pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    Duration::from_millis(333),
+                    1.,
+                    8,
+                );
+                let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                    panic!("pacing hid the original projection fault: {retry:?}")
+                };
+                assert!(Arc::ptr_eq(&fault, &retry_fault));
+                for input in [Some(input), None] {
+                    let retry = session.advance_native_frame(input, 8);
+                    let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                        panic!("frame input hid the original projection fault: {retry:?}")
+                    };
+                    assert!(Arc::ptr_eq(&fault, &retry_fault));
+                }
+                for input in [Some(Duration::from_millis(333)), None] {
+                    let retry = session.advance_native_counter_frame(input, 8);
+                    let Err(TimerSessionError::MandatoryProjection(retry_fault)) = retry else {
+                        panic!("counter input hid the original projection fault: {retry:?}")
+                    };
+                    assert!(Arc::ptr_eq(&fault, &retry_fault));
+                }
+                assert_eq!(
+                    format!(
+                        "{:?}",
+                        session.host().unwrap().objects().test_native_clock_state()
+                    ),
+                    state
+                );
+                assert_eq!(
+                    session.host().unwrap().objects().timer_game_time(),
+                    Some(0.25)
+                );
+                assert_eq!(session.global("fired"), Some(Value::Int(0)));
+                assert_eq!(
+                    session
+                        .host()
+                        .unwrap()
+                        .native("GetExpiredTimer", &[])
+                        .unwrap(),
+                    expired
+                );
+            }
+        }
+    }
 }
 
 const LONG: &str = "\
@@ -448,4 +587,1866 @@ fn native_callback_error_restores_outer_cursor_and_runtime_does_not_replay() {
     );
     assert!(runtime.advance_ticks(&mut session, 1).is_err());
     assert_eq!(session.global("fired"), Some(Value::Int(1)));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn explicit_initial_caller_clocks_preserve_legacy_factory_behavior() {
+    for initial in [20., 0.1, -1., -0.] {
+        let mut app = timer_app();
+        deliver_timer_with(&mut app, LONG, 1, "", |inputs| {
+            inputs.timer_time = Some(initial);
+            inputs.numeric = Some(numeric(false));
+        });
+        assert!(
+            app.world()
+                .resource::<CampaignStartup>()
+                .last_error
+                .is_none(),
+            "{:?}",
+            app.world().resource::<CampaignStartup>().last_error
+        );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+            initial.to_bits()
+        );
+        assert_eq!(session.host().unwrap().objects().native_game_point(), None);
+        assert!(
+            pcx_play::campaign_host::advance_paced_tick(
+                &mut session,
+                Duration::from_millis(125),
+                initial + 0.125,
+                8
+            )
+            .is_err()
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .timer_game_time()
+                .unwrap()
+                .to_bits(),
+            initial.to_bits()
+        );
+        assert_eq!(session.host().unwrap().objects().native_game_point(), None);
+        assert_eq!(session.global("fired"), Some(Value::Int(0)));
+        assert_eq!(session.advance_timers(initial + 40., 8).unwrap(), 1);
+        assert_eq!(session.global("fired"), Some(Value::Int(1)));
+    }
+    let mut app = timer_app();
+    publish(&mut app, LONG, 1, false);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session.advance_timers(-0., 8).unwrap();
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .timer_game_time()
+            .unwrap()
+            .to_bits(),
+        (-0f64).to_bits()
+    );
+    assert!(
+        pcx_play::campaign_host::advance_paced_tick(&mut session, Duration::ZERO, 0., 8).is_err()
+    );
+    assert_eq!(session.advance_timers(40., 8).unwrap(), 1);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_unbound_map_wake_preserves_ticket_and_prior_timer_progress() {
+    let common = format!(
+        "{}\nnative TriggerSleepAction takes real seconds returns nothing\n",
+        super::super::timed_trigger_cases::COMMON
+    );
+    let script = "\
+globals
+trigger sleeper=CreateTrigger()
+timer t=CreateTimer()
+integer trace=0
+endglobals
+function afterSleep takes nothing returns nothing
+set trace=trace*10+4
+endfunction
+function beforeSleep takes nothing returns nothing
+set trace=trace*10+2
+endfunction
+function sleepAction takes nothing returns nothing
+set trace=trace*10+1
+call TriggerSleepAction(0.125)
+set trace=trace*10+3
+call TimerStart(t,0.1,false,function afterSleep)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(sleeper,function sleepAction)
+call TriggerRegisterTimerEvent(sleeper,0.0625,false)
+call TimerStart(t,0.125,false,function beforeSleep)
+endfunction
+";
+    for native in [true, false] {
+        let mut app = timer_app();
+        deliver_timer_with(&mut app, script, 1, &common, |inputs| {
+            inputs.timer_time = Some(0.);
+            inputs.numeric = Some(numeric(true));
+            inputs.enumeration.names.push("ConvertGameEvent".into());
+            inputs.enumeration.limits.max_handles = 256;
+            inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+                initial_enabled: true,
+                timer_event_global: "TEST_TIMER_EVENT".into(),
+                max_timed_events: 8,
+                max_parked_threads: 8,
+            });
+        });
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        if native {
+            for elapsed in [Duration::from_millis(250), Duration::ZERO] {
+                let error =
+                    pcx_play::campaign_host::advance_paced_tick(&mut session, elapsed, 0.25, 8)
+                        .unwrap_err();
+                assert!(
+                    error.to_string().contains("native real-queue entry"),
+                    "{error}"
+                );
+                assert_eq!(session.global("trace"), Some(Value::Int(12)));
+                let objects = session.host().unwrap().objects();
+                assert_eq!(objects.parked_thread_count(), 1);
+                assert_eq!(objects.timer_game_time(), Some(0.125));
+                assert_eq!(
+                    objects.native_game_point(),
+                    Some(clock::Point {
+                        cycle: 0,
+                        local: 0.25f32.to_bits()
+                    })
+                );
+            }
+        } else {
+            assert_eq!(session.advance_timers(0.5, 8).unwrap(), 4);
+            assert_eq!(session.global("trace"), Some(Value::Int(1234)));
+            assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_unbound_ai_wake_preserves_ticket_and_prior_timer_progress() {
+    use pcx_play::map_startup_host::MapStartupError;
+    use pcx_script::Host;
+
+    let mut app = timer_app();
+    let common = "\
+native StartCampaignAI takes player p, string path returns nothing
+constant native GetPlayerState takes player p, playerstate state returns integer
+globals
+constant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)
+constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
+constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
+endglobals
+";
+    let script = "\
+globals
+timer t=CreateTimer()
+integer seen=0
+endglobals
+function tick takes nothing returns nothing
+set seen=seen+1
+endfunction
+function config takes nothing returns nothing
+call SetPlayers(1)
+endfunction
+function main takes nothing returns nothing
+call TimerStart(t,0.125,false,function tick)
+endfunction
+function start takes nothing returns nothing
+call StartCampaignAI(Player(0),\"idle.ai\")
+endfunction
+";
+    deliver_timer_with(&mut app, script, 1, common, |inputs| {
+        inputs.timer_time = Some(0.);
+        inputs.numeric = Some(numeric(true));
+    });
+    let catalog = Arc::clone(
+        &app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .catalog
+            .0,
+    );
+    let mut inputs = host_inputs(catalog);
+    inputs.timer_time = Some(0.);
+    inputs.numeric = Some(numeric(true));
+    inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture());
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = Arc::clone(session.context().unwrap());
+    let common = context
+        .scripts
+        .source(&context.scripts.digests[0].label)
+        .unwrap();
+    let ai = Arc::new(
+        pcx_play::scripts::MapScripts::compile(
+            AssetIdentity {
+                edition: "synthetic".into(),
+                version: "native-wake-guard".into(),
+                source: "idle.ai".into(),
+            },
+            ScriptAsset { label: "fixture:common.j", bytes: common.as_bytes() },
+            ScriptAsset { label: "fixture:common.ai", bytes: super::super::AI_COMMON.as_bytes() },
+            ScriptAsset {
+                label: "idle.ai",
+                bytes: b"function main takes nothing returns nothing\ncall SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),17)\ncall Sleep(0.25)\ncall SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),34)\nendfunction\n",
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let entries = ["config", "main", "start"]
+        .map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            context,
+            move |ctx| {
+                Ok::<_, MapStartupError>(
+                    pcx_play::map_startup_host::assemble(ctx, inputs)?
+                        .with_ai_loader(move |_| Ok(Arc::clone(&ai))),
+                )
+            },
+            &entries,
+        )
+        .unwrap();
+    let gold = session
+        .host()
+        .unwrap()
+        .native("ConvertPlayerState", &[Value::Int(1)])
+        .unwrap();
+    let player = session
+        .host()
+        .unwrap()
+        .native("Player", &[Value::Int(0)])
+        .unwrap();
+    for elapsed in [Duration::from_millis(500), Duration::ZERO] {
+        let error =
+            pcx_play::campaign_host::advance_paced_tick(&mut session, elapsed, 0.5, 8).unwrap_err();
+        assert!(
+            error.to_string().contains("native game-queue entry"),
+            "{error}"
+        );
+        assert_eq!(session.global("seen"), Some(Value::Int(1)));
+        let host = session.host().unwrap();
+        assert_eq!(
+            host.native("GetPlayerState", &[player.clone(), gold.clone()])
+                .unwrap(),
+            Value::Int(17)
+        );
+        assert_eq!(host.objects().timer_game_time(), Some(0.125));
+        assert_eq!(
+            host.objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: 0.25f32.to_bits()
+            })
+        );
+    }
+}
+fn publish_map_sleeper(app: &mut App, script: &str) {
+    let common = format!(
+        "{}\nnative TriggerSleepAction takes real seconds returns nothing\n",
+        super::super::timed_trigger_cases::COMMON
+    );
+    deliver_timer_with(app, script, 1, &common, |inputs| {
+        inputs.timer_time = Some(0.);
+        inputs.numeric = Some(numeric(true));
+        inputs.enumeration.names.push("ConvertGameEvent".into());
+        inputs.enumeration.limits.max_handles = 256;
+        inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+            initial_enabled: true,
+            timer_event_global: "TEST_TIMER_EVENT".into(),
+            max_timed_events: 16,
+            max_parked_threads: 16,
+        });
+    });
+    assert!(
+        app.world()
+            .resource::<CampaignStartup>()
+            .last_error
+            .is_none(),
+        "{:?}",
+        app.world().resource::<CampaignStartup>().last_error
+    );
+}
+
+const PAIRED_SLEEP: &str = "\
+globals
+timer sleeper=CreateTimer()
+trigger nested=CreateTrigger()
+timer observer=CreateTimer()
+timer after=CreateTimer()
+integer trace=0
+integer retained=0
+boolean context=true
+real remaining=-1.0
+endglobals
+function afterWake takes nothing returns nothing
+set trace=trace*10+4
+endfunction
+function observe takes nothing returns nothing
+set trace=trace*10+2
+endfunction
+function sleepAction takes nothing returns nothing
+local integer saved=73
+set trace=trace*10+1
+call TriggerSleepAction(0.125)
+set retained=saved
+set context=context and GetExpiredTimer()==sleeper
+set trace=trace*10+3
+call TimerStart(after,0.25,false,function afterWake)
+set remaining=TimerGetRemaining(after)
+endfunction
+function beginSleep takes nothing returns nothing
+call TriggerExecute(nested)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(nested,function sleepAction)
+call TimerStart(sleeper,0.0625,false,function beginSleep)
+call TimerStart(observer,0.125,false,function observe)
+endfunction
+";
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_real_map_wake_starts_timer_at_completed_game_cursor() {
+    let mut app = timer_app();
+    publish_map_sleeper(&mut app, PAIRED_SLEEP);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(500),
+                real_elapsed_ms: 250,
+            }),
+            16,
+        )
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("retained"), Some(Value::Int(73)));
+    assert_eq!(session.global("context"), Some(Value::Bool(true)));
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.25)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Game),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.5f32.to_bits()
+        })
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    for (elapsed, expected) in [(125, 123), (125, 1234)] {
+        session
+            .advance_native_frame(
+                Some(clock::FrameInput {
+                    game_elapsed: Duration::from_millis(elapsed),
+                    real_elapsed_ms: 0,
+                }),
+                16,
+            )
+            .unwrap();
+        assert_eq!(session.global("trace"), Some(Value::Int(expected)));
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_real_map_wake_budget_retry_preserves_frame_and_ticket() {
+    let mut app = timer_app();
+    publish_map_sleeper(&mut app, PAIRED_SLEEP);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let error = session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(500),
+                real_elapsed_ms: 250,
+            }),
+            2,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("wake budget"), "{error}");
+    assert_eq!(session.global("trace"), Some(Value::Int(12)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 1);
+    // The diagnostic view reports the retained outer horizon, not completed real time.
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session.advance_native_frame(None, 16).unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("retained"), Some(Value::Int(73)));
+    assert_eq!(session.global("context"), Some(Value::Bool(true)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Game),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.5f32.to_bits()
+        })
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session.advance_native_frame(None, 16).unwrap();
+    assert_eq!(
+        session.global("trace"),
+        Some(Value::Int(123)),
+        "drained frame never repeats wake"
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_real_repark_keeps_selected_origin_across_nonstock_wrap() {
+    let script = PAIRED_SLEEP.replace(
+        "call TriggerSleepAction(0.125)",
+        "call TriggerSleepAction(17.0)\nset saved=saved+8\ncall TriggerSleepAction(0.25)",
+    );
+    let mut app = timer_app();
+    publish_map_sleeper(&mut app, &script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(500),
+                real_elapsed_ms: 17000,
+            }),
+            32,
+        )
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(12)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 1);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point {
+            cycle: 1,
+            local: 1f32.to_bits()
+        })
+    );
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::ZERO,
+                real_elapsed_ms: 250,
+            }),
+            32,
+        )
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("retained"), Some(Value::Int(81)));
+    assert_eq!(session.global("context"), Some(Value::Bool(true)));
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.25)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Game),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.5f32.to_bits()
+        })
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point {
+            cycle: 1,
+            local: 1.25f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_real_sleep_consumes_extended_internal_entries_before_resuming() {
+    let script = PAIRED_SLEEP
+        .replace("TriggerSleepAction(0.125)", "TriggerSleepAction(240.0317)")
+        .replace(
+            "set trace=trace*10+3",
+            "set trace=trace*10+3\ncall TriggerSleepAction(0.0625)\nset trace=trace*10+5",
+        );
+    let mut app = timer_app();
+    publish_map_sleeper(&mut app, &script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    for (game_ms, real_ms, trace, parked) in [
+        (500, 240000, 12, 1),
+        (0, 64, 123, 1),
+        (0, 64, 1235, 0),
+        (250, 0, 12354, 0),
+    ] {
+        session
+            .advance_native_frame(
+                Some(clock::FrameInput {
+                    game_elapsed: Duration::from_millis(game_ms),
+                    real_elapsed_ms: real_ms,
+                }),
+                16,
+            )
+            .unwrap();
+        assert_eq!(session.global("trace"), Some(Value::Int(trace)));
+        assert_eq!(
+            session.host().unwrap().objects().parked_thread_count(),
+            parked
+        );
+    }
+    assert_eq!(session.global("retained"), Some(Value::Int(73)));
+    assert_eq!(session.global("context"), Some(Value::Bool(true)));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_real_sleep_unpauses_without_advancing_the_game_cursor() {
+    let script = "\
+globals
+trigger action=CreateTrigger()
+timer starter=CreateTimer()
+timer after=CreateTimer()
+integer trace=0
+real remaining=-1.0
+endglobals
+function done takes nothing returns nothing
+set trace=3
+endfunction
+function wait takes nothing returns nothing
+set trace=1
+call PauseGame(true)
+call TriggerSleepAction(0.125)
+set trace=2
+call PauseGame(false)
+call TimerStart(after,0.0625,false,function done)
+set remaining=TimerGetRemaining(after)
+endfunction
+function begin takes nothing returns nothing
+call TriggerExecute(action)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(action,function wait)
+call TimerStart(starter,0.0625,false,function begin)
+endfunction
+";
+    let mut app = timer_app();
+    publish_map_sleeper(&mut app, script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(125),
+                real_elapsed_ms: 0,
+            }),
+            16,
+        )
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    assert_eq!(session.host().unwrap().objects().game_paused(), Some(true));
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::ZERO,
+                real_elapsed_ms: 250,
+            }),
+            16,
+        )
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(2)));
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.0625)));
+    assert_eq!(session.host().unwrap().objects().game_paused(), Some(false));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.125f32.to_bits()
+        })
+    );
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(125),
+                real_elapsed_ms: 0,
+            }),
+            16,
+        )
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(3)));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_fresh_sleep_admission_failure_preserves_legacy_choice_and_tickets() {
+    let script = "\
+globals
+trigger action=CreateTrigger()
+timer t=CreateTimer()
+integer trace=0
+endglobals
+function done takes nothing returns nothing
+set trace=trace*10+3
+endfunction
+function wait takes nothing returns nothing
+set trace=1
+call TriggerSleepAction(-241.0)
+set trace=2
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(action,function wait)
+call TriggerExecute(action)
+call TimerStart(t,0.125,false,function done)
+endfunction
+";
+    let mut app = timer_app();
+    publish_map_sleeper(&mut app, script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 1);
+    let error = session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(125),
+                real_elapsed_ms: 1,
+            }),
+            16,
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("negative segmented sleep"),
+        "{error}"
+    );
+    let objects = session.host().unwrap().objects();
+    assert_eq!(objects.timer_game_time(), Some(0.));
+    assert_eq!(
+        objects.native_game_point(),
+        Some(clock::Point { cycle: 0, local: 0 })
+    );
+    assert_eq!(
+        objects.native_queue_point(clock::Domain::Real),
+        Some(clock::Point { cycle: 0, local: 0 })
+    );
+    assert_eq!(objects.parked_thread_count(), 1);
+    session.advance_timers(0.25, 16).unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(23)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+}
+
+fn publish_ai_sleeper(app: &mut App, script: &str, ai_source: &str) {
+    use pcx_play::map_startup_host::MapStartupError;
+    let common = "\
+native StartCampaignAI takes player p, string path returns nothing
+native PauseCompAI takes player p, boolean paused returns nothing
+constant native GetPlayerState takes player p, playerstate state returns integer
+globals
+constant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)
+constant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)
+constant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)
+constant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)
+constant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)
+constant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)
+endglobals
+";
+    deliver_timer_with(app, script, 1, common, |inputs| {
+        inputs.timer_time = Some(0.);
+        inputs.numeric = Some(numeric(true));
+    });
+    let catalog = Arc::clone(
+        &app.world()
+            .resource::<MapRequests>()
+            .bindings
+            .as_ref()
+            .unwrap()
+            .catalog
+            .0,
+    );
+    let mut inputs = host_inputs(catalog);
+    inputs.timer_time = Some(0.);
+    inputs.numeric = Some(numeric(true));
+    inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture());
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = Arc::clone(session.context().unwrap());
+    let common = context
+        .scripts
+        .source(&context.scripts.digests[0].label)
+        .unwrap();
+    let ai_common = format!(
+        "{}native BreakWake takes nothing returns nothing\n",
+        super::super::AI_COMMON
+    );
+    let ai = Arc::new(
+        pcx_play::scripts::MapScripts::compile(
+            AssetIdentity {
+                edition: "synthetic".into(),
+                version: "paired-ai-sleep".into(),
+                source: "idle.ai".into(),
+            },
+            ScriptAsset {
+                label: "fixture:common.j",
+                bytes: common.as_bytes(),
+            },
+            ScriptAsset {
+                label: "fixture:common.ai",
+                bytes: ai_common.as_bytes(),
+            },
+            ScriptAsset {
+                label: "idle.ai",
+                bytes: ai_source.as_bytes(),
+            },
+            None,
+        )
+        .unwrap(),
+    );
+    let entries = ["config", "main", "start"]
+        .map(|name| context.scripts.program().function_id(name).unwrap());
+    session
+        .replace(
+            context,
+            move |ctx| {
+                Ok::<_, MapStartupError>(
+                    pcx_play::map_startup_host::assemble(ctx, inputs)?
+                        .with_ai_pause_rules(Ok(pcx_play::campaign_ai_pause_policy::fixture(1)))
+                        .with_ai_loader(move |_| Ok(Arc::clone(&ai))),
+                )
+            },
+            &entries,
+        )
+        .unwrap();
+}
+
+const AI_BANK_OBSERVERS: &str = "\
+globals
+timer first=CreateTimer()
+timer middle=CreateTimer()
+timer last=CreateTimer()
+integer first0=0
+integer first1=0
+integer middle0=0
+integer middle1=0
+integer last0=0
+integer last1=0
+endglobals
+function firstBank takes nothing returns nothing
+set first0=GetPlayerState(Player(0),PLAYER_STATE_RESOURCE_GOLD)
+set first1=GetPlayerState(Player(1),PLAYER_STATE_RESOURCE_GOLD)
+endfunction
+function middleBank takes nothing returns nothing
+set middle0=GetPlayerState(Player(0),PLAYER_STATE_RESOURCE_GOLD)
+set middle1=GetPlayerState(Player(1),PLAYER_STATE_RESOURCE_GOLD)
+endfunction
+function lastBank takes nothing returns nothing
+set last0=GetPlayerState(Player(0),PLAYER_STATE_RESOURCE_GOLD)
+set last1=GetPlayerState(Player(1),PLAYER_STATE_RESOURCE_GOLD)
+endfunction
+function config takes nothing returns nothing
+call SetPlayers(2)
+endfunction
+function main takes nothing returns nothing
+call TimerStart(first,0.125,false,function firstBank)
+call TimerStart(middle,0.375,false,function middleBank)
+call TimerStart(last,0.625,false,function lastBank)
+endfunction
+function start takes nothing returns nothing
+call StartCampaignAI(Player(0),\"idle.ai\")
+call StartCampaignAI(Player(1),\"idle.ai\")
+endfunction
+";
+
+const AI_RETAINED_LOCALS: &str = "\
+function main takes nothing returns nothing
+local integer retained=73+GetAiPlayer()
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),17+GetAiPlayer())
+call Sleep(0.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained)
+call Sleep(0.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained+100)
+endfunction
+";
+
+fn assert_ai_bank_observers(session: &MapScriptSession<MapStartupHost>) {
+    for (name, expected) in [
+        ("first0", 17),
+        ("first1", 18),
+        ("middle0", 73),
+        ("middle1", 74),
+        ("last0", 173),
+        ("last1", 174),
+    ] {
+        assert_eq!(session.global(name), Some(Value::Int(expected)), "{name}");
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_game_ai_wakes_between_map_timers_and_retains_each_players_locals() {
+    let mut app = timer_app();
+    publish_ai_sleeper(&mut app, AI_BANK_OBSERVERS, AI_RETAINED_LOCALS);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(750),
+                real_elapsed_ms: 0,
+            }),
+            16,
+        )
+        .unwrap();
+    assert_ai_bank_observers(&session);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Game),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.75f32.to_bits()
+        })
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point { cycle: 0, local: 0 })
+    );
+    session.advance_native_frame(None, 16).unwrap();
+    assert_ai_bank_observers(&session);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_game_ai_budget_retry_retains_tickets_without_replaying_map_or_ai() {
+    let mut app = timer_app();
+    publish_ai_sleeper(&mut app, AI_BANK_OBSERVERS, AI_RETAINED_LOCALS);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let error = session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(750),
+                real_elapsed_ms: 0,
+            }),
+            1,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("wake budget"), "{error}");
+    assert_eq!(session.global("first0"), Some(Value::Int(17)));
+    assert_eq!(session.global("first1"), Some(Value::Int(18)));
+    assert_eq!(session.global("middle0"), Some(Value::Int(0)));
+    session.advance_native_frame(None, 16).unwrap();
+    assert_ai_bank_observers(&session);
+    session.advance_native_frame(None, 16).unwrap();
+    assert_ai_bank_observers(&session);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_game_ai_native_repark_accepts_zero_and_small_negative_delays() {
+    use pcx_script::Host;
+    let mut app = timer_app();
+    publish_ai_sleeper(
+        &mut app,
+        AI_BANK_OBSERVERS,
+        "\
+function main takes nothing returns nothing
+local integer retained=73+GetAiPlayer()
+call Sleep(0.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained)
+call Sleep(0.0)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained+100)
+call Sleep(-0.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained+200)
+endfunction
+",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(500),
+                real_elapsed_ms: 0,
+            }),
+            16,
+        )
+        .unwrap();
+    assert_eq!(session.global("middle0"), Some(Value::Int(273)));
+    assert_eq!(session.global("middle1"), Some(Value::Int(274)));
+    let host = session.host().unwrap();
+    let gold = host.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+    for player in 0..2 {
+        let handle = host.native("Player", &[Value::Int(player)]).unwrap();
+        assert_eq!(
+            host.native("GetPlayerState", &[handle, gold.clone()])
+                .unwrap(),
+            Value::Int(273 + player)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_game_ai_nested_pause_retries_keep_the_original_vm_ticket() {
+    use pcx_script::Host;
+    let mut app = timer_app();
+    publish_ai_sleeper(&mut app, AI_BANK_OBSERVERS, AI_RETAINED_LOCALS);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let host = session.host().unwrap();
+    let player = host.native("Player", &[Value::Int(0)]).unwrap();
+    let gold = host.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+    for _ in 0..2 {
+        host.native("PauseCompAI", &[player.clone(), Value::Bool(true)])
+            .unwrap();
+    }
+    for (milliseconds, expected, resume) in [
+        (500, 17, true),
+        (750, 17, true),
+        (875, 17, false),
+        (125, 73, false),
+        (250, 173, false),
+    ] {
+        session
+            .advance_native_frame(
+                Some(clock::FrameInput {
+                    game_elapsed: Duration::from_millis(milliseconds),
+                    real_elapsed_ms: 0,
+                }),
+                32,
+            )
+            .unwrap();
+        let host = session.host().unwrap();
+        assert_eq!(
+            host.native("GetPlayerState", &[player.clone(), gold.clone()])
+                .unwrap(),
+            Value::Int(expected)
+        );
+        if resume {
+            host.native("PauseCompAI", &[player.clone(), Value::Bool(false)])
+                .unwrap();
+        }
+    }
+    let host = session.host().unwrap();
+    let other = host.native("Player", &[Value::Int(1)]).unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[other, gold]).unwrap(),
+        Value::Int(174)
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_game_ai_wake_refusal_returns_world_and_preserves_other_players_ticket() {
+    use pcx_script::Host;
+    let mut app = timer_app();
+    publish_ai_sleeper(
+        &mut app,
+        AI_BANK_OBSERVERS,
+        "\
+function main takes nothing returns nothing
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),17+GetAiPlayer())
+call Sleep(0.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),73+GetAiPlayer())
+if GetAiPlayer()==0 then
+call BreakWake()
+endif
+call Sleep(0.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),173+GetAiPlayer())
+endfunction
+",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let error = session
+        .advance_native_frame(
+            Some(clock::FrameInput {
+                game_elapsed: Duration::from_millis(750),
+                real_elapsed_ms: 0,
+            }),
+            16,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("BreakWake"), "{error}");
+    let host = session.host().unwrap();
+    let gold = host.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+    let player = host.native("Player", &[Value::Int(0)]).unwrap();
+    assert_eq!(
+        host.native("GetPlayerState", &[player, gold]).unwrap(),
+        Value::Int(73)
+    );
+    session.advance_native_frame(None, 16).unwrap();
+    for (name, expected) in [
+        ("first0", 17),
+        ("first1", 18),
+        ("middle0", 73),
+        ("middle1", 74),
+        ("last0", 73),
+        ("last1", 174),
+    ] {
+        assert_eq!(session.global(name), Some(Value::Int(expected)), "{name}");
+    }
+    session.advance_native_frame(None, 16).unwrap();
+    assert_eq!(session.global("last1"), Some(Value::Int(174)));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn paired_game_ai_wrap_rebases_raw_sleep_and_repark_without_early_resume() {
+    use pcx_script::Host;
+    let mut app = timer_app();
+    publish_ai_sleeper(
+        &mut app,
+        AI_BANK_OBSERVERS,
+        "\
+function main takes nothing returns nothing
+local integer retained=73+GetAiPlayer()
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),17+GetAiPlayer())
+call Sleep(40.25)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained)
+call Sleep(0.0317)
+call SetPlayerState(Player(GetAiPlayer()),ConvertPlayerState(1),retained+100)
+endfunction
+",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    for (millis, expected) in [(40_000, 17), (500, 173)] {
+        session
+            .advance_native_frame(
+                Some(clock::FrameInput {
+                    game_elapsed: Duration::from_millis(millis),
+                    real_elapsed_ms: 0,
+                }),
+                16,
+            )
+            .unwrap();
+        let host = session.host().unwrap();
+        let gold = host.native("ConvertPlayerState", &[Value::Int(1)]).unwrap();
+        for player in 0..2 {
+            let handle = host.native("Player", &[Value::Int(player)]).unwrap();
+            assert_eq!(
+                host.native("GetPlayerState", &[handle, gold.clone()])
+                    .unwrap(),
+                Value::Int(expected + player)
+            );
+        }
+    }
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Game),
+        Some(clock::Point {
+            cycle: 2,
+            local: 8.5f32.to_bits()
+        })
+    );
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        Some(clock::Point { cycle: 0, local: 0 })
+    );
+}
+
+fn publish_counter_map(app: &mut App, script: &str) {
+    let common = format!(
+        "{}\n{}",
+        super::super::timed_trigger_cases::COMMON,
+        "\
+type gamespeed extends handle
+type mapflag extends handle
+constant native ConvertMapFlag takes integer value returns mapflag
+native SetMapFlag takes mapflag flag, boolean value returns nothing
+constant native ConvertGameSpeed takes integer value returns gamespeed
+constant native GetGameSpeed takes nothing returns gamespeed
+native SetGameSpeed takes gamespeed value returns nothing
+native IsFogEnabled takes nothing returns boolean
+native IsFogMaskEnabled takes nothing returns boolean
+native FogEnable takes boolean value returns nothing
+native FogMaskEnable takes boolean value returns nothing
+native TriggerSleepAction takes real seconds returns nothing
+globals
+constant gamespeed COUNTER_SLOW=ConvertGameSpeed(0)
+constant gamespeed COUNTER_NORMAL=ConvertGameSpeed(1)
+constant gamespeed COUNTER_FAST=ConvertGameSpeed(2)
+constant gamespeed COUNTER_UNKNOWN=ConvertGameSpeed(7)
+constant mapflag MAP_LOCK_SPEED=ConvertMapFlag(1024)
+endglobals
+"
+    );
+    deliver_timer_with(app, script, 1, &common, |inputs| {
+        inputs.timer_time = Some(0.);
+        inputs.numeric = Some(numeric(true));
+        inputs.enumeration.names.extend([
+            "ConvertGameSpeed".into(),
+            "ConvertGameEvent".into(),
+            "ConvertMapFlag".into(),
+        ]);
+        inputs.enumeration.limits.max_handles = 256;
+        inputs.trigger_runtime = Some(pcx_play::playercolor_host::TriggerRuntimeInput {
+            initial_enabled: true,
+            timer_event_global: "TEST_TIMER_EVENT".into(),
+            max_timed_events: 16,
+            max_parked_threads: 16,
+        });
+    });
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let context = Arc::clone(session.context().unwrap());
+    let Some(Value::Handle(speed)) = session.global("COUNTER_NORMAL") else {
+        panic!("speed token")
+    };
+    session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .admit_startup_settings(
+            &context,
+            pcx_play::playercolor_host::StartupSettings {
+                speed,
+                fog_enabled: true,
+                fog_mask_enabled: true,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_public_session_uses_admitted_speed_and_progresses_real_sleeps() {
+    let mut app = timer_app();
+    publish_counter_map(&mut app, PAIRED_SLEEP);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(12)));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(100)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.25)));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 1.25f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_public_pause_finishes_grant_then_real_wake_unpauses() {
+    let script = "\
+globals
+trigger action=CreateTrigger()
+timer starter=CreateTimer()
+integer trace=0
+endglobals
+function wait takes nothing returns nothing
+set trace=1
+call PauseGame(true)
+call TriggerSleepAction(0.125)
+set trace=2
+call PauseGame(false)
+endfunction
+function begin takes nothing returns nothing
+call TriggerExecute(action)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TriggerAddAction(action,function wait)
+call TimerStart(starter,0.0625,false,function begin)
+endfunction
+";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(50)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    assert_eq!(session.host().unwrap().objects().game_paused(), Some(true));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(75)), 16)
+        .unwrap();
+    assert_eq!(session.global("trace"), Some(Value::Int(2)));
+    assert_eq!(session.host().unwrap().objects().game_paused(), Some(false));
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.25f32.to_bits()
+        })
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.5f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_speed_lock_invalid_index_and_legacy_refusals_are_atomic() {
+    use pcx_script::Host;
+    let script = "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    let normal = session.global("COUNTER_NORMAL").unwrap();
+    let fast = session.global("COUNTER_FAST").unwrap();
+    let unknown = session.global("COUNTER_UNKNOWN").unwrap();
+    let lock = session.global("MAP_LOCK_SPEED").unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&fast))
+            .is_err()
+    );
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        normal
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::ZERO), 16)
+        .unwrap();
+    assert!(
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&unknown))
+            .is_err()
+    );
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        normal
+    );
+    session
+        .host()
+        .unwrap()
+        .native("SetMapFlag", &[lock.clone(), Value::Bool(true)])
+        .unwrap();
+    session
+        .host()
+        .unwrap()
+        .native("SetGameSpeed", std::slice::from_ref(&fast))
+        .unwrap();
+    session
+        .host()
+        .unwrap()
+        .native("SetGameSpeed", &[unknown])
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        normal
+    );
+    session
+        .host()
+        .unwrap()
+        .native("SetMapFlag", &[lock, Value::Bool(false)])
+        .unwrap();
+    session
+        .host()
+        .unwrap()
+        .native("SetGameSpeed", std::slice::from_ref(&fast))
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+        fast
+    );
+    session
+        .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+        .unwrap();
+    assert_eq!(
+        session.host().unwrap().objects().native_game_point(),
+        Some(clock::Point {
+            cycle: 0,
+            local: 0.375f32.to_bits()
+        })
+    );
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn counter_speed_changes_do_not_rewrite_a_pending_or_active_grant() {
+    use pcx_script::Host;
+    let script = "\
+globals
+timer t=CreateTimer()
+integer trace=0
+endglobals
+function switch takes nothing returns nothing
+set trace=trace+1
+call SetGameSpeed(COUNTER_FAST)
+endfunction
+function config takes nothing returns nothing
+endfunction
+function main takes nothing returns nothing
+call TimerStart(t,0.0625,false,function switch)
+endfunction
+";
+    for pending in [false, true] {
+        let mut app = timer_app();
+        publish_counter_map(&mut app, script);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let input = Some(Duration::from_millis(50));
+        if pending {
+            assert!(session.advance_native_counter_frame(input, 0).is_err());
+            let fast = session.global("COUNTER_FAST").unwrap();
+            session
+                .host()
+                .unwrap()
+                .native("SetGameSpeed", &[fast])
+                .unwrap();
+            session.advance_native_counter_frame(None, 16).unwrap();
+        } else {
+            session.advance_native_counter_frame(input, 16).unwrap();
+        }
+        assert_eq!(session.global("trace"), Some(Value::Int(1)));
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: 0.625f32.to_bits()
+            })
+        );
+        assert!(session.advance_timers(1., 16).is_err());
+        session.advance_native_counter_frame(None, 16).unwrap();
+        assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    }
+}
+
+#[cfg(feature = "test-fixtures")]
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn native_speed_changes_require_the_counter_rate_consumer() {
+    use pcx_script::Host;
+    for producer in 0..3 {
+        let mut app = timer_app();
+        publish_counter_map(
+            &mut app,
+            "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+        );
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        let frame = clock::FrameInput {
+            game_elapsed: Duration::ZERO,
+            real_elapsed_ms: 0,
+        };
+        match producer {
+            0 => {
+                pcx_play::campaign_host::advance_paced_tick(&mut session, Duration::ZERO, 0., 16)
+                    .unwrap();
+            }
+            1 => {
+                session.advance_native_frame(Some(frame), 16).unwrap();
+            }
+            _ => {
+                session
+                    .advance_native_counter_frame(Some(Duration::ZERO), 16)
+                    .unwrap();
+            }
+        }
+        let normal = session.global("COUNTER_NORMAL").unwrap();
+        let fast = session.global("COUNTER_FAST").unwrap();
+        let before = format!(
+            "{:?}",
+            session.host().unwrap().objects().test_native_clock_state()
+        );
+        let result = session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", std::slice::from_ref(&fast));
+        if producer == 2 {
+            result.unwrap();
+            assert_eq!(
+                session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+                fast
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "producer {producer} accepted an unused speed change"
+            );
+            assert_eq!(
+                session.host().unwrap().native("GetGameSpeed", &[]).unwrap(),
+                normal
+            );
+        }
+        assert_eq!(
+            format!(
+                "{:?}",
+                session.host().unwrap().objects().test_native_clock_state()
+            ),
+            before
+        );
+        session
+            .host()
+            .unwrap()
+            .native("SetGameSpeed", &[if producer == 2 { fast } else { normal }])
+            .unwrap();
+        match producer {
+            0 => {
+                pcx_play::campaign_host::advance_paced_tick(
+                    &mut session,
+                    Duration::from_millis(250),
+                    0.25,
+                    16,
+                )
+                .unwrap();
+            }
+            1 => {
+                session
+                    .advance_native_frame(
+                        Some(clock::FrameInput {
+                            game_elapsed: Duration::from_millis(250),
+                            ..frame
+                        }),
+                        16,
+                    )
+                    .unwrap();
+            }
+            _ => {
+                session
+                    .advance_native_counter_frame(Some(Duration::from_millis(25)), 16)
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            Some(clock::Point {
+                cycle: 0,
+                local: if producer == 2 { 0.375f32 } else { 0.25f32 }.to_bits()
+            })
+        );
+    }
+}
+
+fn counter_runtime(app: &mut App, step: Duration, budget: usize) -> CampaignRuntime {
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::ZERO), 64)
+        .unwrap();
+    let mut runtime = CampaignRuntime::new(step, 64, budget);
+    assert_eq!(runtime.advance_ticks(&mut session, 0).unwrap(), 0);
+    runtime
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_wall_update_keeps_one_real_frame_after_all_game_quanta() {
+    let mut app = timer_app();
+    publish_counter_map(&mut app, PAIRED_SLEEP);
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), 64);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.advance(&mut session, Duration::from_millis(100));
+    assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+    assert_eq!(runtime.tick(), 4);
+    assert!(runtime.pending().is_zero());
+    assert_eq!(session.global("trace"), Some(Value::Int(12)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        1f32.to_bits()
+    );
+    runtime.advance(&mut session, Duration::from_millis(25));
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("remaining"), Some(Value::Real(0.25)));
+    assert_eq!(runtime.tick(), 5);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_explicit_ticks_progress_real_sleep_while_the_game_is_paused() {
+    let script = "globals\ntrigger action=CreateTrigger()\ntimer starter=CreateTimer()\ninteger trace=0\nendglobals\nfunction wait takes nothing returns nothing\nset trace=1\ncall PauseGame(true)\ncall TriggerSleepAction(0.125)\nset trace=2\ncall PauseGame(false)\nendfunction\nfunction begin takes nothing returns nothing\ncall TriggerExecute(action)\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TriggerAddAction(action,function wait)\ncall TimerStart(starter,0.0625,false,function begin)\nendfunction\n";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), 64);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert_eq!(runtime.advance_ticks(&mut session, 2).unwrap(), 2);
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.25f32.to_bits()
+    );
+    assert_eq!(runtime.advance_ticks(&mut session, 3).unwrap(), 3);
+    assert_eq!(session.global("trace"), Some(Value::Int(1)));
+    let real = session
+        .host()
+        .unwrap()
+        .objects()
+        .native_queue_point(clock::Domain::Real)
+        .unwrap();
+    assert!(
+        f32::from_bits(real.local) < 0.125,
+        "source addition must retain the pre-deadline cursor"
+    );
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(session.global("trace"), Some(Value::Int(2)));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.25f32.to_bits()
+    );
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.5f32.to_bits()
+    );
+    assert_eq!(runtime.tick(), 7);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_budget_retry_counts_only_committed_frames_and_never_replays_input() {
+    let script = "globals\ntimer a=CreateTimer()\ntimer b=CreateTimer()\ntimer c=CreateTimer()\ninteger trace=0\nendglobals\nfunction one takes nothing returns nothing\nset trace=trace*10+1\nendfunction\nfunction two takes nothing returns nothing\nset trace=trace*10+2\nendfunction\nfunction three takes nothing returns nothing\nset trace=trace*10+3\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(a,0.0625,false,function one)\ncall TimerStart(b,0.125,false,function two)\ncall TimerStart(c,0.1875,false,function three)\nendfunction\n";
+    let run = |budget| {
+        let mut app = timer_app();
+        publish_counter_map(&mut app, script);
+        let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), budget);
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_millis(100));
+        if budget == 1 {
+            assert!(runtime.last_error.is_none());
+            assert_eq!(runtime.tick(), 0);
+            assert_eq!(runtime.pending(), Duration::from_millis(100));
+            assert_eq!(session.global("trace"), Some(Value::Int(1)));
+            assert!(matches!(
+                runtime.advance_ticks(&mut session, 1),
+                Err(peacecraft3::campaign_runtime::CampaignStepError::PendingFrameTime)
+            ));
+        }
+        for _ in 0..8 {
+            if runtime.pending().is_zero() {
+                break;
+            }
+            runtime.advance(&mut session, Duration::ZERO);
+        }
+        assert!(runtime.last_error.is_none(), "{:?}", runtime.last_error);
+        assert!(runtime.pending().is_zero());
+        assert_eq!(runtime.tick(), 4);
+        let trace = session.global("trace");
+        let objects = session.host().unwrap().objects();
+        (
+            trace,
+            objects.native_game_point(),
+            objects.native_queue_point(clock::Domain::Real),
+            runtime.tick(),
+        )
+    };
+    assert_eq!(run(1), run(64));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_submillisecond_transport_and_explicit_ticks_keep_speed_domains_separate() {
+    use std::num::NonZeroU32;
+    let script = "function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n";
+    let mut app = timer_app();
+    publish_counter_map(&mut app, script);
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(1), 64);
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    runtime.advance(&mut session, Duration::from_micros(500));
+    assert_eq!(runtime.tick(), 0);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real)
+            .unwrap()
+            .local,
+        0
+    );
+    runtime.set_speed(NonZeroU32::new(2).unwrap());
+    runtime.advance(&mut session, Duration::from_micros(250));
+    assert_eq!(runtime.tick(), 1);
+    let before = session
+        .host()
+        .unwrap()
+        .objects()
+        .native_queue_point(clock::Domain::Real);
+    runtime.view_paused = true;
+    runtime.advance(&mut session, Duration::from_secs(1));
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_queue_point(clock::Domain::Real),
+        before
+    );
+    runtime.view_paused = false;
+    runtime.advance(&mut session, Duration::from_millis(24));
+    assert_eq!(runtime.tick(), 49);
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(runtime.tick(), 50);
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects()
+            .native_game_point()
+            .unwrap()
+            .local,
+        0.5f32.to_bits()
+    );
+    assert!(matches!(
+        runtime.advance_ticks(&mut session, 65),
+        Err(peacecraft3::campaign_runtime::CampaignStepError::TickBudget { .. })
+    ));
+    assert_eq!(runtime.tick(), 50);
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_vm_fault_is_sticky_and_session_replacement_resets_transport_accounting() {
+    let mut app = timer_app();
+    publish_counter_map(
+        &mut app,
+        "native CounterUnsupported takes nothing returns nothing\nglobals\ntimer t=CreateTimer()\nendglobals\nfunction fail takes nothing returns nothing\ncall CounterUnsupported()\nendfunction\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(t,0.0625,false,function fail)\nendfunction\n",
+    );
+    let mut runtime = counter_runtime(&mut app, Duration::from_millis(25), 64);
+    {
+        let mut session = app
+            .world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>();
+        runtime.advance(&mut session, Duration::from_millis(25));
+        assert!(
+            runtime
+                .last_error
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("CounterUnsupported")
+        );
+        assert_eq!(runtime.tick(), 0);
+        let before = session.host().unwrap().objects().native_game_point();
+        let pending = session
+            .host()
+            .unwrap()
+            .objects()
+            .native_counter_pending_ns();
+        runtime.advance(&mut session, Duration::from_secs(1));
+        assert_eq!(
+            session.host().unwrap().objects().native_game_point(),
+            before
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .native_counter_pending_ns(),
+            pending
+        );
+    }
+    publish_counter_map(
+        &mut app,
+        "globals\ninteger replacement=73\nendglobals\nfunction config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\nendfunction\n",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    session
+        .advance_native_counter_frame(Some(Duration::ZERO), 64)
+        .unwrap();
+    runtime.advance(&mut session, Duration::from_secs(1));
+    assert_eq!(runtime.tick(), 0);
+    assert!(runtime.pending().is_zero());
+    assert!(runtime.last_error.is_none());
+    runtime.advance(&mut session, Duration::from_millis(25));
+    assert_eq!(runtime.tick(), 1);
+    assert_eq!(session.global("replacement"), Some(Value::Int(73)));
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn app_counter_factory_selects_before_global_config_and_main_timer_requests() {
+    let mut app = App::new();
+    peacecraft3::map_requests::install(&mut app);
+    peacecraft3::campaign_startup::install_native_counter(&mut app);
+    publish_counter_map(
+        &mut app,
+        "globals\ntimer held=CreateTimer()\ntimer a=CreateTimer()\ntimer b=CreateTimer()\ntimer c=CreateTimer()\ninteger trace=0\nreal global_at=-1.0\nreal config_at=-1.0\nreal main_at=-1.0\nboolean ready=ArmGlobal()\nendglobals\nfunction one takes nothing returns nothing\nset trace=trace*10+1\nset global_at=TimerGetElapsed(held)\nendfunction\nfunction two takes nothing returns nothing\nset trace=trace*10+2\nset config_at=TimerGetElapsed(held)\nendfunction\nfunction three takes nothing returns nothing\nset trace=trace*10+3\nset main_at=TimerGetElapsed(held)\nendfunction\nfunction ArmGlobal takes nothing returns boolean\ncall TimerStart(held,4.0,false,null)\ncall TimerStart(a,0.0625,false,function one)\nreturn true\nendfunction\nfunction config takes nothing returns nothing\ncall TimerStart(b,0.125,false,function two)\nendfunction\nfunction main takes nothing returns nothing\ncall TimerStart(c,0.1875,false,function three)\nendfunction\n",
+    );
+    let mut session = app
+        .world_mut()
+        .resource_mut::<MapScriptSession<MapStartupHost>>();
+    assert!(session.host().unwrap().objects().native_counter_platform());
+    assert_eq!(session.global("ready"), Some(Value::Bool(true)));
+    assert!(session.advance_timers(0.25, 64).is_err());
+    assert_eq!(session.global("trace"), Some(Value::Int(0)));
+    let mut runtime = CampaignRuntime::new(Duration::from_millis(25), 8, 64);
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 0);
+    assert_eq!(runtime.advance_ticks(&mut session, 1).unwrap(), 1);
+    assert_eq!(session.global("trace"), Some(Value::Int(123)));
+    assert_eq!(session.global("global_at"), Some(Value::Real(0.0625)));
+    assert_eq!(session.global("config_at"), Some(Value::Real(0.125)));
+    assert_eq!(session.global("main_at"), Some(Value::Real(0.1875)));
 }

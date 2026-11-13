@@ -448,3 +448,184 @@ fn bounded_music_input(path: impl AsRef<std::path::Path>, limit: u64) -> Vec<u8>
     );
     bytes
 }
+
+#[test]
+fn regular_volume_public_vm_updates_current_and_future_gain_without_changing_thematic() {
+    let common = COMMON.replacen("globals", "native SetMapMusic takes string name, boolean random, integer index returns nothing\nnative PlayThematicMusic takes string path returns nothing\nnative EndThematicMusic takes nothing returns nothing\nglobals", 1);
+    let mut vm = host(&common, "function main takes nothing returns nothing\ncall PlayThematicMusic(\"theme.mp3\")\ncall SetMusicVolume(3)\nendfunction\n")
+        .with_map_music_selection(64).unwrap()
+        .with_play_music(64).unwrap()
+        .with_thematic_music_rules(super::super::music::thematic_rules::tests::rules()).unwrap()
+        .with_regular_music_volume_rules(Ok(volume_rules::tests::rules())).unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    let initial = vm.host().regular_music_volume_request().unwrap().clone();
+    assert_eq!((initial.level, initial.revision), (2, 0));
+    vm.call("main", &[]).unwrap();
+    let before = vm.host().thematic_music_request().unwrap().clone();
+    let updated = vm.host().regular_music_volume_request().unwrap().clone();
+    assert_eq!((updated.level, updated.revision), (3, 1));
+    assert_eq!(updated.rules.gain(updated.level, 1.0, 1.0).unwrap(), 0.25);
+    assert_eq!(
+        vm.host()
+            .native("SetMusicVolume", &[Value::Int(4)])
+            .unwrap(),
+        Value::Null
+    );
+    let updated = vm.host().regular_music_volume_request().unwrap();
+    assert_eq!((updated.level, updated.revision), (4, 2));
+    assert_eq!(vm.host().thematic_music_request(), Some(&before));
+    assert!(
+        vm.host()
+            .native("PlayMusic", &[Value::Str("unsupported.mp3".into())])
+            .unwrap_err()
+            .contains("unqualified")
+    );
+}
+
+#[test]
+fn regular_volume_missing_backend_and_rejected_calls_preserve_accepted_state() {
+    let mut missing = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_volume_rules(Err(
+            "selected backend module absent in source generation 9".into(),
+        ))
+        .unwrap();
+    assert!(missing.regular_music_volume_request().is_none());
+    assert!(
+        missing
+            .native("SetMusicVolume", &[Value::Int(3)])
+            .unwrap_err()
+            .contains("source generation 9")
+    );
+    assert!(missing.music_volume_request().is_none());
+    let mut h = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_volume_rules(Ok(volume_rules::tests::rules()))
+        .unwrap();
+    h.native("SetMusicVolume", &[Value::Int(3)]).unwrap();
+    for args in [
+        vec![],
+        vec![Value::Real(1.)],
+        vec![Value::Int(-1)],
+        vec![Value::Int(5)],
+        vec![Value::Int(1), Value::Int(2)],
+    ] {
+        assert!(h.native("SetMusicVolume", &args).is_err());
+        let current = h.regular_music_volume_request().unwrap();
+        assert_eq!((current.level, current.revision), (3, 1));
+        assert_eq!(h.music_volume_request(), Some(3));
+    }
+    let no_music = format!(
+        "{}globals\nconstant playercolor C=ConvertPlayerColor(37)\nendglobals\n",
+        COMMON.split("native PlayMusic takes").next().unwrap()
+    );
+    let mut undeclared = host(&no_music, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_volume_rules(Ok(volume_rules::tests::rules()))
+        .unwrap();
+    assert!(
+        undeclared
+            .native("SetMusicVolume", &[Value::Int(4)])
+            .is_err()
+    );
+    h.play_music
+        .as_mut()
+        .unwrap()
+        .volume_request
+        .as_mut()
+        .unwrap()
+        .revision = u64::MAX;
+    assert!(h.native("SetMusicVolume", &[Value::Int(2)]).is_err());
+    assert_eq!(h.regular_music_volume_request().unwrap().level, 3);
+    assert_eq!(h.music_volume_request(), Some(3));
+    let next = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_volume_rules(Ok(volume_rules::tests::rules()))
+        .unwrap();
+    assert_eq!(next.regular_music_volume_request().unwrap().level, 2);
+    assert_eq!(next.regular_music_volume_request().unwrap().revision, 0);
+    assert!(
+        host(COMMON, "")
+            .with_regular_music_volume_rules(Ok(volume_rules::tests::rules()))
+            .is_err()
+    );
+    assert!(
+        next.with_regular_music_volume_rules(Ok(volume_rules::tests::rules()))
+            .is_err()
+    );
+}
+
+#[test]
+#[ignore = "requires PCX_THEMATIC_COMMON, PCX_THEMATIC_BLIZZARD, PCX_WAR3_EXE and PCX_MUSIC_BACKEND local selected sources"]
+fn regular_volume_selected_blizzard_percent_helper_reaches_backend_qualified_state() {
+    let read = |key| {
+        String::from_utf8(bounded_music_input(std::env::var_os(key).unwrap(), 4 << 20)).unwrap()
+    };
+    let mut common = pcx_script::parse_script(&read("PCX_THEMATIC_COMMON")).unwrap();
+    let mut blizzard = pcx_script::parse_script(&read("PCX_THEMATIC_BLIZZARD")).unwrap();
+    for item in &mut common.items {
+        if let pcx_script::ast::Item::Globals(globals, _) = item {
+            globals.retain(|global| global.ty.kind.name() == "playercolor");
+        }
+    }
+    blizzard.items.retain(|item| {
+        matches!(item, pcx_script::ast::Item::Function(function)
+        if ["SetMusicVolumeBJ","PercentToInt"].contains(&function.name.as_str()))
+    });
+    let program = Arc::new(
+        pcx_script::resolve_with(
+            &pcx_script::parse_script("").unwrap(),
+            &[
+                Prelude::new("Scripts\\common.j", &common),
+                Prelude::new("Scripts\\Blizzard.j", &blizzard),
+            ],
+        )
+        .unwrap(),
+    );
+    let enums = EnumHost::checked_selected(
+        program,
+        "selected:regular-volume",
+        &["ConvertPlayerColor"],
+        Limits {
+            max_handles: 128,
+            admission_steps: 20_000,
+            expression_depth: 64,
+            expression_work: 20_000,
+        },
+    )
+    .unwrap();
+    let image = bounded_music_input(std::env::var_os("PCX_WAR3_EXE").unwrap(), 32 << 20);
+    let backend_path = std::env::var_os("PCX_MUSIC_BACKEND").unwrap();
+    let backend = bounded_music_input(&backend_path, 4 << 20);
+    let rules = volume_rules::Rules::read(
+        &image,
+        &backend,
+        crate::scripts::AssetIdentity {
+            source: backend_path.to_string_lossy().into_owned(),
+            edition: "Legacy".into(),
+            version: "3.0.0.0".into(),
+        },
+    )
+    .unwrap();
+    let maximum = rules.maximum_level();
+    let mut vm = ObjectHost::checked(enums)
+        .unwrap()
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_volume_rules(Ok(rules))
+        .unwrap()
+        .into_vm();
+    for (percent, level) in [(100.0, maximum), (0.0, 0), (200.0, maximum), (-5.0, 0)] {
+        vm.call("SetMusicVolumeBJ", &[Value::Real(percent)])
+            .unwrap();
+        assert_eq!(
+            vm.host().regular_music_volume_request().unwrap().level,
+            level
+        );
+    }
+}

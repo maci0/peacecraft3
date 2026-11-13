@@ -14,7 +14,7 @@ pub struct DialogBudget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DialogButton {
     pub id: HandleId,
-    pub text: String,
+    pub text: pcx_script::ScriptString,
     pub hotkey: i32,
     /// Executed DialogAddQuitButton's doScoreScreen argument, absent for normal buttons.
     pub quit_score_screen: Option<bool>,
@@ -23,7 +23,7 @@ pub struct DialogButton {
 pub struct ScriptDialog {
     pub id: HandleId,
     /// Unassigned stays absent; an explicitly assigned empty caption stays Some("").
-    pub message: Option<String>,
+    pub message: Option<pcx_script::ScriptString>,
     pub buttons: Vec<DialogButton>,
     pub shown_revision: u64,
     visible_to: BTreeSet<i32>,
@@ -336,7 +336,10 @@ impl ObjectHost {
             ("DialogDestroy" | "DialogClear", [dialog]) => {
                 let id = self.dialog_id(dialog, name)?;
                 let record = state.dialogs.get(&id).expect("live dialog payload");
-                let bytes = record.message.as_ref().map_or(0, String::len)
+                let bytes = record
+                    .message
+                    .as_ref()
+                    .map_or(0, pcx_script::ScriptString::len)
                     + record.buttons.iter().map(|b| b.text.len()).sum::<usize>();
                 let buttons: Vec<_> = record.buttons.iter().map(|b| b.id).collect();
                 for button in &buttons {
@@ -361,9 +364,12 @@ impl ObjectHost {
             }
             ("DialogSetMessage", [dialog, Value::Str(text)]) => {
                 let id = self.dialog_id(dialog, name)?;
-                let text = pcx_script::text::native_map_string(text, strings)
+                let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
                     .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
-                let previous = state.dialogs[&id].message.as_ref().map_or(0, String::len);
+                let previous = state.dialogs[&id]
+                    .message
+                    .as_ref()
+                    .map_or(0, pcx_script::ScriptString::len);
                 let bytes = state
                     .text_bytes
                     .checked_sub(previous)
@@ -371,7 +377,8 @@ impl ObjectHost {
                     .filter(|n| *n <= state.budget.text_bytes)
                     .ok_or_else(|| self.inner.error(name, Failure::Budget("dialog text")))?;
                 let state = self.dialogs.as_mut().expect("dialogs");
-                state.dialogs.get_mut(&id).expect("dialog").message = Some(text.into_owned());
+                state.dialogs.get_mut(&id).expect("dialog").message =
+                    Some(text.into_owned().into());
                 state.text_bytes = bytes;
                 Value::Null
             }
@@ -461,14 +468,14 @@ impl ObjectHost {
     fn add_dialog_button(
         &mut self,
         dialog: &Value,
-        text: &str,
+        text: &pcx_script::ScriptString,
         hotkey: i32,
         quit_score_screen: Option<bool>,
         name: &str,
         strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
     ) -> Result<Value, Error> {
         let id = self.dialog_id(dialog, name)?;
-        let text = pcx_script::text::native_map_string(text, strings)
+        let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
             .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
         let state = self.dialogs.as_ref().expect("dialogs");
         if state.buttons >= state.budget.max_buttons {
@@ -503,7 +510,7 @@ impl ObjectHost {
             .buttons
             .push(DialogButton {
                 id: button,
-                text: text.into_owned(),
+                text: text.into_owned().into(),
                 hotkey,
                 quit_score_screen,
             });

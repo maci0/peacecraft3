@@ -74,6 +74,9 @@ struct UpgradeReplacement {
 }
 
 impl TrainingDeath {
+    pub(super) fn credit(&self) -> Option<&super::players::TrainingDebit> {
+        self.credit.as_ref()
+    }
     pub(super) fn upgraded_decay(&self) -> Option<Option<crate::unit_decay::State>> {
         self.upgrade.as_ref().map(|upgrade| upgrade.decay.clone())
     }
@@ -681,9 +684,12 @@ impl ObjectHost {
             .len()
             .checked_add(start.len())
             .ok_or_else(|| self.training_error("cancel event overflow"))?;
-        let credit = self
-            .prepare_training_change(job.owner, refund, food, events)?
-            .ok_or_else(|| self.training_error("cancel resource transition refused"))?;
+        let credit = if job.structure_upgrade {
+            self.prepare_structure_upgrade_payment(job.owner, refund, true, events)?
+        } else {
+            self.prepare_training_change(job.owner, refund, food, events)?
+        }
+        .ok_or_else(|| self.training_error("cancel resource transition refused"))?;
         if let Some((next_index, head)) = next {
             self.training.jobs[next_index] = head;
         }
@@ -1412,7 +1418,9 @@ impl ObjectHost {
                     ));
                 }
                 self.prepare_upgrade_vitals(producer, &definition)?;
-                let Some(debit) = self.prepare_training_debit(owner, gold, lumber, 0, 0)? else {
+                let Some(debit) =
+                    self.prepare_structure_upgrade_payment(owner, [gold, lumber], false, 0)?
+                else {
                     return Ok(false);
                 };
                 self.training.jobs.push(Training {

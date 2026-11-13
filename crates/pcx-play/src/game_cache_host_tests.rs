@@ -269,19 +269,19 @@ fn cache_admission_and_mutation_refuse_bad_sources_formats_budgets_and_identitie
     let c = cache(&mut h, "f");
     let before = h.inner().handles();
     assert!(
-        h.native("InitGameCache", &[Value::Str("x".repeat(129))])
+        h.native("InitGameCache", &[Value::Str("x".repeat(129).into())])
             .is_err()
     );
     assert_eq!(h.inner().handles(), before);
     assert_eq!(
-        h.native("InitGameCache", &[Value::Str(String::new())])
+        h.native("InitGameCache", &[Value::Str(String::new().into())])
             .unwrap(),
         Value::Null
     );
     let timer = h.native("CreateTimer", &[]).unwrap();
     assert!(h.native("SaveGameCache", &[timer]).is_err());
     let mut bad = args(&c);
-    bad.push(Value::Str("x".repeat(257)));
+    bad.push(Value::Str("x".repeat(257).into()));
     assert!(h.native("StoreString", &bad).is_err());
     assert_eq!(
         h.native("HaveStoredString", &args(&c)).unwrap(),

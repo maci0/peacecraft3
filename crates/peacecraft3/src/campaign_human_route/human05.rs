@@ -162,11 +162,12 @@ fn observe(app: &mut App, footman: [u8; 4]) -> Observation {
             let Some(Value::Str(next)) = &authored_next else {
                 panic!("exit without authored next map: {authored_next:?}; {requests:?}")
             };
-            assert!(
-                requests
-                    .iter()
-                    .all(|r| r.next_level.as_ref() == Some(next) && r.score_screen)
-            );
+            assert!(requests.iter().all(|r| {
+                r.next_level
+                    .as_ref()
+                    .is_some_and(|level| level.as_bytes() == next.as_bytes())
+                    && r.score_screen
+            }));
             println!("Human05 authored exit: target={next:?} requests={requests:?}");
         }
         !requests.is_empty()

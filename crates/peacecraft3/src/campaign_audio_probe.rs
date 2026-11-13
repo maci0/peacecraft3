@@ -399,7 +399,7 @@ fn human01_thematic_ex_seek_restart_and_retirement_reach_audio_entities() {
     call(
         &mut app,
         "PlayThematicMusicEx",
-        &[Value::Str(path.clone()), Value::Int(9580)],
+        &[Value::Str(path.clone().into()), Value::Int(9580)],
     );
     app.update();
     app.update();
@@ -425,7 +425,7 @@ fn human01_thematic_ex_seek_restart_and_retirement_reach_audio_entities() {
             .start_position,
         Some(Duration::from_millis(2401))
     );
-    call(&mut app, "PlayThematicMusic", &[Value::Str(path)]);
+    call(&mut app, "PlayThematicMusic", &[Value::Str(path.into())]);
     let initial = app
         .world_mut()
         .resource_mut::<MapScriptSession<MapStartupHost>>()
@@ -449,6 +449,197 @@ fn human01_thematic_ex_seek_restart_and_retirement_reach_audio_entities() {
     );
     call(&mut app, "EndThematicMusic", &[]);
     app.update();
+    app.insert_resource(MapScriptSession::<MapStartupHost>::default());
+    app.update();
+    let world = app.world_mut();
+    assert_eq!(world.query::<&CampaignMusic>().iter(world).count(), 0);
+    assert!(
+        world
+            .resource::<crate::campaign_audio::CampaignAudio>()
+            .last_error
+            .is_none()
+    );
+}
+
+pub(crate) fn selected_regular_volume_rules() -> pcx_play::playercolor_host::RegularMusicVolumeRules
+{
+    let image_path = std::env::var_os("PCX_WAR3_EXE").expect("explicit selected client");
+    let backend_path = std::env::var_os("PCX_MUSIC_BACKEND").expect("explicit local backend");
+    let read = |path: &std::ffi::OsStr, limit: u64| {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .unwrap()
+            .take(limit + 1)
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert!(bytes.len() as u64 <= limit);
+        bytes
+    };
+    pcx_play::playercolor_host::RegularMusicVolumeRules::read(
+        &read(&image_path, 32 << 20),
+        &read(&backend_path, 4 << 20),
+        pcx_play::scripts::AssetIdentity {
+            source: backend_path.to_string_lossy().into_owned(),
+            edition: "Legacy".into(),
+            version: "3.0.0.0".into(),
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+#[ignore = "requires unchanged Human01 via PCX_NATIVE_CHAPTER_*, pinned local music backend and verified private null audio"]
+fn human01_regular_volume_updates_live_sink_future_track_and_preserves_thematic() {
+    use crate::menu_audio::RegularMusicGain;
+    use bevy::ecs::system::RunSystemOnce;
+    use pcx_script::Host;
+    assert_null_audio_environment();
+    let mut app = crate::native_campaign::tests::started_app();
+    app.add_plugins((
+        bevy::asset::AssetPlugin::default(),
+        bevy::audio::AudioPlugin::default(),
+    ));
+    crate::campaign_audio::install(&mut app);
+    app.init_resource::<crate::menu_settings::Backend>();
+    let mut runtime = begin(&mut app);
+    for _ in 0..SINK_BATCHES {
+        advance(&mut app, &mut runtime);
+        let world = app.world_mut();
+        if world.query::<&AudioSink>().iter(world).next().is_some() {
+            break;
+        }
+    }
+    let call = |app: &mut App, name, args: &[Value]| {
+        app.world_mut()
+            .resource_mut::<MapScriptSession<MapStartupHost>>()
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(name, args)
+            .unwrap();
+    };
+    let theme_path = {
+        let world = app.world_mut();
+        let (track, sink, regular) = world
+            .query::<(&CampaignMusic, &AudioSink, Option<&RegularMusicGain>)>()
+            .single(world)
+            .unwrap();
+        assert!(regular.is_none());
+        assert!(!sink.is_paused() && !sink.empty());
+        track.member.clone()
+    };
+    call(&mut app, "SetMusicVolume", &[Value::Int(0)]);
+    app.update();
+    app.world_mut()
+        .run_system_once(crate::menu_audio::apply_user_volume)
+        .unwrap();
+    {
+        let world = app.world_mut();
+        let (sink, regular) = world
+            .query_filtered::<(&AudioSink, Option<&RegularMusicGain>), With<CampaignMusic>>()
+            .single(world)
+            .unwrap();
+        assert!(regular.is_none());
+        assert_eq!(sink.volume(), bevy::audio::Volume::Linear(1.0));
+    }
+    call(&mut app, "EndThematicMusic", &[]);
+    call(
+        &mut app,
+        "SetMapMusic",
+        &[
+            Value::Str("Music".into()),
+            Value::Bool(false),
+            Value::Int(0),
+        ],
+    );
+    for _ in 0..SINK_BATCHES {
+        app.update();
+    }
+    app.world_mut()
+        .run_system_once(crate::menu_audio::apply_user_volume)
+        .unwrap();
+    let (first, maximum) = {
+        let world = app.world_mut();
+        let (entity, sink, gain) = world
+            .query::<(Entity, &AudioSink, &RegularMusicGain)>()
+            .single(world)
+            .unwrap();
+        assert_eq!(gain.request.level, 0);
+        assert_eq!(sink.volume(), bevy::audio::Volume::Linear(0.0));
+        assert!(!sink.is_paused() && !sink.empty());
+        (entity, gain.request.rules.maximum_level())
+    };
+    call(
+        &mut app,
+        "SetMusicVolume",
+        &[Value::Int(i32::try_from(maximum).unwrap())],
+    );
+    app.world_mut()
+        .resource_mut::<crate::menu_settings::Backend>()
+        .audio
+        .music_gain = 0.5;
+    app.update();
+    app.world_mut()
+        .run_system_once(crate::menu_audio::apply_user_volume)
+        .unwrap();
+    {
+        let sink = app.world().get::<AudioSink>(first).unwrap();
+        let gain = app.world().get::<RegularMusicGain>(first).unwrap();
+        let expected = gain.request.rules.gain(maximum, gain.group, 0.5).unwrap();
+        assert_eq!(gain.request.level, maximum);
+        assert_eq!(sink.volume(), bevy::audio::Volume::Linear(expected));
+        assert_ne!(expected, 0.5);
+    }
+    call(&mut app, "SetMusicVolume", &[Value::Int(0)]);
+    call(&mut app, "ClearMapMusic", &[]);
+    app.update();
+    call(
+        &mut app,
+        "SetMapMusic",
+        &[
+            Value::Str("Music".into()),
+            Value::Bool(false),
+            Value::Int(0),
+        ],
+    );
+    for _ in 0..SINK_BATCHES {
+        app.update();
+    }
+    app.world_mut()
+        .run_system_once(crate::menu_audio::apply_user_volume)
+        .unwrap();
+    {
+        let world = app.world_mut();
+        let (entity, sink, gain) = world
+            .query::<(Entity, &AudioSink, &RegularMusicGain)>()
+            .single(world)
+            .unwrap();
+        assert_ne!(entity, first);
+        assert_eq!(gain.request.level, 0);
+        assert_eq!(sink.volume(), bevy::audio::Volume::Linear(0.0));
+        assert!(!sink.is_paused() && !sink.empty());
+    }
+    call(
+        &mut app,
+        "PlayThematicMusic",
+        &[Value::Str(theme_path.into())],
+    );
+    for _ in 0..SINK_BATCHES {
+        app.update();
+    }
+    app.world_mut()
+        .run_system_once(crate::menu_audio::apply_user_volume)
+        .unwrap();
+    {
+        let world = app.world_mut();
+        let (sink, regular) = world
+            .query_filtered::<(&AudioSink, Option<&RegularMusicGain>), With<CampaignMusic>>()
+            .single(world)
+            .unwrap();
+        assert!(regular.is_none());
+        assert_eq!(sink.volume(), bevy::audio::Volume::Linear(0.5));
+    }
     app.insert_resource(MapScriptSession::<MapStartupHost>::default());
     app.update();
     let world = app.world_mut();

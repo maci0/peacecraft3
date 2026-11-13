@@ -113,6 +113,7 @@ fn fixture_with_training_configured(
                 refund_rate,
                 relative_cost: true,
                 damage_penalty: false,
+                in_progress_id_change: false,
             }),
         ),
         admit_numeric,
@@ -207,6 +208,7 @@ fn fixture_with_training_refunds_configured(
                 undead_build_ability: *b"ZYX8",
                 repair_ability: *b"ZYX7",
                 assistant_debit: 3,
+                assistant_reconfigure_horizon: 7,
                 refund_rate: 0.37,
                 damage_refund_penalty: true,
                 life_drain_rate: 4.25,
@@ -1567,6 +1569,7 @@ fn ai_production_fixture_with_refund(
                 refund_rate: 0.37,
                 relative_cost: true,
                 damage_penalty: false,
+                in_progress_id_change: false,
             }),
         ),
         true,
@@ -2571,6 +2574,7 @@ fn structure_upgrade_source_cost_mode_and_rate_survive_pause_cancel_and_death_on
                 refund_rate: 0.23,
                 relative_cost,
                 damage_penalty: false,
+                in_progress_id_change: false,
             };
             let (mut vm, actor, producer) = upgrade_fixture(Some(policy));
             let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
@@ -2646,6 +2650,7 @@ fn structure_upgrade_missing_policy_and_unqualified_damage_refuse_before_debit()
             refund_rate: 0.23,
             relative_cost: false,
             damage_penalty: true,
+            in_progress_id_change: false,
         }),
     ] {
         let (mut vm, actor, producer) = upgrade_fixture(policy);
@@ -2673,6 +2678,7 @@ fn structure_upgrade_checks_the_derived_delta_for_funds_and_completes_after_sour
         refund_rate: 0.23,
         relative_cost: false,
         damage_penalty: false,
+        in_progress_id_change: false,
     };
     let (mut vm, actor, producer) = upgrade_fixture(Some(policy));
     let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
@@ -2752,6 +2758,7 @@ fn upgrade_pool_fixture_with_edits(
             refund_rate: 0.23,
             relative_cost: false,
             damage_penalty: false,
+            in_progress_id_change: false,
         }),
         |mut host| {
             // Synthetic source rounder; production reads this policy from the selected image.
@@ -3060,6 +3067,7 @@ fn structure_upgrade_changed_death_award_or_flight_class_refuses_before_queue_or
                 refund_rate: 0.23,
                 relative_cost: false,
                 damage_penalty: false,
+                in_progress_id_change: false,
             }),
             |mut host| {
                 let catalog = host.unit_catalog().unwrap();
@@ -3086,5 +3094,289 @@ fn structure_upgrade_changed_death_award_or_flight_class_refuses_before_queue_or
         assert_eq!(h.executed_unit(producer).unwrap(), &record);
         assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 47);
         assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 64);
+    }
+}
+
+struct UpgradeCreditCatalog(Arc<dyn pcx_sim::world::ObjectCatalog + Send + Sync>);
+impl pcx_sim::world::ObjectCatalog for UpgradeCreditCatalog {
+    fn resolve(&self, code: [u8; 4]) -> Result<Definition, pcx_sim::world::ResolutionProblem> {
+        let mut definition = self.0.resolve(code)?;
+        if code == *b"b001" {
+            definition.fields.get_mut(b"T003").unwrap().value = Ok(FieldValue::Cell("117".into()));
+        }
+        Ok(definition)
+    }
+}
+
+fn upgrade_credit_fixture() -> (Vm, HandleId, HandleId) {
+    upgrade_fixture_configured(
+        Some(crate::training_rules::UpgradePolicy {
+            refund_rate: 0.23,
+            relative_cost: false,
+            damage_penalty: false,
+            in_progress_id_change: false,
+        }),
+        |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradeCreditCatalog(catalog)));
+            host
+        },
+    )
+}
+
+#[test]
+fn structure_upgrade_signed_credit_checks_both_banks_and_clamps_source_ceiling() {
+    let (mut vm, actor, producer) = upgrade_credit_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    vm.host().inner.training_money_fixture(3, 301);
+    fund(&mut vm, owner, 83, 15);
+    let h = &mut vm.host().inner;
+    let before = h.executed_unit(producer).unwrap().clone();
+    assert!(
+        !h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 83);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 15);
+    assert_eq!(h.executed_unit(producer).unwrap(), &before);
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    fund(&mut vm, owner, 83, 16);
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 100);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 0);
+    let detail = h.unit_training_details(producer).unwrap();
+    assert_eq!((detail[0].gold, detail[0].lumber), (-43, 16));
+    assert_eq!((detail[0].refund_gold, detail[0].refund_lumber), (-9, 3));
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 91);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 3);
+}
+
+#[test]
+fn structure_upgrade_signed_cancel_underfunded_recipient_clamps_once_and_keeps_paid_identity() {
+    let (mut vm, actor, producer) = upgrade_credit_fixture();
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 0, 16);
+    let h = &mut vm.host().inner;
+    assert!(
+        h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+            .unwrap()
+    );
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 43);
+    let Value::Handle(recipient) = h.native("Player", &[Value::Int(5)]).unwrap() else {
+        panic!("player")
+    };
+    fund(&mut vm, recipient, 4, 7);
+    let h = &mut vm.host().inner;
+    h.native(
+        "SetUnitOwner",
+        &[
+            Value::Handle(producer),
+            Value::Handle(recipient),
+            Value::Bool(false),
+        ],
+    )
+    .unwrap();
+    let detail = h.unit_training_details(producer).unwrap();
+    assert_eq!((detail[0].gold, detail[0].lumber), (-43, 16));
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_GOLD"), 4);
+    assert!(h.cancel_unit_training(producer, 0).unwrap());
+    assert!(!h.cancel_unit_training(producer, 0).unwrap());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 43);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 0);
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+    assert_eq!(bank(h, recipient, "PLAYER_STATE_RESOURCE_LUMBER"), 10);
+    step(&mut vm, 20.);
+    assert_eq!(
+        vm.host()
+            .inner
+            .executed_unit(producer)
+            .unwrap()
+            .definition
+            .rawcode,
+        *b"b001"
+    );
+}
+
+#[test]
+fn structure_upgrade_signed_credit_survives_completion_death_and_removal_without_refund() {
+    for action in ["complete", "KillUnit", "RemoveUnit"] {
+        let (mut vm, actor, producer) = upgrade_credit_fixture();
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        fund(&mut vm, owner, 0, 16);
+        let h = &mut vm.host().inner;
+        assert!(
+            h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap()
+        );
+        if action != "complete" {
+            h.native(action, &[Value::Handle(producer)]).unwrap();
+            h.native(action, &[Value::Handle(producer)]).unwrap();
+        }
+        step(&mut vm, 20.);
+        let h = &mut vm.host().inner;
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 43);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 0);
+        assert!(!h.producer_has_training(producer));
+        if action != "RemoveUnit" {
+            assert_eq!(
+                h.executed_unit(producer).unwrap().definition.rawcode,
+                *b"d001"
+            );
+        }
+    }
+}
+
+#[test]
+fn structure_upgrade_signed_credit_missing_numeric_or_bounds_and_overflow_are_atomic() {
+    for mode in ["overflow", "bounds", "numeric"] {
+        let (mut vm, actor, producer) = upgrade_credit_fixture();
+        let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+        fund(&mut vm, owner, 0, 16);
+        let h = &mut vm.host().inner;
+        if mode == "numeric" {
+            assert!(
+                h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                    .unwrap()
+            );
+            h.training_clear_numeric_fixture();
+        } else if mode == "overflow" {
+            h.training_money_fixture(i32::MAX, i32::MAX);
+        } else {
+            h.training_money_fixture(1, -1);
+        }
+        let before = h.executed_unit(producer).unwrap().clone();
+        let queue = h.unit_training_queue(producer).unwrap();
+        let gold = bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD");
+        let lumber = bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER");
+        let error = if mode == "numeric" {
+            h.cancel_unit_training(producer, 0).unwrap_err()
+        } else {
+            h.set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap_err()
+        };
+        assert!(
+            error.to_string().contains(if mode == "numeric" {
+                "numeric"
+            } else if mode == "overflow" {
+                "overflow"
+            } else {
+                "bounds"
+            }),
+            "{error}"
+        );
+        assert_eq!(h.executed_unit(producer).unwrap(), &before);
+        assert_eq!(h.unit_training_queue(producer).unwrap(), queue);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), gold);
+        assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), lumber);
+    }
+}
+
+#[test]
+fn structure_upgrade_pending_form_mode_refuses_before_credit_or_queue_mutation() {
+    let (mut vm, actor, producer) = upgrade_fixture_configured(
+        Some(crate::training_rules::UpgradePolicy {
+            refund_rate: 0.23,
+            relative_cost: false,
+            damage_penalty: false,
+            in_progress_id_change: true,
+        }),
+        |mut host| {
+            let catalog = host.unit_catalog().unwrap();
+            host.construction_test_catalog(Arc::new(UpgradeCreditCatalog(catalog)));
+            host
+        },
+    );
+    let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+    fund(&mut vm, owner, 0, 16);
+    let h = &mut vm.host().inner;
+    let before = h.executed_unit(producer).unwrap().clone();
+    let error = h
+        .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("UpgradeInProgressIdChange"),
+        "{error}"
+    );
+    assert_eq!(h.executed_unit(producer).unwrap(), &before);
+    assert!(h.unit_training_queue(producer).unwrap().is_empty());
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+    assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 16);
+}
+
+#[test]
+fn malformed_upgrade_profiles_preserve_public_training_and_research_and_refuse_upgrades_atomically()
+{
+    for key in [
+        "UpgradeRefundRate",
+        "RelativeUpgradeCost",
+        "UpgradeDamageRefundPenalty",
+        "UpgradeInProgressIdChange",
+    ] {
+        for value in ["bogus", "NaN", "1,0"] {
+            let profile =
+                format!("[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\n{key}={value}\n");
+            let parsed = || {
+                crate::training_rules::tests::fixture_from_profiles(&[(
+                    "invalid upgrade only",
+                    profile.as_bytes(),
+                )])
+                .unwrap()
+            };
+            let (mut vm, actor, producer) = fixture();
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            h.training_policy_fixture(parsed());
+            h.set_ai_replacement_count(4, 4).unwrap();
+            h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+            h.fill_ai_guard_posts(4).unwrap();
+            assert_eq!(
+                h.unit_training_queue(producer).unwrap().len(),
+                1,
+                "{key}={value}"
+            );
+            assert!(h.cancel_unit_training(producer, 0).unwrap());
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 74);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 96);
+
+            let (mut vm, actor, producer) = research_fixture();
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            h.training_policy_fixture(parsed());
+            h.set_ai_upgrade(4, i32::from_be_bytes(RESEARCHED)).unwrap();
+            assert_eq!(
+                h.unit_training_queue(producer).unwrap().len(),
+                1,
+                "{key}={value}"
+            );
+            assert!(h.cancel_unit_training(producer, 0).unwrap());
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 80);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 92);
+
+            let (mut vm, actor, producer) = upgrade_credit_fixture();
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 0, 16);
+            let h = &mut vm.host().inner;
+            h.training_policy_fixture(parsed());
+            let record = h.executed_unit(producer).unwrap().clone();
+            let random = h.script_random_state().cloned();
+            let handles = h.inner().handles();
+            let error = h
+                .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap_err();
+            assert!(error.to_string().contains(key), "{key}={value}: {error}");
+            assert_eq!(h.executed_unit(producer).unwrap(), &record);
+            assert_eq!(h.script_random_state(), random.as_ref());
+            assert_eq!(h.inner().handles(), handles);
+            assert!(h.unit_training_queue(producer).unwrap().is_empty());
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 16);
+        }
     }
 }

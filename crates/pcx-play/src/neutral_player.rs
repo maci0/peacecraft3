@@ -381,6 +381,12 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        if name == self.rule.native_name {
+            return Ok(false);
+        }
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         name != self.rule.native_name && self.inner.suspend(name, args)
     }
@@ -410,6 +416,17 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
     }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner.string_hash(bytes)
+    }
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner.substring(bytes, start, end)
     }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.context.scripts.native_table_string(id)
@@ -445,4 +462,6 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::{native_hash_world_fixture, native_string_world_fixture};
+pub(crate) use tests::{
+    native_case_world_fixture, native_hash_world_fixture, native_string_world_fixture,
+};

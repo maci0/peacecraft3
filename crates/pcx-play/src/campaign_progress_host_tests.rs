@@ -183,7 +183,7 @@ endfunction
         Some("Maps\\Campaign\\Synthetic02.w3m")
     );
     vm.host()
-        .native(NEXT_LEVEL, &[Value::Str(String::new())])
+        .native(NEXT_LEVEL, &[Value::Str(String::new().into())])
         .unwrap();
     assert_eq!(vm.host().next_level(), None);
 }

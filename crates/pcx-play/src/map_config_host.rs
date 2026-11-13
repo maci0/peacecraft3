@@ -16,8 +16,8 @@ pub struct StartLocation {
 /// Only values actually assigned by executed script calls; no implicit game defaults.
 #[derive(Debug)]
 pub struct MapConfig {
-    pub name: Option<String>,
-    pub description: Option<String>,
+    pub name: Option<pcx_script::ScriptString>,
+    pub description: Option<pcx_script::ScriptString>,
     pub players: Option<i32>,
     pub teams: Option<i32>,
     pub placement: Option<HandleId>,
@@ -160,7 +160,7 @@ impl ObjectHost {
             .ok_or_else(|| fail(Failure::ConfigState("not admitted")))?;
         match (name, args) {
             ("SetMapName" | "SetMapDescription", [Value::Str(text)]) => {
-                let text = pcx_script::text::native_map_string(text, strings)
+                let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
                     .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
                 let other = if name == "SetMapName" {
                     &config.description
@@ -168,17 +168,17 @@ impl ObjectHost {
                     &config.name
                 };
                 text.len()
-                    .checked_add(other.as_ref().map_or(0, String::len))
+                    .checked_add(other.as_ref().map_or(0, pcx_script::ScriptString::len))
                     .filter(|&n| n <= config.budget.text_bytes)
                     .ok_or_else(|| fail(Failure::Budget("map config text")))?;
-                let mut copy = String::new();
+                let mut copy = Vec::new();
                 copy.try_reserve_exact(text.len())
                     .map_err(|_| fail(Failure::Capacity))?;
-                copy.push_str(&text);
+                copy.extend_from_slice(&text);
                 if name == "SetMapName" {
-                    config.name = Some(copy);
+                    config.name = Some(copy.into());
                 } else {
-                    config.description = Some(copy);
+                    config.description = Some(copy.into());
                 }
                 Ok(Value::Null)
             }

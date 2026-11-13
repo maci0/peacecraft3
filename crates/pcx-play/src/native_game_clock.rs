@@ -7,15 +7,45 @@ use crate::{
     script_random::real,
 };
 use pcx_script::RealOps;
-use std::time::Duration;
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
-#[derive(Clone, Copy, Debug)]
+#[path = "native_game_frame.rs"]
+pub mod frame;
+#[path = "native_sleep_rules.rs"]
+pub mod sleep;
+#[path = "native_turn_rules.rs"]
+pub mod turn;
+pub use frame::FrameInput;
+pub use sleep::Domain;
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueueError {
+    #[error("{0} budget exhausted")]
+    Budget(&'static str),
+    #[error("{0}")]
+    Invalid(String),
+}
+impl From<String> for QueueError {
+    fn from(value: String) -> Self {
+        Self::Invalid(value)
+    }
+}
+impl From<&str> for QueueError {
+    fn from(value: &str) -> Self {
+        Self::Invalid(value.into())
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Rules {
     pub simple: clock::Rules,
     pub numerator: u32,
     pub denominator: u32,
     pub step: u32,
     pub wrap_tolerance: u32,
+    pub frame: frame::Rules,
+    pub sleep: sleep::Rules,
+    pub turn: turn::Rules,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +67,50 @@ struct Pending {
     remainder: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SleepRequest {
+    pub(crate) domain: Domain,
+    pub(crate) delay: u32,
+    pub(crate) origin: Point,
+    pub(crate) epoch: Option<crate::script_numeric::timer_query::Epoch>,
+    pub(crate) point: Option<Point>,
+}
+
+impl SleepRequest {
+    pub fn domain(self) -> Domain {
+        self.domain
+    }
+    pub fn boundary(self) -> Option<Point> {
+        self.point
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FramePhase {
+    Queued,
+    CounterQuanta,
+    Game,
+    Real,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Frame {
+    input: FrameSource,
+    phase: FramePhase,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FrameSource {
+    Independent(FrameInput),
+    Counter { raw_ms: u32, duration: Duration },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Input {
+    Independent(FrameInput),
+    Counter(Duration),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Driver {
     Fresh,
@@ -53,6 +127,14 @@ pub struct State {
     credit: u128,
     pending: Option<Pending>,
     selected: Option<Point>,
+    real: frame::Queue,
+    frames: Arc<VecDeque<Frame>>,
+    selected_domain: Option<Domain>,
+    turn_credit_ms: u32,
+    turn_carry: u32,
+    sub_ms_nanos: u32,
+    counter_platform: bool,
+    completed_counter_ns: u128,
 }
 
 fn word(b: &[u8], at: usize) -> Result<u32, String> {
@@ -65,7 +147,9 @@ fn shape(b: &[u8], at: usize, expected: &[u8]) -> Result<(), String> {
     if b.get(at..at.saturating_add(expected.len())) == Some(expected) {
         Ok(())
     } else {
-        Err("native game clock instruction relationship changed".into())
+        Err(format!(
+            "native game clock instruction relationship changed at window offset {at:#x}"
+        ))
     }
 }
 fn call(b: &[u8], base: u32, at: usize, target: u32) -> Result<(), String> {
@@ -102,6 +186,16 @@ impl Rules {
                 .ok_or_else(|| "native game clock mapped window truncated".into())
         };
         let simple = clock::Rules::read(&mut read)?;
+        let frame = frame::Rules::read(&mut read, numeric)
+            .map_err(|e| format!("native real clock: {e}"))?;
+        let sleep = sleep::Rules::read(&mut read).map_err(|e| format!("native sleep: {e}"))?;
+        let turn = turn::Rules::read(
+            &mut read,
+            |va, len| u32::try_from(len).is_ok_and(|len| pe.zero_filled(va, len)),
+            &frame,
+            budget.profile_bytes,
+        )
+        .map_err(|e| format!("native local turn: {e}"))?;
         verify_timed_event(&mut read)?;
         let (numerator, denominator, destination) = decode_step(&read(0x406730, 56, true)?)?;
         let consumer = read(0x5af277, 43, true)?;
@@ -125,12 +219,17 @@ impl Rules {
             denominator,
             step,
             wrap_tolerance,
+            frame,
+            sleep,
+            turn,
         };
         rules.validate()?;
         Ok(rules)
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.frame.validate(self.simple.cycle)?;
+        self.turn.validate()?;
         for value in [
             self.simple.origin,
             self.simple.cycle,
@@ -315,9 +414,82 @@ fn decode_wrap(
     word(&read(word(&b, 90)?, 4, false)?, 0)
 }
 
+fn prepare_drain(rules: &Rules, point: Point, delta: u32) -> Result<Pending, String> {
+    let outer = real::add(point.local, delta).map_err(|e| e.to_string())?;
+    if f32::from_bits(outer) < f32::from_bits(point.local) {
+        return Err("native queue delta moved backwards".into());
+    }
+    let wrapped = real::below_or_equal(rules.simple.cycle.to_bits(), outer);
+    let (local, remainder) = if wrapped {
+        point
+            .cycle
+            .checked_add(1)
+            .ok_or("native queue epoch overflow")?;
+        let remainder =
+            real::sub(outer, rules.simple.cycle.to_bits()).map_err(|e| e.to_string())?;
+        let distance = real::abs(
+            real::sub(remainder, rules.simple.origin.to_bits()).map_err(|e| e.to_string())?,
+        );
+        let remainder = if f32::from_bits(distance) < f32::from_bits(rules.wrap_tolerance) {
+            rules.simple.origin.to_bits()
+        } else {
+            remainder
+        };
+        (rules.simple.cycle.to_bits(), Some(remainder))
+    } else {
+        (outer, None)
+    };
+    Ok(Pending {
+        segment: Segment {
+            point: Point {
+                cycle: point.cycle,
+                local,
+            },
+            ends_cycle: wrapped,
+        },
+        remainder,
+    })
+}
+
+fn finish_drain(
+    point: &mut Point,
+    pending: &mut Option<Pending>,
+    selected: Option<Point>,
+    segment: Segment,
+) -> Result<bool, String> {
+    let current = pending.ok_or("native queue has no pending drain")?;
+    if current.segment != segment || selected.is_some() {
+        return Err("native queue drain context mismatch".into());
+    }
+    if let Some(remainder) = current.remainder {
+        let cycle = segment
+            .point
+            .cycle
+            .checked_add(1)
+            .ok_or("native queue epoch overflow")?;
+        *pending = Some(Pending {
+            segment: Segment {
+                point: Point {
+                    cycle,
+                    local: remainder,
+                },
+                ends_cycle: false,
+            },
+            remainder: None,
+        });
+        Ok(false)
+    } else {
+        *point = segment.point;
+        *pending = None;
+        Ok(true)
+    }
+}
+
 impl State {
     pub fn new(rules: Rules) -> Result<Self, String> {
         rules.validate()?;
+        let origin = rules.simple.origin.to_bits();
+        let turn_carry = rules.turn.initial_carry;
         Ok(Self {
             point: Point {
                 cycle: 0,
@@ -328,6 +500,14 @@ impl State {
             credit: 0,
             pending: None,
             selected: None,
+            real: frame::Queue::new(origin),
+            frames: Arc::new(VecDeque::new()),
+            selected_domain: None,
+            turn_credit_ms: 0,
+            turn_carry,
+            sub_ms_nanos: 0,
+            counter_platform: false,
+            completed_counter_ns: 0,
         })
     }
     pub fn driver(&self) -> Driver {
@@ -352,7 +532,258 @@ impl State {
     pub fn completed_point(&self) -> Point {
         self.point
     }
+    pub fn queue_point(&self, domain: Domain) -> Point {
+        match domain {
+            Domain::Game => self.point(),
+            Domain::Real => self.real.point(),
+        }
+    }
+    pub fn frame_active(&self) -> bool {
+        !self.frames.is_empty()
+    }
+    pub fn counter_platform(&self) -> bool {
+        self.counter_platform
+    }
+    pub fn counter_progress_ns(&self) -> u128 {
+        self.completed_counter_ns
+    }
+    pub fn counter_pending_ns(&self) -> u128 {
+        self.frames
+            .iter()
+            .filter_map(|frame| match frame.input {
+                FrameSource::Counter { duration, .. } => Some(duration.as_nanos()),
+                _ => None,
+            })
+            .sum()
+    }
+    pub fn select_counter_platform(&mut self) -> Result<(), String> {
+        self.pace(Duration::ZERO)?;
+        self.counter_platform = true;
+        Ok(())
+    }
+
+    pub fn enqueue_frame(&mut self, input: FrameInput, work: &mut usize) -> Result<(), String> {
+        self.enqueue_source(FrameSource::Independent(input), work)
+    }
+    pub fn enqueue_counter_frame(
+        &mut self,
+        elapsed: Duration,
+        work: &mut usize,
+    ) -> Result<(), String> {
+        let total = elapsed
+            .as_nanos()
+            .checked_add(u128::from(self.sub_ms_nanos))
+            .ok_or("native counter duration overflow")?;
+        let milliseconds = (total / 1_000_000) as u32; // GetTickCount subtraction retains the low DWORD.
+        let remainder = (total % 1_000_000) as u32;
+        self.enqueue_source(
+            FrameSource::Counter {
+                raw_ms: milliseconds,
+                duration: elapsed,
+            },
+            work,
+        )?;
+        self.sub_ms_nanos = remainder;
+        self.counter_platform = true;
+        Ok(())
+    }
+    pub(crate) fn enqueue_input(&mut self, input: Input, work: &mut usize) -> Result<(), String> {
+        match input {
+            Input::Independent(input) => self.enqueue_frame(input, work),
+            Input::Counter(elapsed) => self.enqueue_counter_frame(elapsed, work),
+        }
+    }
+    fn enqueue_source(&mut self, input: FrameSource, work: &mut usize) -> Result<(), String> {
+        if self.driver == Driver::Legacy || self.selected_domain.is_some() {
+            return Err("native frame cannot enter the current driver context".into());
+        }
+        if *work == 0 || self.frames.len() >= *work {
+            return Err("native frame input budget exceeded".into());
+        }
+        let real_ms = match input {
+            FrameSource::Independent(input) => input.real_elapsed_ms,
+            FrameSource::Counter { raw_ms, .. } => raw_ms,
+        };
+        self.rules.frame.delta(real_ms)?;
+        let mut counter_total = self
+            .completed_counter_ns
+            .checked_add(self.counter_pending_ns())
+            .ok_or("native counter accounting overflow")?;
+        if let FrameSource::Counter { duration, .. } = input {
+            counter_total = counter_total
+                .checked_add(duration.as_nanos())
+                .ok_or("native counter accounting overflow")?;
+        }
+        let _ = counter_total;
+        let mut credit = self.credit;
+        for source in std::iter::once(input).chain(
+            self.frames
+                .iter()
+                .filter(|frame| frame.phase == FramePhase::Queued)
+                .map(|frame| frame.input),
+        ) {
+            if let FrameSource::Independent(input) = source {
+                credit = credit
+                    .checked_add(
+                        input
+                            .game_elapsed
+                            .as_nanos()
+                            .checked_mul(u128::from(self.rules.denominator))
+                            .ok_or("native frame credit overflow")?,
+                    )
+                    .ok_or("native frame credit overflow")?;
+            }
+        }
+        let spent = 1 + self.frames.len();
+        Arc::make_mut(&mut self.frames)
+            .try_reserve(1)
+            .map_err(|_| "native frame input capacity")?;
+        Arc::make_mut(&mut self.frames).push_back(Frame {
+            input,
+            phase: FramePhase::Queued,
+        });
+        self.driver = Driver::Native;
+        *work -= spent;
+        Ok(())
+    }
+    pub fn next_frame_segment(
+        &mut self,
+        work: &mut usize,
+    ) -> Result<Option<(Domain, Segment)>, QueueError> {
+        self.next_frame_segment_with_settings(work, None, false)
+    }
+    pub fn next_frame_segment_with_settings(
+        &mut self,
+        work: &mut usize,
+        speed: Option<usize>,
+        paused: bool,
+    ) -> Result<Option<(Domain, Segment)>, QueueError> {
+        loop {
+            let Some(frame) = self.frames.front().copied() else {
+                return Ok(None);
+            };
+            let real_ms = match frame.input {
+                FrameSource::Independent(input) => input.real_elapsed_ms,
+                FrameSource::Counter { raw_ms, .. } => raw_ms,
+            };
+            match frame.phase {
+                FramePhase::Queued => {
+                    if *work == 0 {
+                        return Err(QueueError::Budget("native frame transition"));
+                    }
+                    let phase = match frame.input {
+                        FrameSource::Independent(input) => {
+                            self.add_credit(input.game_elapsed)?;
+                            FramePhase::Game
+                        }
+                        FrameSource::Counter { raw_ms: ms, .. } => {
+                            self.turn_credit_ms = self
+                                .turn_credit_ms
+                                .wrapping_add(
+                                    ms.wrapping_mul(self.rules.turn.elapsed_numerator)
+                                        / self.rules.turn.elapsed_denominator,
+                                )
+                                .min(self.rules.turn.credit_cap);
+                            FramePhase::CounterQuanta
+                        }
+                    };
+                    Arc::make_mut(&mut self.frames)
+                        .front_mut()
+                        .expect("frame")
+                        .phase = phase;
+                    *work -= 1;
+                }
+                FramePhase::CounterQuanta => {
+                    if self.turn_credit_ms < self.rules.turn.quantum_ms {
+                        self.real.begin(self.rules.frame.delta(real_ms)?)?;
+                        Arc::make_mut(&mut self.frames)
+                            .front_mut()
+                            .expect("frame")
+                            .phase = FramePhase::Real;
+                        continue;
+                    }
+                    if *work == 0 {
+                        return Err(QueueError::Budget("native turn"));
+                    }
+                    if paused {
+                        self.turn_credit_ms -= self.rules.turn.quantum_ms;
+                    } else {
+                        let (steps, carry) = self.rules.turn.grant(
+                            speed.ok_or("native game speed is not admitted")?,
+                            self.turn_carry,
+                            &self.rules.frame,
+                        )?;
+                        let duration = self.rules.turn.duration(
+                            steps,
+                            self.rules.numerator,
+                            self.rules.denominator,
+                        )?;
+                        self.add_credit(duration)?;
+                        self.turn_carry = carry;
+                        self.turn_credit_ms -= self.rules.turn.quantum_ms;
+                        Arc::make_mut(&mut self.frames)
+                            .front_mut()
+                            .expect("frame")
+                            .phase = FramePhase::Game;
+                    }
+                    *work -= 1;
+                }
+                FramePhase::Game => {
+                    if let Some(segment) = self.next_segment(work)? {
+                        return Ok(Some((Domain::Game, segment)));
+                    }
+                    let phase = match frame.input {
+                        FrameSource::Counter { .. } => FramePhase::CounterQuanta,
+                        FrameSource::Independent(_) => {
+                            self.real.begin(self.rules.frame.delta(real_ms)?)?;
+                            FramePhase::Real
+                        }
+                    };
+                    Arc::make_mut(&mut self.frames)
+                        .front_mut()
+                        .expect("frame")
+                        .phase = phase;
+                }
+                FramePhase::Real => {
+                    if let Some(segment) = self.real.next(&self.rules, work)? {
+                        return Ok(Some((Domain::Real, segment)));
+                    }
+                    if let FrameSource::Counter { duration, .. } = frame.input {
+                        self.completed_counter_ns = self
+                            .completed_counter_ns
+                            .checked_add(duration.as_nanos())
+                            .ok_or("native counter accounting overflow")?;
+                    }
+                    Arc::make_mut(&mut self.frames).pop_front();
+                }
+            }
+        }
+    }
+
+    pub fn finish_frame_segment(&mut self, domain: Domain, segment: Segment) -> Result<(), String> {
+        let expected = match domain {
+            Domain::Game => FramePhase::Game,
+            Domain::Real => FramePhase::Real,
+        };
+        if self
+            .frames
+            .front()
+            .is_none_or(|frame| frame.phase != expected)
+        {
+            return Err("native frame phase differs".into());
+        }
+        match domain {
+            Domain::Game => self.finish_segment(segment),
+            Domain::Real => self.real.finish(&self.rules, segment),
+        }
+    }
     pub fn pace(&mut self, elapsed: Duration) -> Result<(), String> {
+        if self.frame_active() {
+            return Err("game-only pacing cannot overtake a retained paired frame".into());
+        }
+        self.add_credit(elapsed)
+    }
+    fn add_credit(&mut self, elapsed: Duration) -> Result<(), String> {
         if self.driver == Driver::Legacy {
             return Err("legacy clock cannot enter the native producer".into());
         }
@@ -369,7 +800,7 @@ impl State {
         self.driver = Driver::Native;
         Ok(())
     }
-    pub fn next_segment(&mut self, work: &mut usize) -> Result<Option<Segment>, String> {
+    pub fn next_segment(&mut self, work: &mut usize) -> Result<Option<Segment>, QueueError> {
         if let Some(pending) = self.pending {
             return Ok(Some(pending.segment));
         }
@@ -378,92 +809,50 @@ impl State {
             return Ok(None);
         }
         if *work == 0 {
-            return Err("native game clock step budget exceeded".into());
+            return Err(QueueError::Budget("native game clock step"));
         }
-        let outer = real::add(self.point.local, self.rules.step).map_err(|e| e.to_string())?;
-        if real::below_or_equal(outer, self.point.local) {
-            return Err("native game clock step did not progress".into());
-        }
-        let wrapped = real::below_or_equal(self.rules.simple.cycle.to_bits(), outer);
-        let (local, remainder) = if wrapped {
-            self.point
-                .cycle
-                .checked_add(1)
-                .ok_or("native game clock epoch overflow")?;
-            let remainder =
-                real::sub(outer, self.rules.simple.cycle.to_bits()).map_err(|e| e.to_string())?;
-            let distance = real::abs(
-                real::sub(remainder, self.rules.simple.origin.to_bits())
-                    .map_err(|e| e.to_string())?,
-            );
-            let remainder = if f32::from_bits(distance) < f32::from_bits(self.rules.wrap_tolerance)
-            {
-                self.rules.simple.origin.to_bits()
-            } else {
-                remainder
-            };
-            (self.rules.simple.cycle.to_bits(), Some(remainder))
-        } else {
-            (outer, None)
-        };
-        let segment = Segment {
-            point: Point {
-                cycle: self.point.cycle,
-                local,
-            },
-            ends_cycle: wrapped,
-        };
-        self.pending = Some(Pending { segment, remainder });
+        let pending = prepare_drain(&self.rules, self.point, self.rules.step)?;
+        self.pending = Some(pending);
         *work -= 1;
-        Ok(Some(segment))
+        Ok(Some(pending.segment))
     }
     /// Call after a successful drain, and after all request rebases at a cycle end.
     pub fn finish_segment(&mut self, segment: Segment) -> Result<(), String> {
-        let pending = self
-            .pending
-            .ok_or("native game clock has no pending drain")?;
-        if pending.segment != segment || self.selected.is_some() {
-            return Err("native game clock drain context mismatch".into());
-        }
-        if let Some(remainder) = pending.remainder {
-            self.pending = Some(Pending {
-                segment: Segment {
-                    point: Point {
-                        cycle: segment
-                            .point
-                            .cycle
-                            .checked_add(1)
-                            .ok_or("native game clock epoch overflow")?,
-                        local: remainder,
-                    },
-                    ends_cycle: false,
-                },
-                remainder: None,
-            });
-        } else {
-            self.point = segment.point;
-            self.pending = None;
+        if finish_drain(&mut self.point, &mut self.pending, self.selected, segment)? {
             self.credit -= u128::from(self.rules.numerator) * 1_000_000_000;
         }
         Ok(())
     }
     pub fn enter_callback(&mut self, point: Point) -> Result<(), String> {
-        if self.selected.is_some()
-            || point.cycle != self.point().cycle
+        self.enter_domain_callback(Domain::Game, point)
+    }
+    pub fn enter_domain_callback(&mut self, domain: Domain, point: Point) -> Result<(), String> {
+        let current = self.queue_point(domain);
+        if self.selected_domain.is_some()
+            || point.cycle != current.cycle
             || real::from_f32(f32::from_bits(point.local)).is_err()
             || !f32::from_bits(point.local).is_finite()
             || f32::from_bits(point.local) < self.rules.simple.origin
-            || !real::below_or_equal(point.local, self.point().local)
+            || !real::below_or_equal(point.local, current.local)
         {
             return Err("native game clock callback context mismatch".into());
         }
-        self.selected = Some(point);
+        match domain {
+            Domain::Game => self.selected = Some(point),
+            Domain::Real => self.real.selected = Some(point),
+        }
+        self.selected_domain = Some(domain);
         Ok(())
     }
     pub fn leave_callback(&mut self) -> Result<(), String> {
-        self.selected
+        match self
+            .selected_domain
             .take()
-            .ok_or("native game clock callback is not active")?;
+            .ok_or("native queue callback is not active")?
+        {
+            Domain::Game => self.selected = None,
+            Domain::Real => self.real.selected = None,
+        }
         Ok(())
     }
 }

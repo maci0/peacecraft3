@@ -370,11 +370,14 @@ impl ObjectHost {
         Ok(Value::Null)
     }
 
-    fn bounded_map(&self, name: &str, map: &str) -> Result<String, Error> {
+    fn bounded_map(&self, name: &str, map: impl AsRef<[u8]>) -> Result<String, Error> {
         let fail = |detail| self.inner.error(name, Failure::CampaignProgress(detail));
-        if map.len() > crate::campaign_progress::MAX_BYTES || map.contains('\0') {
+        let map = map.as_ref();
+        if map.len() > crate::campaign_progress::MAX_BYTES || map.contains(&0) {
             return Err(fail("next-map name byte policy or embedded NUL".into()));
         }
+        let map =
+            std::str::from_utf8(map).map_err(|why| fail(format!("next-map path UTF8: {why}")))?;
         let mut value = String::new();
         value
             .try_reserve_exact(map.len())

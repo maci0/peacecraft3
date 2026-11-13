@@ -107,6 +107,159 @@ fn snapshot(h: &ObjectHost) -> String {
 }
 
 #[test]
+fn leaderboard_source_missing_rows_and_invalid_value_updates_preserve_state() {
+    let mut h = host()
+        .with_leaderboard_layout(crate::leaderboard_layout::tests::synthetic_rules())
+        .unwrap();
+    let present = player(&mut h, 1);
+    let missing = player(&mut h, 2);
+    let board = create(&mut h);
+    add(&mut h, &board, &present, "kept", 29);
+    let before = snapshot(&h);
+    for (b, p, expected) in [
+        (board.clone(), missing.clone(), -7),
+        (board.clone(), Value::Null, -7),
+        (Value::Null, present.clone(), -7),
+        (board.clone(), present.clone(), 0),
+    ] {
+        assert_eq!(
+            h.native("LeaderboardGetPlayerIndex", &[b, p]).unwrap(),
+            Value::Int(expected)
+        );
+        assert_eq!(snapshot(&h), before);
+    }
+    for row in [-7, -1, 1, i32::MAX] {
+        h.native(
+            "LeaderboardSetItemValue",
+            &[board.clone(), Value::Int(row), Value::Int(31)],
+        )
+        .unwrap();
+        assert_eq!(snapshot(&h), before);
+    }
+    h.native(
+        "LeaderboardSetItemValue",
+        &[Value::Null, Value::Int(0), Value::Int(31)],
+    )
+    .unwrap();
+    assert_eq!(snapshot(&h), before);
+    for args in [
+        vec![present.clone(), missing.clone()],
+        vec![board.clone(), board.clone()],
+        vec![
+            Value::Handle(pcx_script::HandleId::new(
+                std::num::NonZeroU64::new(999_999).unwrap(),
+            )),
+            present.clone(),
+        ],
+        vec![board.clone(), Value::Int(1)],
+    ] {
+        assert!(h.native("LeaderboardGetPlayerIndex", &args).is_err());
+        assert_eq!(snapshot(&h), before);
+    }
+    h.native(
+        "LeaderboardSetItemValue",
+        &[board.clone(), Value::Int(0), Value::Int(-37)],
+    )
+    .unwrap();
+    assert_eq!(
+        h.leaderboard_state()
+            .unwrap()
+            .get(id(&board))
+            .unwrap()
+            .items[0]
+            .value,
+        -37
+    );
+    h.native("DestroyLeaderboard", std::slice::from_ref(&board))
+        .unwrap();
+    let retired = snapshot(&h);
+    assert_eq!(
+        h.native("LeaderboardGetPlayerIndex", &[board.clone(), present])
+            .unwrap(),
+        Value::Int(-7)
+    );
+    h.native(
+        "LeaderboardSetItemValue",
+        &[board, Value::Int(0), Value::Int(31)],
+    )
+    .unwrap();
+    assert_eq!(snapshot(&h), retired);
+}
+
+#[test]
+fn leaderboard_compiled_player_value_helper_ignores_missing_rows_and_updates_present_rows() {
+    let ctx = context(
+        301,
+        &format!("{COMMON}{DECLARATIONS}"),
+        r#"
+        globals
+            leaderboard Board = null
+            integer Missing = 0
+        endglobals
+        function LeaderboardSetPlayerItemValueBJ takes player whichPlayer, leaderboard lb, integer val returns nothing
+            call LeaderboardSetItemValue(lb, LeaderboardGetPlayerIndex(lb, whichPlayer), val)
+        endfunction
+        function main takes nothing returns nothing
+            set Board = CreateLeaderboard()
+            call LeaderboardAddItem(Board, "retained", 11, Player(1))
+            set Missing = LeaderboardGetPlayerIndex(Board, Player(2))
+            call LeaderboardSetPlayerItemValueBJ(Player(2), Board, 71)
+            call LeaderboardSetPlayerItemValueBJ(Player(1), Board, 43)
+        endfunction
+    "#,
+        "synthetic:leaderboard-player-value",
+    );
+    let object = from_context(ctx.clone(), budget())
+        .unwrap()
+        .with_leaderboard_layout(crate::leaderboard_layout::tests::synthetic_rules())
+        .unwrap();
+    let mut vm = ctx.scripts.clone().owned_vm(object);
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.global("Missing"), Value::Int(-7));
+    let board_id = id(&vm.global("Board"));
+    let state = vm.host().inner.leaderboard_state().unwrap();
+    let board = state.get(board_id).unwrap();
+    assert_eq!(board.items.len(), 1);
+    assert_eq!(board.items[0].label, "retained");
+    assert_eq!(board.items[0].value, 43);
+    assert_eq!(state.revision(), 3);
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE pointing at the reviewed local client"]
+fn leaderboard_selected_source_missing_player_value_path_uses_public_host() {
+    use std::io::Read;
+    let mut image = Vec::new();
+    std::fs::File::open(std::env::var_os("PCX_WAR3_EXE").expect("PCX_WAR3_EXE"))
+        .unwrap()
+        .take((32 << 20) + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    assert!(image.len() <= 32 << 20);
+    let rules = crate::leaderboard_layout::Rules::reviewed_legacy(
+        &image,
+        crate::scripts::AssetIdentity {
+            source: "explicit local client qualification".into(),
+            edition: "legacy".into(),
+            version: "1.29.2.9231".into(),
+        },
+    )
+    .unwrap();
+    let missing_index = rules.missing_player_index;
+    let mut h = host().with_leaderboard_layout(rules).unwrap();
+    let p = player(&mut h, 1);
+    let board = create(&mut h);
+    let before = snapshot(&h);
+    let index = h
+        .native("LeaderboardGetPlayerIndex", &[board.clone(), p])
+        .unwrap();
+    assert_eq!(index, Value::Int(missing_index));
+    h.native("LeaderboardSetItemValue", &[board, index, Value::Int(53)])
+        .unwrap();
+    assert_eq!(snapshot(&h), before);
+}
+
+#[test]
 fn leaderboard_lifecycle_rows_associations_and_display_are_independent() {
     let mut h = host();
     let a = player(&mut h, 1);
@@ -474,7 +627,10 @@ fn leaderboard_compiled_authored_shape_keeps_localized_row_labels_in_canonical_s
     let board = vm.global("Board");
     let h = &vm.host().inner;
     let state = h.leaderboard_state().unwrap().get(id(&board)).unwrap();
-    assert_eq!(state.label.as_deref(), Some("Synthetic title"));
+    assert_eq!(
+        state.label.as_ref().map(|s| s.as_utf8().unwrap()),
+        Some("Synthetic title")
+    );
     assert_eq!(state.items.len(), 1);
     assert_eq!(state.items[0].label, "Authored count label");
     assert_eq!(state.items[0].value, 0);

@@ -221,6 +221,9 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
@@ -242,6 +245,17 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
     }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner.string_hash(bytes)
+    }
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner.substring(bytes, start, end)
     }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         resolve_native_table_string(self.table, self.label, id)
@@ -287,6 +301,9 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
@@ -308,6 +325,17 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
     }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner.string_hash(bytes)
+    }
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner.substring(bytes, start, end)
     }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.context.native_table_string(id)
@@ -471,7 +499,7 @@ mod tests {
     #[test]
     fn supplied_prelude_keeps_raw_native_arguments_and_retained_table_bytes() {
         let scripts = load(b"native Capture takes string text returns nothing\n", b"function Message takes nothing returns nothing\ncall Capture(\"TRIGSTR_5\")\nendfunction\n", b"function config takes nothing returns nothing\nendfunction\nfunction main takes nothing returns nothing\ncall Message()\nendfunction\n", Some(b"STRING 5\r\n{\r\n|cffff0000Authored|r|nText\r\n}\r\n")).unwrap();
-        struct Capture(Vec<String>);
+        struct Capture(Vec<pcx_script::ScriptString>);
         impl Host for Capture {
             fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
                 match (name, args) {

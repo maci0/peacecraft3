@@ -647,6 +647,7 @@ pub(crate) fn host_inputs(
     item_visibility.image_sha256 = rule(RuleKind::Slots).image_sha256();
     MapStartupInputs {
         thematic_music_rules: None,
+        regular_music_volume_rules: None,
         cached_unit_source_maps: Vec::new(),
         unit_decay: None,
         unit_blend: None,
@@ -678,6 +679,7 @@ pub(crate) fn host_inputs(
         terrain_pathing: None,
         numeric: None,
         script_hash: None,
+        script_strings: None,
         destructable_restore: None,
         experience_handicap: None,
         health_handicap: None,

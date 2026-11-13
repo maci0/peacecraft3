@@ -151,11 +151,14 @@ impl MapStartupHost {
             Ok(Value::Null)
         })())
     }
-    fn run_preloader(&mut self, path: &str) -> Result<(), String> {
+    fn run_preloader(&mut self, path: &pcx_script::ScriptString) -> Result<(), String> {
         let state = self.preload.as_mut().expect("admitted");
         if !state.filename(path)? {
             return Ok(());
         }
+        let path = path
+            .as_utf8()
+            .map_err(|why| format!("Preloader: unsupported path UTF8: {why}"))?;
         if state.depth >= 8 || state.report.scripts.len() >= 128 {
             return Err("Preloader: script recursion/count budget".into());
         }
@@ -249,6 +252,17 @@ impl MapStartupHost {
 }
 struct Shared<'a>(&'a mut MapStartupHost);
 impl Host for Shared<'_> {
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.0.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.0.substring(bytes, start, end)
+    }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.0.string_hash(bytes)
     }
@@ -286,6 +300,37 @@ impl Host for Shared<'_> {
 mod native_string_tests {
     use super::*;
     const WTS: &[u8] = b"STRING 7\r\n{\r\nTRIGSTR_23\r\n}\r\nSTRING 23\r\n{\r\nother\r\n}\r\n";
+    #[test]
+    fn string_rules_preload_startup_forward_and_refuse_unlent_world() {
+        let world = crate::neutral_player::native_case_world_fixture(
+            None,
+            crate::playercolor_host::ScriptStringPolicy::synthetic_fixture(),
+        );
+        let program = world.context().scripts.shared_program();
+        let mut startup = MapStartupHost::timer_session_fixture(world);
+        assert_eq!(startup.string_case(b"jm", true).unwrap(), "eh");
+        let mut vm = Vm::new(&program, Shared(&mut startup));
+        assert_eq!(
+            vm.call("cut", &[Value::Str(vec![0xff].into())]).unwrap(),
+            Value::Str(vec![0xff].into())
+        );
+        drop(vm);
+        let world = startup.inner.take().unwrap();
+        assert!(
+            Shared(&mut startup)
+                .string_case(b"jm", true)
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        assert!(
+            Shared(&mut startup)
+                .substring(b"x", 0, 1)
+                .unwrap_err()
+                .contains("world is not lent")
+        );
+        startup.inner = Some(world);
+        assert_eq!(Shared(&mut startup).string_case(b"jm", true).unwrap(), "eh");
+    }
     #[test]
     fn string_hash_preload_and_startup_forward_raw_and_refuse_unlent_world() {
         let policy = crate::playercolor_host::ScriptHashPolicy::synthetic_fixture();
@@ -340,7 +385,13 @@ mod native_string_tests {
                 .contains("cross-program callbacks")
         );
         assert_eq!(
-            startup.objects().map_config().unwrap().name.as_deref(),
+            startup
+                .objects()
+                .map_config()
+                .unwrap()
+                .name
+                .as_ref()
+                .map(|s| s.as_utf8().unwrap()),
             Some("explicit source")
         );
     }

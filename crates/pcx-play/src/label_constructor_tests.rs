@@ -164,7 +164,7 @@ fn label_only_admission_reuses_sound_consumers_and_refusals_are_atomic() {
             Value::Int(0),
         ],
         vec![
-            Value::Str("x".repeat(4097)),
+            Value::Str("x".repeat(4097).into()),
             Value::Bool(false),
             Value::Bool(false),
             Value::Bool(false),

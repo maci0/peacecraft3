@@ -145,10 +145,6 @@ impl ObjectHost {
             "IsItemVisible",
             "SetItemPosition",
             "SetItemVisible",
-            // leaderboard_host.rs
-            "DestroyLeaderboard",
-            "LeaderboardDisplay",
-            "LeaderboardSetItemLabelColor",
             // location_host.rs
             "GetLocationX",
             "GetLocationY",
@@ -389,6 +385,9 @@ impl ObjectHost {
             "GetFilterDestructable",
             "GetFilterItem",
         ]
+        .into_iter()
+        .chain(super::leaderboards::NATIVES.iter().map(|(name, ..)| *name))
+        .collect()
     }
 
     /// Compare the admitted program's declarations against host dispatch.
@@ -435,6 +434,14 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), names.len(), "duplicate entries: {names:?}");
+    }
+
+    #[test]
+    fn table_driven_leaderboard_dispatch_is_fully_reported() {
+        let names = ObjectHost::supported_native_names();
+        for (name, ..) in super::super::leaderboards::NATIVES {
+            assert!(names.contains(name), "missing leaderboard native {name}");
+        }
     }
 
     /// The crate's own source, read so the audit can be checked against the

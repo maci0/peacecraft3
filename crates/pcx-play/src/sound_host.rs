@@ -614,6 +614,14 @@ impl ObjectHost {
                 ))));
             }
         };
+        let label = match label.as_utf8() {
+            Ok(label) => label,
+            Err(why) => {
+                return Some(Err(fail(Failure::ScriptString(format!(
+                    "sound label UTF8: {why}"
+                )))));
+            }
+        };
         let resource = match self.prepare_label_sound(name, label) {
             Ok(index) => index,
             Err(error) => return Some(Err(error)),

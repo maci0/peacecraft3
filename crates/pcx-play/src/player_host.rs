@@ -37,7 +37,7 @@ pub struct PlayerSettings {
     pub controller: Option<HandleId>,
     /// Caller-qualified current slot state; absence is unset, not empty.
     pub slot_state: Option<HandleId>,
-    pub name: Option<String>,
+    pub name: Option<pcx_script::ScriptString>,
     pub on_score_screen: Option<bool>,
     /// Executed `SetPlayerTechMaxAllowed` pairs. Absence is unset, not a default limit.
     pub tech_max: Vec<(i32, i32)>,
@@ -1707,7 +1707,7 @@ impl ObjectHost {
                 Ok(Value::Null)
             }
             ("SetPlayerName", [Value::Str(text)]) => {
-                let text = pcx_script::text::native_map_string(text, strings)
+                let text = pcx_script::text::native_map_bytes(text.as_bytes(), strings)
                     .map_err(|why| self.inner.error(name, Failure::ScriptString(why)))?;
                 players
                     .rows
@@ -1715,15 +1715,15 @@ impl ObjectHost {
                     .enumerate()
                     .filter(|(i, _)| *i != at)
                     .try_fold(text.len(), |sum, (_, row)| {
-                        sum.checked_add(row.name.as_ref().map_or(0, String::len))
+                        sum.checked_add(row.name.as_ref().map_or(0, pcx_script::ScriptString::len))
                     })
                     .filter(|&bytes| bytes <= players.budget.name_bytes)
                     .ok_or_else(|| fail(Failure::Budget("player names")))?;
-                let mut copy = String::new();
+                let mut copy = Vec::new();
                 copy.try_reserve_exact(text.len())
                     .map_err(|_| fail(Failure::Capacity))?;
-                copy.push_str(&text);
-                players.rows[at].name = Some(copy);
+                copy.extend_from_slice(&text);
+                players.rows[at].name = Some(copy.into());
                 Ok(Value::Null)
             }
             ("GetPlayerTeam", []) => players.rows[at]
@@ -2187,7 +2187,175 @@ pub(super) struct TrainingDebit {
     food: Option<PlayerStateChange>,
 }
 
+impl TrainingDebit {
+    pub(super) fn changes(&self) -> [Option<&PlayerStateChange>; 3] {
+        [
+            self.resources.changes[0].as_ref(),
+            self.resources.changes[1].as_ref(),
+            self.food.as_ref(),
+        ]
+    }
+}
+
 impl ObjectHost {
+    #[cfg(test)]
+    pub(crate) fn construction_test_horizon(&mut self, value: i32) {
+        let mut rules = self.admitted_construction_rules().unwrap().clone();
+        rules.assistant_reconfigure_horizon = value;
+        let resources = self.players.as_mut().unwrap().resources.as_mut().unwrap();
+        resources.rules = resources.rules.clone().with_construction_rules(Ok(rules));
+    }
+    #[cfg(test)]
+    pub(crate) fn construction_test_new_resource_projection(&mut self, owner: HandleId) {
+        let prior = self
+            .prepare_training_change(owner, [9, 9], 0, 0)
+            .unwrap()
+            .unwrap();
+        assert!(prior.resources.rows.iter().all(|row| row.index.is_none()));
+        let debit = self
+            .prepare_construction_debit_after(owner, [3, 3], Some(&prior))
+            .unwrap()
+            .unwrap();
+        self.commit_training_debit(prior);
+        self.apply_resource_credit(debit);
+    }
+
+    pub(super) fn construction_debit_bank(
+        &self,
+        owner: HandleId,
+        prior: Option<&TrainingDebit>,
+    ) -> Result<[i32; 2], Error> {
+        let at = self.player_index(&Value::Handle(owner), "construction resources")?;
+        let number = self.players.as_ref().expect("checked players").rows[at].number;
+        let mut bank = [0; 2];
+        for (i, name) in ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"]
+            .into_iter()
+            .enumerate()
+        {
+            let state = self.source_constant_enumerand(name, "playerstate")?;
+            bank[i] = prior
+                .and_then(|prior| {
+                    prior
+                        .resources
+                        .rows
+                        .iter()
+                        .find(|row| row.number == number && row.state == state)
+                        .map(|row| row.next)
+                })
+                .or(self.resource_value(at, state)?)
+                .ok_or_else(|| {
+                    self.inner.error(
+                        "construction resources",
+                        Failure::PlayerState("assistant resources not admitted"),
+                    )
+                })?;
+        }
+        Ok(bank)
+    }
+
+    /// Prepare against the preceding refund, which must commit before this credit
+    /// without an intervening money mutation. Food belongs to that earlier plan.
+    pub(super) fn prepare_construction_debit_after(
+        &mut self,
+        owner: HandleId,
+        charges: [i32; 2],
+        prior: Option<&TrainingDebit>,
+    ) -> Result<Option<ResourceCredit>, Error> {
+        let fail = |why| {
+            self.inner
+                .error("construction resources", Failure::PlayerState(why))
+        };
+        let at = self.player_index(&Value::Handle(owner), "construction resources")?;
+        let number = self.players.as_ref().expect("checked players").rows[at].number;
+        let bank = self.construction_debit_bank(owner, prior)?;
+        let [gold, wood] = ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"]
+            .map(|name| self.source_constant_enumerand(name, "playerstate"));
+        let states = [gold?, wood?];
+        let resources = self
+            .players
+            .as_ref()
+            .and_then(|p| p.resources.as_ref())
+            .ok_or_else(|| fail("resources not admitted"))?;
+        let mut rows = [ResourceRow {
+            number,
+            state: states[0],
+            index: None,
+            next: 0,
+        }; 2];
+        for i in 0..2 {
+            if charges[i] < 0 {
+                return Err(fail("negative construction debit"));
+            }
+            let next = bank[i]
+                .checked_sub(charges[i])
+                .ok_or_else(|| fail("construction debit overflow"))?;
+            if next < 0 {
+                return Ok(None);
+            }
+            let index = resources
+                .values
+                .iter()
+                .position(|(p, s, _)| *p == number && *s == states[i]);
+            let projected = prior.and_then(|prior| {
+                prior
+                    .resources
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .find(|(_, row)| row.number == number && row.state == states[i])
+                    .map(|(slot, row)| {
+                        row.index.unwrap_or(
+                            resources.values.len()
+                                + prior.resources.rows[..slot]
+                                    .iter()
+                                    .filter(|r| r.index.is_none())
+                                    .count(),
+                        )
+                    })
+            });
+            rows[i] = ResourceRow {
+                number,
+                state: states[i],
+                index: index.or(projected),
+                next: resources.rules.money(next),
+            };
+        }
+        let reserve = rows.iter().filter(|row| row.index.is_none()).count()
+            + prior.map_or(0, |prior| {
+                prior
+                    .resources
+                    .rows
+                    .iter()
+                    .filter(|row| row.index.is_none())
+                    .count()
+            });
+        self.players
+            .as_mut()
+            .expect("checked players")
+            .resources
+            .as_mut()
+            .expect("checked resources")
+            .values
+            .try_reserve(reserve)
+            .map_err(|_| {
+                self.inner
+                    .error("construction resources", Failure::Capacity)
+            })?;
+        let changes = prior.map(TrainingDebit::changes).unwrap_or([None; 3]);
+        let pending = changes
+            .iter()
+            .flatten()
+            .map(|change| change.event_count())
+            .sum();
+        let changes = self.prepare_player_state_changes_after_reserving(
+            owner,
+            [(states[0], rows[0].next), (states[1], rows[1].next)],
+            pending,
+            &changes,
+        )?;
+        Ok(Some(ResourceCredit { rows, changes }))
+    }
+
     pub(super) fn training_limit_allows(&self, owner: HandleId, kind: i32) -> Result<bool, Error> {
         let at = self.player_index(&Value::Handle(owner), "FillGuardPosts")?;
         let maximum = self.players.as_ref().expect("admitted player").rows[at]
@@ -2377,6 +2545,93 @@ impl ObjectHost {
             return Err(fail("negative training cost"));
         }
         self.prepare_training_change(owner, [-gold, -lumber], food, pending)
+    }
+
+    pub(super) fn prepare_structure_upgrade_payment(
+        &mut self,
+        owner: HandleId,
+        amounts: [i32; 2],
+        refund: bool,
+        pending: usize,
+    ) -> Result<Option<TrainingDebit>, Error> {
+        self.training_queue_slots()?;
+        let fail = |why| {
+            self.inner
+                .error("upgrade resources", Failure::PlayerState(why))
+        };
+        let rules = &self
+            .players
+            .as_ref()
+            .expect("admitted")
+            .resources
+            .as_ref()
+            .expect("admitted")
+            .rules;
+        if rules.money_scale <= 0 || rules.money_maximum < 0 {
+            return Err(fail("upgrade money bounds not admitted"));
+        }
+        let mut money = [0; 2];
+        for (index, name) in ["PLAYER_STATE_RESOURCE_GOLD", "PLAYER_STATE_RESOURCE_LUMBER"]
+            .into_iter()
+            .enumerate()
+        {
+            let current = self
+                .player_resource_value(owner, name)?
+                .ok_or_else(|| fail("upgrade bank not admitted"))?;
+            if !refund && current < amounts[index] {
+                return Ok(None);
+            }
+            let delta = if refund {
+                amounts[index]
+            } else {
+                amounts[index]
+                    .checked_neg()
+                    .ok_or_else(|| fail("upgrade debit overflow"))?
+            };
+            let next = current
+                .checked_add(delta)
+                .ok_or_else(|| fail("upgrade bank overflow"))?;
+            next.checked_mul(rules.money_scale)
+                .ok_or_else(|| fail("upgrade scaled bank overflow"))?;
+            money[index] = rules
+                .money(next)
+                .checked_sub(current)
+                .ok_or_else(|| fail("upgrade bank change overflow"))?;
+        }
+        self.prepare_training_change(owner, money, 0, pending)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_policy_fixture(&mut self, mut training: crate::training_rules::Rules) {
+        let resources = self.players.as_mut().unwrap().resources.as_mut().unwrap();
+        training.image_sha256 = resources.rules.image_sha256;
+        training.ai_production = resources
+            .rules
+            .training
+            .as_ref()
+            .unwrap()
+            .ai_production
+            .clone();
+        resources.rules.training = Ok(training);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_clear_numeric_fixture(&mut self) {
+        self.numeric = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_money_fixture(&mut self, scale: i32, maximum: i32) {
+        let rules = &mut self
+            .players
+            .as_mut()
+            .unwrap()
+            .resources
+            .as_mut()
+            .unwrap()
+            .rules;
+        rules.money_scale = scale;
+        rules.money_maximum = maximum;
     }
 
     pub(super) fn prepare_training_change(

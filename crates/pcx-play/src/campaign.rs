@@ -138,7 +138,22 @@ impl ChapterTrace {
     pub fn encode(&self) -> Vec<u8> {
         use std::fmt::Write;
         let mut out = format!(
-            "pcx-script-trace 1\nchapter {}\nedition {}\nversion {}\nasset-source {}\nticks {}\n",
+            "pcx-script-trace {}\nchapter {}\nedition {}\nversion {}\nasset-source {}\nticks {}\n",
+            if self
+                .calls
+                .iter()
+                .map(|c| &c.result)
+                .chain(
+                    self.natives
+                        .iter()
+                        .flat_map(|n| n.args.iter().chain(std::iter::once(&n.result)))
+                )
+                .any(|v| matches!(v,Value::Str(s) if s.as_utf8().is_err()))
+            {
+                2
+            } else {
+                1
+            },
             hex(&self.chapter),
             hex(&self.identity.edition),
             hex(&self.identity.version),
@@ -183,13 +198,14 @@ impl ChapterTrace {
         out.into_bytes()
     }
 }
-fn hex(text: &str) -> String {
+fn hex(text: impl AsRef<[u8]>) -> String {
+    let text = text.as_ref();
     use std::fmt::Write;
     if text.is_empty() {
         return "-".into();
     }
     let mut out = String::new();
-    for byte in text.bytes() {
+    for byte in text {
         let _ = write!(out, "{byte:02x}");
     }
     out
@@ -226,6 +242,9 @@ impl<H: Host> Host for RecordingHost<H> {
         self.inner.real_ops()
     }
 
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.inner.checkpoint(name, args)
+    }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.inner.suspend(name, args)
     }
@@ -296,6 +315,17 @@ impl<H: Host> Host for RecordingHost<H> {
     }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner.string_hash(bytes)
+    }
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner.string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner.substring(bytes, start, end)
     }
     fn native_table_string(&self, id: u32) -> Result<Option<String>, String> {
         self.inner.native_table_string(id)
@@ -797,6 +827,32 @@ mod native_string_recording_tests {
     use super::*;
     use pcx_script::Host;
     #[test]
+    fn string_rules_recording_preserves_raw_builtin_results_without_native_events() {
+        let world = crate::neutral_player::native_case_world_fixture(
+            Some(b"STRING 7\r\n{\r\njmx\r\n}\r\n"),
+            crate::playercolor_host::ScriptStringPolicy::synthetic_fixture(),
+        );
+        let program = world.context().scripts.shared_program();
+        let recording = RecordingHost {
+            inner: world,
+            tick: Some(9),
+            natives: Vec::new(),
+            sequence: 0,
+        };
+        let mut vm = pcx_script::Vm::new(&program, recording);
+        assert_eq!(
+            vm.call("change", &[Value::Str("jm".into())]).unwrap(),
+            Value::Str("eh".into())
+        );
+        assert_eq!(
+            vm.call("cut", &[Value::Str(vec![0xff, 0xc3].into())])
+                .unwrap(),
+            Value::Str(vec![0xff].into())
+        );
+        assert!(vm.host().natives.is_empty());
+        assert_eq!(vm.host().sequence, 0);
+    }
+    #[test]
     fn string_hash_recording_forwards_policy_without_duplicate_native_events() {
         let policy = crate::playercolor_host::ScriptHashPolicy::synthetic_fixture();
         let expected = policy.hash(b"TRIGSTR_7").unwrap();
@@ -851,7 +907,8 @@ mod native_string_recording_tests {
                 .map_config()
                 .unwrap()
                 .name
-                .as_deref(),
+                .as_ref()
+                .map(|s| s.as_utf8().unwrap()),
             Some("TRIGSTR_23 ^^x^^")
         );
     }

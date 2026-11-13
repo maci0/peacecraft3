@@ -474,14 +474,19 @@ fn paint(
     let rows: Vec<_> = board
         .items
         .iter()
-        .map(|i| Row {
-            label: &i.label,
-            label_color: i.label_color,
-            names: i.style[0],
-            values: i.style[1],
-            icons: i.style[2],
+        .map(|i| {
+            Ok(Row {
+                label: i
+                    .label
+                    .as_utf8()
+                    .map_err(|e| format!("leaderboard label is not UTF-8: {e}"))?,
+                label_color: i.label_color,
+                names: i.style[0],
+                values: i.style[1],
+                icons: i.style[2],
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let plan = loaded
         .source
         .plan_names(&loaded.rules, loaded.viewport, requested, &rows, false)?;
@@ -593,6 +598,7 @@ mod tests {
             name_right: -2.,
             value_right: -4.,
             creation_icons: false,
+            missing_player_index: -7,
             backdrop_background_default: 0.,
             row_shadow: [7, 13, 23, 101],
             row_shadow_offset: [0.3, -0.4],

@@ -54,6 +54,7 @@ pub struct CampaignRuntime {
     max_expiries_per_tick: usize,
     session: Option<Weak<()>>,
     origin: f64,
+    counter_origin: u128,
     pending: Duration,
     speed: NonZeroU32,
     tick: u64,
@@ -80,6 +81,7 @@ impl CampaignRuntime {
             max_expiries_per_tick,
             session: None,
             origin: 0.0,
+            counter_origin: 0,
             pending: Duration::ZERO,
             speed: NonZeroU32::MIN,
             tick: 0,
@@ -122,9 +124,18 @@ impl CampaignRuntime {
         true
     }
 
-    /// An error stops this session; repeating an update cannot replay partial effects.
+    /// Execution faults stop delivery; source queue-budget refusals retain unfinished frames.
     pub fn advance(&mut self, session: &mut MapScriptSession<MapStartupHost>, elapsed: Duration) {
         if !self.prepare(session, elapsed) {
+            return;
+        }
+        if Self::counter_platform(session) {
+            match elapsed.checked_mul(self.speed.get()) {
+                Some(input) => {
+                    self.advance_counter(session, input);
+                }
+                None => self.last_error = Some(CampaignRuntimeError::ClockOverflow),
+            }
             return;
         }
         let Some(pending) = elapsed
@@ -170,7 +181,12 @@ impl CampaignRuntime {
             .session
             .as_ref()
             .is_some_and(|old| Weak::ptr_eq(old, &witness))
-            && !self.pending.is_zero()
+            && (!self.pending.is_zero()
+                || session.host().is_some_and(|host| {
+                    host.objects()
+                        .native_counter_pending_ns()
+                        .is_some_and(|n| n > 0)
+                }))
         {
             return Err(CampaignStepError::PendingFrameTime);
         }
@@ -178,7 +194,12 @@ impl CampaignRuntime {
         let start = self.tick;
         if ready {
             for _ in 0..ticks {
-                if !self.advance_one_tick(session) || self.synchronize_script_pause(session) {
+                if Self::counter_platform(session) {
+                    if !self.advance_counter(session, self.step) {
+                        break;
+                    }
+                } else if !self.advance_one_tick(session) || self.synchronize_script_pause(session)
+                {
                     break;
                 }
             }
@@ -211,6 +232,10 @@ impl CampaignRuntime {
             self.session = Some(witness);
             self.pending = Duration::ZERO;
             self.tick = 0;
+            self.counter_origin = session
+                .host()
+                .and_then(|host| host.objects().native_counter_progress_ns())
+                .unwrap_or(0);
             self.last_error = None;
             match session
                 .host()
@@ -230,7 +255,7 @@ impl CampaignRuntime {
         if let Some(host) = session.host() {
             host.objects_mut().advance_volume_group_clock(elapsed);
         }
-        if self.synchronize_script_pause(session) {
+        if !Self::counter_platform(session) && self.synchronize_script_pause(session) {
             if self.last_error.is_none()
                 && let Err(error) = session.advance_queued_events(65536)
             {
@@ -248,6 +273,66 @@ impl CampaignRuntime {
             return false;
         }
         true
+    }
+
+    fn counter_platform(session: &mut MapScriptSession<MapStartupHost>) -> bool {
+        session
+            .host()
+            .is_some_and(|host| host.objects().native_counter_platform())
+    }
+
+    fn synchronize_counter(
+        &mut self,
+        session: &mut MapScriptSession<MapStartupHost>,
+    ) -> Result<(), CampaignRuntimeError> {
+        let objects = session
+            .host()
+            .ok_or(CampaignRuntimeError::MissingClock)?
+            .objects();
+        let progress = objects
+            .native_counter_progress_ns()
+            .ok_or(CampaignRuntimeError::MissingClock)?
+            .checked_sub(self.counter_origin)
+            .ok_or(CampaignRuntimeError::ClockOverflow)?;
+        let tick = u64::try_from(progress / self.step.as_nanos())
+            .map_err(|_| CampaignRuntimeError::TickOverflow)?;
+        let pending = objects
+            .native_counter_pending_ns()
+            .ok_or(CampaignRuntimeError::MissingClock)?;
+        let pending = Duration::new(
+            u64::try_from(pending / 1_000_000_000)
+                .map_err(|_| CampaignRuntimeError::ClockOverflow)?,
+            (pending % 1_000_000_000) as u32,
+        );
+        self.tick = tick;
+        self.pending = pending;
+        Ok(())
+    }
+
+    fn advance_counter(
+        &mut self,
+        session: &mut MapScriptSession<MapStartupHost>,
+        input: Duration,
+    ) -> bool {
+        let result = session.advance_native_counter_frame(Some(input), self.max_expiries_per_tick);
+        let complete = result.is_ok();
+        if let Err(error) = result
+            && !session.native_pacing_can_resume(&error)
+        {
+            self.last_error = Some(error.into());
+        }
+        if let Err(error) = self.synchronize_counter(session) {
+            self.last_error.get_or_insert(error);
+        }
+        if complete
+            && self.last_error.is_none()
+            && let Err(error) = session
+                .advance_unit_ranges(65536)
+                .and_then(|_| session.sample_admitted_vision())
+        {
+            self.last_error = Some(error.into());
+        }
+        complete && self.last_error.is_none()
     }
 
     fn advance_one_tick(&mut self, session: &mut MapScriptSession<MapStartupHost>) -> bool {
@@ -518,6 +603,7 @@ pub fn transition_to_next_level(
         .for_receipts(&bindings.receipts)
         .ok_or(CampaignTransitionError::MissingReader)?;
     let recipe = sources.campaign_for_receipts(&bindings.receipts);
+    let client_sources = sources.client_sources_for_receipts(&bindings.receipts);
     let (resolver, catalog_identity, catalog_sources) = if let Some(recipe) = &recipe {
         let prepare = || -> Result<_, String> {
             let base = recipe.base_resolver().map_err(|error| error.to_string())?;
@@ -646,7 +732,14 @@ pub fn transition_to_next_level(
         required_fields: &required_fields,
         revision,
     };
-    let outcome = requests.replace_selected_with_campaign(sources, resolver, recipe, input, limits);
+    let outcome = requests.replace_selected_with_campaign(
+        sources,
+        resolver,
+        recipe,
+        client_sources,
+        input,
+        limits,
+    );
     match &outcome.result {
         Ok(()) => Ok(()),
         Err(error) => Err(CampaignTransitionError::Binding {

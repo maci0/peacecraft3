@@ -335,3 +335,14 @@ test('ISO engine versions remain ambiguous instead of choosing a version',()=>{
  assert.equal(directEngineFile([{path:'/Game.dll;1',size:3},{path:'/Game.dll;2',size:3},{path:'/Warcraft III.exe;1',size:3}]).status,'ambiguous-named-engine');
  assert.equal(directEngineFile([{path:'/Warcraft III.exe;1',size:3},{path:'/Warcraft III.exe;2',size:3}]).status,'ambiguous-executable-candidate');
 });
+
+test('demanded nonstock auxiliary is unique in the selected main parent only', async () => {
+  const { demandedModule, checkedMemberPath } = await import('../../web/iso/engine-member.js');
+  const request = { status: 'available', module_name: 'OddBackend.bin' };
+  const files = [{ path: '/GAME/ODDBACKEND.BIN;1', size: 19 }, { path: '/OTHER/ODDBACKEND.BIN;1', size: 21 }];
+  assert.equal(demandedModule(files, '/GAME/Warcraft III.exe;1', request, { iso: true }), files[0]);
+  assert.equal(demandedModule(files, '/MISSING/main.exe', request, { iso: true }), null);
+  assert.throws(() => demandedModule([...files, { ...files[0], path: '/GAME/oddbackend.bin;2' }], '/GAME/main.exe', request, { iso: true }), /ambiguous/);
+  assert.throws(() => demandedModule(files, '/GAME/main.exe', { ...request, module_name: '../OddBackend.bin' }, { iso: true }), /Invalid/);
+  for (const path of ['../bad', 'C:/bad', 'a//b', '/absolute', 'bad\u0000']) assert.throws(() => checkedMemberPath(path));
+});

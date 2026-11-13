@@ -12,7 +12,7 @@ pub struct LeaderboardBudget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeaderboardItem {
     pub player: HandleId,
-    pub label: String,
+    pub label: pcx_script::ScriptString,
     pub value: i32,
     /// Effective name/value/icon flags; creation defaults await admitted native rules.
     pub style: [Option<bool>; 3],
@@ -23,7 +23,7 @@ pub struct LeaderboardItem {
 pub struct ScriptLeaderboard {
     pub id: HandleId,
     /// Unset constructor presentation stays unqualified until explicitly assigned.
-    pub label: Option<String>,
+    pub label: Option<pcx_script::ScriptString>,
     pub displayed: Option<bool>,
     pub size_by_item_count: Option<i32>,
     /// showLabel, showNames, showValues, showIcons, in native argument order.
@@ -58,7 +58,7 @@ impl LeaderboardState {
     }
 }
 const CREATE: &str = "CreateLeaderboard";
-const NATIVES: &[(&str, &[&str], &str)] = &[
+pub(super) const NATIVES: &[(&str, &[&str], &str)] = &[
     (CREATE, &[], "leaderboard"),
     ("DestroyLeaderboard", &["leaderboard"], "nothing"),
     ("LeaderboardDisplay", &["leaderboard", "boolean"], "nothing"),
@@ -254,9 +254,9 @@ impl ObjectHost {
     fn leaderboard_text(
         &self,
         name: &str,
-        text: &str,
+        text: &[u8],
         old: usize,
-    ) -> Result<(String, usize), Error> {
+    ) -> Result<(pcx_script::ScriptString, usize), Error> {
         let state = self.leaderboards.as_ref().expect("admitted");
         let total = state
             .text_bytes
@@ -267,17 +267,17 @@ impl ObjectHost {
                 self.inner
                     .error(name, Failure::Budget("leaderboard text bytes"))
             })?;
-        if text.contains('\0') {
+        if text.contains(&0) {
             return Err(self
                 .inner
                 .error(name, Failure::LeaderboardState("text contains NUL")));
         }
-        let mut value = String::new();
+        let mut value = Vec::new();
         value
             .try_reserve_exact(text.len())
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-        value.push_str(text);
-        Ok((value, total))
+        value.extend_from_slice(text);
+        Ok((value.into(), total))
     }
     pub(super) fn leaderboard_native(
         &mut self,
@@ -301,6 +301,46 @@ impl ObjectHost {
                 })
             {
                 return Err(self.inner.error(name, Failure::Signature));
+            }
+            if let Some(rules) = &self.leaderboard_layout
+                && matches!(
+                    name,
+                    "LeaderboardGetPlayerIndex" | "LeaderboardSetItemValue"
+                )
+            {
+                let absent = if name == "LeaderboardGetPlayerIndex" {
+                    Value::Int(rules.missing_player_index)
+                } else {
+                    Value::Null
+                };
+                match args[0] {
+                    Value::Null => return Ok(absent),
+                    Value::Handle(id) => match self
+                        .inner
+                        .entry(id)
+                        .map_err(|e| self.inner.error(name, e.failure))?
+                    {
+                        Entry::Leaderboard { live: false } => return Ok(absent),
+                        Entry::Leaderboard { live: true } => {}
+                        _ => return Err(self.inner.error(name, Failure::WrongFamily)),
+                    },
+                    _ => unreachable!("validated leaderboard signature"),
+                }
+                if name == "LeaderboardGetPlayerIndex" && args[1] == Value::Null {
+                    return Ok(absent);
+                }
+                if let ("LeaderboardSetItemValue", [Value::Handle(id), Value::Int(row), _]) =
+                    (name, args)
+                {
+                    let index = self.leaderboard_index(name, *id)?;
+                    let board = &self.leaderboards.as_ref().expect("admitted").boards[index];
+                    if usize::try_from(*row)
+                        .ok()
+                        .is_none_or(|row| row >= board.items.len())
+                    {
+                        return Ok(Value::Null);
+                    }
+                }
             }
             // These native wrappers return before touching presentation when
             // typed resolution finds no live board. Keep unknown identities strict.
@@ -468,12 +508,22 @@ impl ObjectHost {
                 if name == "LeaderboardHasPlayerItem" {
                     return Ok(Value::Bool(row.is_some()));
                 }
+                if name == "LeaderboardGetPlayerIndex" {
+                    return row
+                        .map(|row| i32::try_from(row).expect("budget"))
+                        .or_else(|| {
+                            self.leaderboard_layout
+                                .as_ref()
+                                .map(|r| r.missing_player_index)
+                        })
+                        .map(Value::Int)
+                        .ok_or_else(|| {
+                            fail(Failure::LeaderboardState("player has no leaderboard row"))
+                        });
+                }
                 let row = row.ok_or_else(|| {
                     fail(Failure::LeaderboardState("player has no leaderboard row"))
                 })?;
-                if name == "LeaderboardGetPlayerIndex" {
-                    return Ok(Value::Int(i32::try_from(row).expect("budget")));
-                }
                 let state = self.leaderboards.as_mut().expect("admitted");
                 let removed = state.boards[index].items.remove(row);
                 state.text_bytes -= removed.label.len();
@@ -489,7 +539,7 @@ impl ObjectHost {
                 ],
             ) => {
                 self.player_settings(*player).map_err(|e| fail(e.failure))?;
-                let label = pcx_script::text::native_map_string(label, strings)
+                let label = pcx_script::text::native_map_bytes(label.as_bytes(), strings)
                     .map_err(|why| fail(Failure::ScriptString(why)))?;
                 if board.items.iter().any(|item| item.player == *player) {
                     return Err(fail(Failure::LeaderboardState(
@@ -518,8 +568,11 @@ impl ObjectHost {
                 state.items += 1;
             }
             ("LeaderboardSetLabel", [_, Value::Str(label)]) => {
-                let old = board.label.as_ref().map_or(0, String::len);
-                let label = pcx_script::text::native_map_string(label, strings)
+                let old = board
+                    .label
+                    .as_ref()
+                    .map_or(0, pcx_script::ScriptString::len);
+                let label = pcx_script::text::native_map_bytes(label.as_bytes(), strings)
                     .map_err(|why| fail(Failure::ScriptString(why)))?;
                 let (label, total) = self.leaderboard_text(name, &label, old)?;
                 let state = self.leaderboards.as_mut().expect("admitted");
@@ -535,7 +588,7 @@ impl ObjectHost {
                     *value;
             }
             ("LeaderboardSetItemLabel", [_, Value::Int(row), Value::Str(label)]) => {
-                let label = pcx_script::text::native_map_string(label, strings)
+                let label = pcx_script::text::native_map_bytes(label.as_bytes(), strings)
                     .map_err(|why| fail(Failure::ScriptString(why)))?;
                 let row = usize::try_from(*row)
                     .ok()
@@ -642,7 +695,10 @@ impl ObjectHost {
                 }
             }
             ("DestroyLeaderboard", _) => {
-                let text = board.label.as_ref().map_or(0, String::len)
+                let text = board
+                    .label
+                    .as_ref()
+                    .map_or(0, pcx_script::ScriptString::len)
                     + board.items.iter().map(|i| i.label.len()).sum::<usize>();
                 let items = board.items.len();
                 *self.inner.entry_mut(id)? = Entry::Leaderboard { live: false };

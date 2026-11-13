@@ -1,5 +1,5 @@
 import { discoverIso, sliceIsoFile } from '../iso.js';
-import { directEngineFile } from './engine-member.js';
+import { directEngineFile, demandedModule, checkedMemberPath, beginClientImport, stageClientSources } from './engine-member.js';
 
 export function defaultIsoCandidates(candidates) {
   const names = candidates.map(candidate => candidate.path.split(/[\\/:]/).at(-1).replace(/;\d+$/, '').toLowerCase());
@@ -21,14 +21,14 @@ export async function importIsoCandidates(file, discovery, selected, api, {
     total += candidate.archiveSize;
   }
   if (total > maxTotalBytes) throw new Error(`selected archives exceed ${maxTotalBytes} byte memory budget`);
-  signal?.throwIfAborted(); api.begin_archive_import();
+  signal?.throwIfAborted(); const tx = beginClientImport(api);
   try {
     let imported = 0;
     for (const candidate of selected) {
       signal?.throwIfAborted();
       const bytes = new Uint8Array(await sliceIsoFile(file, { offset: candidate.offset, size: candidate.archiveSize }).arrayBuffer());
       signal?.throwIfAborted();
-      const summary = api.stage_archive(`${discovery.provenance.sourceName ?? 'local Blob'}:${candidate.path}@${candidate.offset}`, bytes);
+      const summary = tx.stage_archive(`${discovery.provenance.sourceName ?? 'local Blob'}:${candidate.path}@${candidate.offset}`, bytes);
       imported += bytes.length;
       onProgress?.({ phase: 'archives', imported, total, path: candidate.path, summary });
       // Yield for cancel and relative UI progress before the next archive.
@@ -41,16 +41,31 @@ export async function importIsoCandidates(file, discovery, selected, api, {
       const image = new Uint8Array(await sliceIsoFile(file, engine.file).arrayBuffer());
       if (image.byteLength !== engine.file.size) throw new Error('ISO client image length does not match its directory record');
       clientImageSource = `${discovery.provenance.sourceName ?? 'local Blob'}:${engine.file.path}@${engine.file.offset}`;
-      api.stage_client_image(clientImageSource, image);
+      signal?.throwIfAborted();
+      const request = api.client_module_request ? JSON.parse(api.client_module_request(image)) : null;
+      const picked = demandedModule(discovery.files, engine.file.path, request, { iso: true });
+      let module = null;
+      if (picked) {
+        if (total + image.byteLength + picked.size > maxTotalBytes) throw new Error('Selected client sources exceed total byte budget');
+        module = new Uint8Array(await sliceIsoFile(file, picked).arrayBuffer());
+        signal?.throwIfAborted();
+        if (module.byteLength !== picked.size) throw new Error('ISO auxiliary length changed');
+      }
+      if (total + image.byteLength > maxTotalBytes) throw new Error('Selected client image exceeds total byte budget');
+      stageClientSources(tx, clientImageSource, image, { kind: 'iso',
+        container: discovery.provenance.sourceName ?? 'local ISO', main_member: checkedMemberPath(engine.file.path, true),
+        module_member: picked ? checkedMemberPath(picked.path, true) : null,
+        module_source: picked ? `${discovery.provenance.sourceName ?? 'local Blob'}:${picked.path}@${picked.offset}` : null,
+      }, module);
     }
     signal?.throwIfAborted();
     onProgress?.({ phase: 'hydrate', imported, total });
     await new Promise(resolve => setTimeout(resolve, 0));
     signal?.throwIfAborted();
-    const diagnostics = api.commit_archive_import();
+    const diagnostics = tx.commit();
     return { provenance: discovery.provenance, archives: selected.map(({ path, offset, archiveSize }) => ({ path, offset, size: archiveSize })),
       canonicalPaths: api.stored_assets(), revision: api.asset_revision(), diagnostics,
       clientImageStatus: engine.status, clientImageSource, clientImageRole: engine.role };
-  } catch (error) { api.cancel_archive_import(); throw error; }
+  } catch (error) { tx.cancel(); throw error; }
 }
 export { discoverIso };

@@ -19,6 +19,8 @@ pub struct ScriptExecutionFailure {
 pub enum ScriptSessionError {
     #[error("no script session has been initialized")]
     NoSession,
+    #[error("script delivery cannot enter an unfinished timer projection")]
+    PendingTimerProjection,
     #[error("{identity:?}: function id {id:?} is not declared in the admitted program")]
     UnknownFunction {
         identity: AssetIdentity,
@@ -53,10 +55,12 @@ struct TimerDelivery {
     expiry: crate::playercolor_host::TimerExpiry,
     trigger: usize,
     phase: TimerDeliveryPhase,
+    projection_fault: Option<Arc<crate::playercolor_host::Error>>,
 }
 
 #[derive(Clone, Copy)]
 enum TimerDeliveryPhase {
+    MandatoryProjection,
     Trigger,
     Conditions { next: usize, accepted: bool },
     Actions { accepted: bool },
@@ -72,6 +76,19 @@ impl<H: Host + Send + Sync + 'static> Default for MapScriptSession<H> {
     }
 }
 impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
+    fn reject_unfinished_projection(&self) -> Result<(), ScriptSessionError> {
+        if self
+            .active
+            .as_ref()
+            .and_then(|active| active.timer_delivery.as_ref())
+            .is_some_and(|delivery| {
+                matches!(delivery.phase, TimerDeliveryPhase::MandatoryProjection)
+            })
+        {
+            return Err(ScriptSessionError::PendingTimerProjection);
+        }
+        Ok(())
+    }
     pub fn context(&self) -> Option<&Arc<ParsedMapContext>> {
         self.active.as_ref().map(|active| &active.context)
     }
@@ -201,6 +218,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
         id: FunctionId,
         args: &[Value],
     ) -> Result<Value, ScriptSessionError> {
+        self.reject_unfinished_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let name = function_name(&active.context, id)?;
         active
@@ -210,6 +228,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
     }
     /// Start trigger actions as one new thread; a sleep parks it in this VM.
     pub fn run_thread(&mut self, ids: &[FunctionId]) -> Result<(), ScriptSessionError> {
+        self.reject_unfinished_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         for &id in ids {
             function_name(&active.context, id)?;
@@ -219,6 +238,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
         })
     }
     pub fn resume_thread(&mut self, ticket: u64) -> Result<(), ScriptSessionError> {
+        self.reject_unfinished_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         active
             .vm
@@ -262,12 +282,18 @@ fn execution_failure<H: Host>(
 pub enum TimerSessionError {
     #[error("timer delivery is already active")]
     PendingDelivery,
+    #[error("mandatory world projection failed before timer delivery: {0}")]
+    MandatoryProjection(#[source] Arc<crate::playercolor_host::Error>),
     #[error("campaign AI: {0}")]
     Ai(String),
+    #[error("native queue: {0}")]
+    NativeQueue(String),
     #[error("range callback work budget exhausted")]
     RangeBudget,
     #[error("thread wake budget exhausted")]
     WakeBudget,
+    #[error("{0} queue work budget exhausted")]
+    QueueBudget(&'static str),
     #[error("trigger condition {id:?} did not return boolean")]
     ConditionResult { id: FunctionId },
     #[error(transparent)]
@@ -276,7 +302,197 @@ pub enum TimerSessionError {
     Timer(#[from] crate::playercolor_host::Error),
 }
 
+fn queue_selection_error(error: crate::playercolor_host::Error) -> TimerSessionError {
+    if let crate::playercolor_host::Failure::Budget(stage) = &error.failure {
+        TimerSessionError::QueueBudget(stage)
+    } else {
+        error.into()
+    }
+}
+fn source_queue_error(error: crate::native_game_clock::QueueError) -> TimerSessionError {
+    match error {
+        crate::native_game_clock::QueueError::Budget(stage) => {
+            TimerSessionError::QueueBudget(stage)
+        }
+        crate::native_game_clock::QueueError::Invalid(reason) => {
+            TimerSessionError::NativeQueue(reason)
+        }
+    }
+}
+
 impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
+    pub(crate) fn check_pending_projection(&self) -> Result<(), TimerSessionError> {
+        if let Some(delivery) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.timer_delivery.as_ref())
+        {
+            if let Some(fault) = &delivery.projection_fault {
+                return Err(TimerSessionError::MandatoryProjection(Arc::clone(fault)));
+            }
+            return Err(TimerSessionError::PendingDelivery);
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn test_advance_timers_with_projection_work(
+        &mut self,
+        until: f64,
+        mut budget: usize,
+        mut work: usize,
+    ) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
+        let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+        let advances_clock = host.objects().game_paused() != Some(true);
+        if !host.objects().native_clock_driving() {
+            host.objects_mut()
+                .select_legacy_clock_domain(until, advances_clock)?;
+        }
+        self.advance_native_timers(until, &mut budget, &mut work)
+    }
+    /// Queue-budget refusals may resume only while no selected delivery has faulted.
+    pub fn native_pacing_can_resume(&mut self, error: &TimerSessionError) -> bool {
+        matches!(
+            error,
+            TimerSessionError::QueueBudget(_) | TimerSessionError::WakeBudget
+        ) && self.check_pending_projection().is_ok()
+            && self
+                .host()
+                .is_some_and(|host| host.objects().check_native_physics_fault().is_ok())
+    }
+
+    /// Admit one independently supplied frame, or resume retained frame work.
+    /// This transport does not infer game speed or real time from a legacy horizon.
+    pub fn advance_native_frame(
+        &mut self,
+        input: Option<crate::native_game_clock::FrameInput>,
+        budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        self.advance_native_input(
+            input.map(crate::native_game_clock::Input::Independent),
+            budget,
+        )
+    }
+    /// Simulate fresh local GetTickCount input, retaining sub-millisecond carry.
+    pub fn advance_native_counter_frame(
+        &mut self,
+        input: Option<std::time::Duration>,
+        budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        self.advance_native_input(input.map(crate::native_game_clock::Input::Counter), budget)
+    }
+    fn advance_native_input(
+        &mut self,
+        input: Option<crate::native_game_clock::Input>,
+        mut budget: usize,
+    ) -> Result<usize, TimerSessionError> {
+        use crate::native_game_clock::Domain;
+        self.check_pending_projection()?;
+        self.host()
+            .ok_or(ScriptSessionError::NoSession)?
+            .objects()
+            .check_native_physics_fault()?;
+        let mut work = 65536;
+        if let Some(input) = input {
+            let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+            let fresh = host.objects().native_game_point().is_some()
+                && !host.objects().native_clock_driving();
+            let prepared = if fresh {
+                Some(
+                    host.prepare_native_ai_sleep_admission(&mut work)
+                        .map_err(TimerSessionError::Ai)?,
+                )
+            } else {
+                None
+            };
+            host.objects_mut().enqueue_native_input(input, &mut work)?;
+            if let Some(rows) = prepared {
+                host.commit_native_ai_sleep_rows(rows);
+            }
+        }
+        let mut delivered = 0;
+        loop {
+            let segment = self
+                .host()
+                .ok_or(ScriptSessionError::NoSession)?
+                .objects_mut()
+                .next_native_frame_segment(&mut work)
+                .map_err(queue_selection_error)?;
+            let Some((domain, segment)) = segment else {
+                return Ok(delivered);
+            };
+            match domain {
+                Domain::Game => {
+                    let objects = self.host().ok_or(ScriptSessionError::NoSession)?.objects();
+                    let until = objects.native_game_clock_seconds(segment.point)?;
+                    delivered += self.advance_native_timers(until, &mut budget, &mut work)?;
+                }
+                Domain::Real => loop {
+                    let wake = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects()
+                        .next_native_thread_wake(segment.point, &mut work)
+                        .map_err(queue_selection_error)?;
+                    let Some(wake) = wake else { break };
+                    budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    let objects = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut();
+                    objects.validate_native_thread_wake(&wake)?;
+                    if !wake.terminal {
+                        objects.commit_native_thread_wake(wake)?;
+                        continue;
+                    }
+                    objects.begin_native_domain_callback(domain, wake.point)?;
+                    let resumed = objects
+                        .commit_native_thread_wake(wake)
+                        .map_err(TimerSessionError::from)
+                        .and_then(|_| {
+                            self.resume_thread(wake.ticket)
+                                .map_err(TimerSessionError::from)
+                        })
+                        .and_then(|_| self.advance_queued_events(budget));
+                    let cleanup = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .objects_mut()
+                        .end_native_domain_callback();
+                    let events = match (resumed, cleanup) {
+                        (Err(error), Err(cleanup)) => {
+                            return Err(TimerSessionError::NativeQueue(format!(
+                                "{error}; scope cleanup: {cleanup}"
+                            )));
+                        }
+                        (Err(error), Ok(())) => return Err(error),
+                        (Ok(_), Err(error)) => return Err(error.into()),
+                        (Ok(events), Ok(())) => events,
+                    };
+                    budget = budget
+                        .checked_sub(events)
+                        .ok_or(TimerSessionError::WakeBudget)?;
+                    delivered += 1 + events;
+                },
+            }
+            let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+            let ai = if domain == Domain::Game && segment.ends_cycle {
+                Some(
+                    host.prepare_native_ai_sleep_rebase(domain, &mut work)
+                        .map_err(TimerSessionError::Ai)?,
+                )
+            } else {
+                None
+            };
+            host.objects_mut()
+                .finish_native_frame_segment(domain, segment, &mut work)?;
+            if let Some(rows) = ai {
+                host.commit_native_ai_sleep_rows(rows);
+            }
+        }
+    }
+
     /// Sample admitted shared vision after script delivery. A blocked admission
     /// is retried, so placement or day/night that arrives later can still admit.
     /// An already live ledger is left in place. Sessions that stay blocked are
@@ -315,6 +531,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         until: f64,
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let host = self.host().ok_or(ScriptSessionError::NoSession)?;
         let advances_clock = host.objects().game_paused() != Some(true);
         host.objects_mut()
@@ -328,6 +545,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         budget: &mut usize,
         activity_work: &mut usize,
     ) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let result = self.advance_timers_inner(until, budget, activity_work);
         if result.is_err()
             && let Some(host) = self.host()
@@ -396,14 +614,52 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .objects()
                 .game_paused()
                 == Some(true)
+                && !self
+                    .host()
+                    .ok_or(ScriptSessionError::NoSession)?
+                    .objects()
+                    .native_frame_active()
             {
                 return Ok(delivered);
             }
-            let ai_wake = self
-                .host()
-                .ok_or(ScriptSessionError::NoSession)?
-                .next_ai_wake(until);
-            let step_until = ai_wake.map_or(until, |(at, _, _)| at);
+            let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+            let paired = host.objects().native_frame_active();
+            let native_ai = if paired {
+                let point = host
+                    .objects()
+                    .native_game_point()
+                    .expect("native frame Game point");
+                host.next_native_ai_wake(point, activity_work)
+                    .map_err(source_queue_error)?
+            } else {
+                None
+            };
+            let ai_wake = if paired {
+                None
+            } else {
+                host.next_ai_wake(until)
+            };
+            let native_limit = paired.then(|| {
+                host.objects()
+                    .native_game_point()
+                    .expect("native frame Game point")
+            });
+            let native_target = if let Some(limit) = native_limit {
+                host.objects()
+                    .next_native_timer_boundary(limit, activity_work)
+                    .map_err(queue_selection_error)?
+                    .into_iter()
+                    .chain(native_ai.map(|wake| wake.point))
+                    .min_by_key(|point| point.local)
+                    .or(Some(limit))
+            } else {
+                None
+            };
+            let step_until = if let Some(point) = native_target {
+                host.objects().native_game_clock_seconds(point)?
+            } else {
+                ai_wake.map_or(until, |(at, _, _)| at)
+            };
             let activity_wake = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
@@ -419,14 +675,26 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     if let Some(at) = objects.next_native_physics_boundary(outer)? {
                         let seconds = objects.native_physics_seconds(at);
                         if seconds <= step_until {
-                            let timer = objects.next_native_timer_boundary(outer, activity_work)?;
-                            if let Some(timer) = timer.filter(|timer| {
-                                f32::from_bits(timer.local) < f32::from_bits(at.local)
-                            }) {
-                                step_until = step_until.min(objects.native_physics_seconds(timer));
-                                None
+                            if let Some(target) = native_target {
+                                if at.cycle != target.cycle {
+                                    return Err(TimerSessionError::NativeQueue(
+                                        "physics and selected game boundary cycles differ".into(),
+                                    ));
+                                }
+                                (f32::from_bits(at.local) <= f32::from_bits(target.local))
+                                    .then_some(at)
                             } else {
-                                Some(at)
+                                let timer =
+                                    objects.next_native_timer_boundary(outer, activity_work)?;
+                                if let Some(timer) = timer.filter(|timer| {
+                                    f32::from_bits(timer.local) < f32::from_bits(at.local)
+                                }) {
+                                    step_until =
+                                        step_until.min(objects.native_physics_seconds(timer));
+                                    None
+                                } else {
+                                    Some(at)
+                                }
                             }
                         } else {
                             None
@@ -438,7 +706,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     None
                 }
             };
-            // shortcut: physics wins equal-family deadlines until the native cross-family heap order is qualified.
+            // shortcut: physics wins equal-family deadlines until native cross-family heap order is qualified.
             if let Some(at) = physics {
                 *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                 self.host()
@@ -447,11 +715,15 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .begin_native_physics(at, activity_work)?;
                 continue;
             }
-            let wake = self
+            let objects = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
-                .objects_mut()
-                .next_thread_wake(step_until)?;
+                .objects_mut();
+            let wake = if objects.native_frame_active() {
+                None
+            } else {
+                objects.next_thread_wake(step_until)?
+            };
             if let Some(ticket) = wake {
                 let objects = self
                     .host()
@@ -464,11 +736,43 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 delivered += 1;
                 continue;
             }
+            let objects = self.host().ok_or(ScriptSessionError::NoSession)?.objects();
+            // shortcut: an AI deadline needs its native game-queue entry before it can enter the callback scope.
+            if objects.native_clock_driving()
+                && ai_wake.is_some_and(|(at, _, _)| at == step_until)
+                && activity_wake != Some(step_until)
+                && objects
+                    .next_timer_deadline()
+                    .is_none_or(|at| at > step_until)
+            {
+                return Err(TimerSessionError::Ai(
+                    "parked AI wake has no native game-queue entry".into(),
+                ));
+            }
             let expiry = self
                 .host()
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
-                .next_timer_expiry(step_until, budget)?;
+                .next_timer_expiry(step_until, budget)
+                .map_err(|error| {
+                    if paired {
+                        queue_selection_error(error)
+                    } else {
+                        error.into()
+                    }
+                })?;
+            let selected_expiry = expiry.is_some();
+            if let Some(expiry) = expiry {
+                self.active
+                    .as_mut()
+                    .expect("selected timer session")
+                    .timer_delivery = Some(TimerDelivery {
+                    expiry,
+                    trigger: 0,
+                    phase: TimerDeliveryPhase::MandatoryProjection,
+                    projection_fault: None,
+                });
+            }
             let movement = {
                 let objects = self
                     .host()
@@ -478,17 +782,30 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 objects.advance_unit_activity_mandatory(now, activity_work)
             };
             if let Err(error) = movement {
-                if let Some(expiry) = expiry {
-                    self.host()
-                        .ok_or(ScriptSessionError::NoSession)?
-                        .objects_mut()
-                        .finish_timer_expiry(expiry)?;
+                if selected_expiry {
+                    let error = Arc::new(error);
+                    self.timer_delivery_mut().projection_fault = Some(Arc::clone(&error));
+                    return Err(TimerSessionError::MandatoryProjection(error));
                 }
                 return Err(error.into());
             }
-            let Some(expiry) = expiry else {
+            if !selected_expiry {
                 if activity_wake == Some(step_until) {
                     *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    continue;
+                }
+                if let Some(wake) = native_ai.filter(|wake| Some(wake.point) == native_target) {
+                    *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
+                    let outcome = self
+                        .host()
+                        .ok_or(ScriptSessionError::NoSession)?
+                        .deliver_native_ai_wake(wake, activity_work)
+                        .map_err(TimerSessionError::Ai)?;
+                    delivered +=
+                        usize::from(outcome == crate::campaign_ai::AiWakeDelivery::Resumed);
+                    continue;
+                }
+                if paired && native_target != native_limit {
                     continue;
                 }
                 if let Some((_, player, ticket)) = ai_wake {
@@ -508,24 +825,13 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 objects.flush_unit_activity_routes(now, activity_work)?;
                 return Ok(delivered);
             };
-            self.deliver_timer_expiry(expiry)?;
+            self.timer_delivery_mut().phase = TimerDeliveryPhase::Trigger;
+            self.deliver_prepared_timer_expiry()?;
             delivered += 1;
         }
     }
 
-    fn deliver_timer_expiry(
-        &mut self,
-        expiry: crate::playercolor_host::TimerExpiry,
-    ) -> Result<(), TimerSessionError> {
-        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
-        if active.timer_delivery.is_some() {
-            return Err(TimerSessionError::PendingDelivery);
-        }
-        active.timer_delivery = Some(TimerDelivery {
-            expiry,
-            trigger: 0,
-            phase: TimerDeliveryPhase::Trigger,
-        });
+    fn deliver_prepared_timer_expiry(&mut self) -> Result<(), TimerSessionError> {
         let result = self.drive_timer_delivery();
         let delivery = self
             .active
@@ -566,6 +872,9 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .expect("prepared timer delivery");
             let trigger = delivery.trigger;
             match delivery.phase {
+                TimerDeliveryPhase::MandatoryProjection => {
+                    return Err(TimerSessionError::PendingDelivery);
+                }
                 TimerDeliveryPhase::Trigger => {
                     if trigger == delivery.expiry.triggers().len() {
                         self.timer_delivery_mut().phase = TimerDeliveryPhase::Handler;
@@ -702,6 +1011,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     /// One script boundary: range entries, then region membership and every
     /// queued event, each as a filtered trigger thread.
     pub fn advance_unit_ranges(&mut self, work: usize) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let delivered = drain_unit_ranges(&active.context, &mut active.vm, work)?;
         let mut work = work;
@@ -744,6 +1054,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.events")
     )]
     pub fn advance_queued_events(&mut self, mut work: usize) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let mut delivered = 0;
         while let Some(fired) = active.vm.host().inner.objects_mut().take_fired_event() {

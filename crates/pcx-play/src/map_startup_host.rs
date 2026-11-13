@@ -305,6 +305,8 @@ pub mod sound_playback;
 
 pub struct MapStartupInputs {
     pub thematic_music_rules: Option<crate::playercolor_host::ThematicMusicRules>,
+    pub regular_music_volume_rules:
+        Option<Result<crate::playercolor_host::RegularMusicVolumeRules, String>>,
     /// Map members from the receiving chapter's selected source archive generation.
     pub cached_unit_source_maps: Vec<pcx_assets::AssetPath>,
     pub unit_decay: Option<crate::unit_decay::Rules>,
@@ -374,6 +376,7 @@ pub struct MapStartupInputs {
     /// Selected real literal and operator policy; absent retains host arithmetic.
     pub numeric: Option<crate::script_numeric::NumericPolicy>,
     pub script_hash: Option<crate::playercolor_host::ScriptHashPolicy>,
+    pub script_strings: Option<crate::playercolor_host::ScriptStringPolicy>,
     pub destructable_restore: Option<crate::playercolor_host::RestoreLifePolicy>,
     /// Source-qualified XP-factor limits; absent leaves the handicap natives unsupported.
     pub experience_handicap: Option<crate::player_handicap::Rules>,
@@ -470,6 +473,41 @@ impl MapStartupHost {
         self
     }
 
+    pub(crate) fn prepare_native_ai_sleep_admission(
+        &mut self,
+        work: &mut usize,
+    ) -> Result<crate::campaign_ai::PreparedAiSleepRows, String> {
+        self.ai
+            .prepare_native_admission(self.inner.as_ref().ok_or("AI world is lent")?, work)
+    }
+    pub(crate) fn prepare_native_ai_sleep_rebase(
+        &mut self,
+        domain: crate::native_game_clock::Domain,
+        work: &mut usize,
+    ) -> Result<crate::campaign_ai::PreparedAiSleepRows, String> {
+        self.ai
+            .prepare_native_rebase(self.inner.as_ref().ok_or("AI world is lent")?, domain, work)
+    }
+    pub(crate) fn commit_native_ai_sleep_rows(
+        &mut self,
+        rows: crate::campaign_ai::PreparedAiSleepRows,
+    ) {
+        self.ai.commit_native_sleep_rows(rows);
+    }
+    pub(crate) fn next_native_ai_wake(
+        &mut self,
+        until: crate::native_game_clock::Point,
+        work: &mut usize,
+    ) -> Result<Option<crate::campaign_ai::AiWake>, crate::native_game_clock::QueueError> {
+        self.ai.next_native_wake(until, work)
+    }
+    pub(crate) fn deliver_native_ai_wake(
+        &mut self,
+        wake: crate::campaign_ai::AiWake,
+        work: &mut usize,
+    ) -> Result<crate::campaign_ai::AiWakeDelivery, String> {
+        self.ai.deliver_native_wake(&mut self.inner, wake, work)
+    }
     pub(crate) fn next_ai_wake(&mut self, until: f64) -> Option<(f64, i32, u64)> {
         self.ai.next_wake(until)
     }
@@ -686,6 +724,7 @@ fn assemble_inner(
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
         thematic_music_rules,
+        regular_music_volume_rules,
         cached_unit_source_maps,
         unit_decay,
         unit_blend,
@@ -736,6 +775,7 @@ fn assemble_inner(
         terrain_pathing,
         numeric,
         script_hash,
+        script_strings,
         destructable_restore,
         experience_handicap,
         health_handicap,
@@ -819,6 +859,9 @@ fn assemble_inner(
     }
     if let Some(rules) = thematic_music_rules {
         object = object.with_thematic_music_rules(rules)?;
+    }
+    if let Some(rules) = regular_music_volume_rules {
+        object = object.with_regular_music_volume_rules(rules)?;
     }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;
@@ -990,6 +1033,9 @@ fn assemble_inner(
     if let Some(policy) = numeric {
         object = object.with_script_numeric(policy);
         object.admit_native_game_clock()?;
+    }
+    if let Some(policy) = script_strings {
+        object = object.with_script_strings(policy);
     }
     if let Some(policy) = script_hash {
         object = object.with_script_hash(policy);
@@ -1200,6 +1246,23 @@ fn assemble_inner(
 }
 
 impl Host for MapStartupHost {
+    fn string_case(&self, bytes: &[u8], upper: bool) -> Result<pcx_script::ScriptString, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .string_case(bytes, upper)
+    }
+    fn substring(
+        &self,
+        bytes: &[u8],
+        start: i32,
+        end: i32,
+    ) -> Result<Option<pcx_script::ScriptString>, String> {
+        self.inner
+            .as_ref()
+            .ok_or("map world is not lent")?
+            .substring(bytes, start, end)
+    }
     fn string_hash(&self, bytes: &[u8]) -> Result<i32, String> {
         self.inner
             .as_ref()
@@ -1221,6 +1284,9 @@ impl Host for MapStartupHost {
     }
     fn real_ops(&self) -> Option<&dyn pcx_script::RealOps> {
         self.world().real_ops()
+    }
+    fn checkpoint(&mut self, name: &str, args: &[Value]) -> Result<bool, String> {
+        self.world_mut().checkpoint(name, args)
     }
     fn suspend(&mut self, name: &str, args: &[Value]) -> bool {
         self.world_mut().suspend(name, args)
@@ -1352,6 +1418,9 @@ impl MapStartupHost {
                 .filter_map(|slot| i32::try_from(slot).ok())
                 .find(|&slot| self.objects().player_identity(slot) == Some(*player))
                 .ok_or("StartCampaignAI: player is not a current identity")?;
+            let path = path
+                .as_utf8()
+                .map_err(|why| format!("StartCampaignAI: unsupported path UTF8: {why}"))?;
             self.ai.start(&mut self.inner, ordinal, path)?;
             return Ok(Value::Null);
         }
@@ -1418,13 +1487,19 @@ impl MapStartupHost {
         if name == "SetDayNightModels"
             && let [Value::Str(terrain), Value::Str(unit)] = args
         {
+            let terrain = terrain
+                .as_utf8()
+                .map_err(|why| format!("SetDayNightModels: terrain path UTF8: {why}"))?;
+            let unit = unit
+                .as_utf8()
+                .map_err(|why| format!("SetDayNightModels: unit path UTF8: {why}"))?;
             let loaded = self.objects().day_night_state().is_some_and(|state| {
                 [terrain, unit].iter().all(|path| {
                     state
                         .assets()
                         .models()
                         .iter()
-                        .any(|model| model.script_path() == path.as_str())
+                        .any(|model| model.script_path() == *path)
                 })
             });
             if !loaded && let Some(loader) = &mut self.day_night_loader {
