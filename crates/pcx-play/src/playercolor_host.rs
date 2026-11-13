@@ -196,6 +196,13 @@ pub struct Conversion {
     pub span: Span,
     pub domain: BTreeSet<i32>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemovedUnitTechnology {
+    Inactive,
+    Completed,
+    PendingUpgrade([u8; 4]),
+}
+
 #[derive(Debug)]
 enum Entry {
     Weather {
@@ -299,7 +306,7 @@ enum Entry {
     RemovedUnit {
         owner: HandleId,
         kind: [u8; 4],
-        alive: Option<bool>,
+        technology: Option<RemovedUnitTechnology>,
         location: Option<(f64, [f32; 2])>,
         /// Game time the removal ran, when a clock was available.
         removed_at: Option<f64>,

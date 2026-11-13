@@ -1781,10 +1781,7 @@ fn selected_original_upgrade_modes_use_production_profiles_and_isolate_the_pendi
             },
         )
         .unwrap();
-        assert_eq!(
-            training.upgrade_policy().is_ok(),
-            values[0] == Some(0.) && values[3] == Some(0.)
-        );
+        assert_eq!(training.upgrade_policy().is_ok(), values[3] == Some(0.));
         receipt.push(serde_json::json!({"arm":arm["arm"], "map_sha256":hex(&bytes), "selection":reader.selection.prefix, "units":units, "policy":values, "profile_sources":sources, "profile_sha256":hex(&misc.bytes), "map_misc_sha256":map_misc.as_ref().map(|b| hex(b))}));
     }
     assert_eq!(receipt[0]["selection"], "Melee_V0");

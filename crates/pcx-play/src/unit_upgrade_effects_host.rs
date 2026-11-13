@@ -362,6 +362,9 @@ impl ObjectHost {
         if let Some(vitals) = vitals {
             pools.push((unit, vitals))
         }
+        for (unit, vitals) in &pools {
+            self.prepare_pending_upgrade_pool_change(*unit, vitals)?;
+        }
         let new_records = levels.len() - new.research_levels.len();
         let limit = players
             .research
@@ -555,6 +558,7 @@ impl ObjectHost {
                     .map_err(|e| fail(format!("{}: {e}", String::from_utf8_lossy(&code))))?;
                 level = next;
             }
+            self.prepare_pending_upgrade_pool_change(id, &vitals)?;
             plan.pools.push((id, vitals));
         }
         Ok(plan)

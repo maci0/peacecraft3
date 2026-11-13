@@ -46,7 +46,7 @@ impl ObjectHost {
         &mut self,
         unit: pcx_script::HandleId,
     ) -> Result<Value, Error> {
-        let (shown, position, resource_amount, owner, kind, alive, birth) = match self
+        let (shown, position, resource_amount, owner, kind, technology, birth) = match self
             .inner
             .entry(unit)
             .map_err(|e| self.inner.error(REMOVE, e.failure))?
@@ -58,7 +58,16 @@ impl ObjectHost {
                 record.resource_amount,
                 record.owner,
                 record.definition.rawcode,
-                super::unit_technology::live(record).ok(),
+                super::unit_technology::live(record).ok().map(|live| {
+                    use super::super::RemovedUnitTechnology;
+                    if !live {
+                        RemovedUnitTechnology::Inactive
+                    } else if let Some(kind) = self.pending_structure_upgrade_target(unit) {
+                        RemovedUnitTechnology::PendingUpgrade(kind.to_be_bytes())
+                    } else {
+                        RemovedUnitTechnology::Completed
+                    }
+                }),
                 record.birth,
             ),
             _ => return Err(self.inner.error(REMOVE, Failure::WrongFamily)),
@@ -117,7 +126,7 @@ impl ObjectHost {
         *self.inner.entry_mut(unit)? = Entry::RemovedUnit {
             owner,
             kind,
-            alive,
+            technology,
             location,
             removed_at: now,
             resource_amount,

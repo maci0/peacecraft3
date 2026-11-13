@@ -27,7 +27,7 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(name, e.failure))?;
         let mut count = self
             .executed_units()
-            .filter(|(_, record)| record.owner == owner)
+            .filter(|(unit, record)| record.owner == owner && !self.producer_is_upgrading(*unit))
             .try_fold(0i32, |count, (_, record)| {
                 if !counted_unit_live(record).map_err(fail)? {
                     return Ok(count);
@@ -47,7 +47,18 @@ impl ObjectHost {
             let catalog = self
                 .unit_catalog()
                 .map_err(|e| self.inner.error(name, e.failure))?;
-            for kind in self.pending_production_kinds(owner) {
+            let retained = self.inner.arena.iter().filter_map(|entry| match entry {
+                super::Entry::RemovedUnit {
+                    owner: previous,
+                    technology: Some(super::super::RemovedUnitTechnology::PendingUpgrade(target)),
+                    removed_at,
+                    ..
+                } if *previous == owner && self.removed_unit_state_retained(*removed_at) => {
+                    Some(i32::from_be_bytes(*target))
+                }
+                _ => None,
+            });
+            for kind in self.pending_production_kinds(owner).chain(retained) {
                 let definition = catalog
                     .resolve(kind.to_be_bytes())
                     .map_err(|_| fail("queued unit type is not in the catalog"))?;

@@ -964,7 +964,7 @@ impl ObjectHost {
         self.live_food(owner, column)
     }
 
-    fn live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
+    pub(super) fn live_food(&self, owner: HandleId, column: &str) -> Result<i32, Error> {
         self.executed_units()
             .filter(|(id, u)| {
                 u.owner == owner
@@ -980,8 +980,13 @@ impl ObjectHost {
                 } else {
                     0
                 },
-                |total, (_, u)| {
-                    let value = self.unit_food_amount(&u.definition, column).map_err(|s| {
+                |total, (id, u)| {
+                    let pending = self
+                        .pending_upgrade_food_kind(id, column)
+                        .map(|kind| self.resolve_form_definition(kind))
+                        .transpose()?;
+                    let definition = pending.as_ref().unwrap_or(&u.definition);
+                    let value = self.unit_food_amount(definition, column).map_err(|s| {
                         self.inner.error(GET_PLAYER_STATE, Failure::UnitActivity(s))
                     })?;
                     total.checked_add(value).ok_or_else(|| {
@@ -2328,6 +2333,23 @@ impl ObjectHost {
         })
     }
 
+    pub(super) fn structure_upgrade_policy(
+        &self,
+    ) -> Result<crate::training_rules::UpgradePolicy, Error> {
+        self.training_queue_slots()?;
+        self.players
+            .as_ref()
+            .expect("checked")
+            .resources
+            .as_ref()
+            .expect("checked")
+            .rules
+            .training_rules()
+            .expect("checked")
+            .upgrade_policy()
+            .map_err(|why| self.inner.error("SetProduce", Failure::UnitActivity(why)))
+    }
+
     pub(super) fn structure_upgrade_costs(
         &self,
         original: &pcx_sim::world::Definition,
@@ -2445,6 +2467,31 @@ impl ObjectHost {
             .ai_production
             .clone();
         resources.rules.training = Ok(training);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_owner_health_fixture(&mut self, owner: HandleId, value: f32) {
+        let index = self.player_index(&Value::Handle(owner), "fixture").unwrap();
+        self.players.as_mut().unwrap().rows[index].health_handicap = Some(value);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_unadmitted_liveness_fixture(&mut self, unit: HandleId) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).unwrap() else {
+            panic!("unit")
+        };
+        record.vitals = None;
+        record.combat = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn training_pool_bonus_fixture(&mut self, unit: HandleId, life: f32, mana: f32) {
+        let Entry::Unit { record } = self.inner.entry_mut(unit).unwrap() else {
+            panic!("unit")
+        };
+        let pools = record.vitals.as_mut().unwrap();
+        pools.max_life += life;
+        pools.max_mana += mana;
     }
 
     #[cfg(test)]
