@@ -307,6 +307,7 @@ impl ObjectHost {
             "SetUnitAnimation",
             "SetUnitAnimationWithRarity",
             "SetUnitBlendTime",
+            "SetUnitOwner",
             "SetUnitTimeScale",
             "UnitResetCooldown",
             "UnitShareVision",

@@ -33,7 +33,7 @@ fn count(count: usize) -> Result<u32, String> {
     Ok(count)
 }
 fn reduce(word: u32, count: u32) -> usize {
-    (u64::from(word) * u64::from(count) >> u32::BITS) as usize
+    ((u64::from(word) * u64::from(count)) >> u32::BITS) as usize
 }
 
 impl AudioRandom {

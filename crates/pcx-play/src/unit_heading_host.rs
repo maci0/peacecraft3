@@ -307,7 +307,7 @@ impl ObjectHost {
         Ok(())
     }
 
-    pub(crate) fn check_static_heading_native(
+    pub(crate) fn check_static_heading_transition(
         &self,
         name: &str,
         args: &[Value],

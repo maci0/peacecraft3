@@ -9,14 +9,14 @@ use crate::{
 use pcx_script::RealOps;
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
+#[path = "native_clock_checkpoint.rs"]
+mod checkpoint;
 #[path = "native_game_frame.rs"]
 pub mod frame;
 #[path = "native_sleep_rules.rs"]
 pub mod sleep;
 #[path = "native_turn_rules.rs"]
 pub mod turn;
-#[path = "native_clock_checkpoint.rs"]
-mod checkpoint;
 pub use frame::FrameInput;
 pub use sleep::Domain;
 

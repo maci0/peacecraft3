@@ -16,8 +16,9 @@ Both former stash tips contain identical candidate content:
 `b368c5b691c69ebbc26acc1388af1975e12790c3` (base `9cf6888d`) and
 `c3b0954065393aff868a45c065972e1c205d98c1` (base `2c612baa`). Their exact patches
 have SHA-256 `7a649c21dc7ccc9592ea2a0832663754f04e912b087cccdcb740129a04bc822c`
-and length 11050 bytes. Both are represented by the historical commit; no stash
-was dropped. Other shared stashes are outside this checkpoint.
+and length 11050 bytes. Both are represented by the historical commit. Release
+consolidation additionally retains the original stash objects in main's ancestry
+before clearing the temporary stash stack.
 
 ## Intake and validation
 
@@ -50,12 +51,10 @@ Retained local receipts:
   acceptance, 3668 package tests, 33 explicit source/witness gates, 449 application
   executions and strict native/WASM checks/builds.
 
-No builds remain running. Managed terminals `391fc931-041c-4d7b-b905-e84920e99db5`
-and `b62b3708-697e-4cbd-979a-8df3a17a0885` are idle. At handoff, no owned compiler,
-linker, validation runner, original client or reverse-engineering session remained.
-Idle shell PIDs were 1176967 and 1908396. Infrastructure process 874642
-(`blender-mcp`) had this working directory; it is not a validation job and was not
-terminated. The private build cache is `/tmp/pc3-fidelity-sol61-09-target`.
+The checkpoint had no live validation or original-client jobs at handoff.
+Consolidation retains the source and deferred candidate in main's ancestry;
+temporary worktrees, terminals and build caches are retired during release
+cleanup. Local receipt paths above describe historical runs, not shipped files.
 
 ## Remaining limits
 

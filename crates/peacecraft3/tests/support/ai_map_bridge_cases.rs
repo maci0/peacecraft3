@@ -93,7 +93,7 @@ endfunction
     map.common
         .extend_from_slice(script_timer_cases::TIMER_COMMON.as_bytes());
     map.common
-        .extend_from_slice(crate::campaign_startup_cases::timed_trigger_cases::COMMON.as_bytes());
+        .extend_from_slice(super::super::super::timed_trigger_cases::COMMON.as_bytes());
     map.common.extend_from_slice(b"native StartCampaignAI takes player p, string path returns nothing\nconstant native GetPlayerState takes player p, playerstate state returns integer\nnative TriggerSleepAction takes real delay returns nothing\nnative TriggerWaitForSound takes sound s, real offset returns nothing\nglobals\nconstant playerstate PLAYER_STATE_RESOURCE_GOLD=ConvertPlayerState(1)\nconstant playerstate PLAYER_STATE_RESOURCE_LUMBER=ConvertPlayerState(2)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_USED=ConvertPlayerState(5)\nconstant playerstate PLAYER_STATE_RESOURCE_FOOD_CAP=ConvertPlayerState(4)\nconstant playerstate PLAYER_STATE_FOOD_CAP_CEILING=ConvertPlayerState(6)\nconstant playerstate PLAYER_STATE_GOLD_GATHERED=ConvertPlayerState(15)\nconstant playerstate PLAYER_STATE_LUMBER_GATHERED=ConvertPlayerState(16)\n");
     map.common.extend_from_slice(b"endglobals\n");
     map.rebuild();

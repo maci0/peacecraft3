@@ -50,12 +50,13 @@ in progress. The minimap now uses source-derived live sight, occlusion heights, 
 
 ## Status
 
-Current release: [0.17.0](docs/releases/0.17.0.md).
+Current release: [0.18.0](docs/releases/0.18.0.md).
 
-Human01 and Human02 have reached authored Victory in local scripted gameplay runs.
-All 97 shipped campaign, credits and sub-maps pass startup against a local Legacy
-1.29.2.9231 install. Play beyond startup, interlude continuation and complete
-rendering fidelity are still in progress. See [TRACKER.md](TRACKER.md) for the current scope.
+Previous local scripted runs reached authored Victory in Human01 and Human02,
+and a prior startup sweep covered all 97 shipped campaign, credits and sub-maps
+against Legacy 1.29.2.9231. That is not a complete 0.18.0 campaign replay.
+Play beyond startup, continuation, full Save/Load and rendering fidelity remain
+in progress. See [TRACKER.md](TRACKER.md) for current validation and limits.
 
 ```
 wc3/game/app/game.dll    71 810 procedures / 17 207 strings   (REA + Ghidra 12.1.3)
@@ -89,7 +90,8 @@ compiles, tests and packages each target separately.
 The [browser demo](https://maci0.github.io/peacecraft3-demo/) contains no original
 game assets. Import your own local ISO; base-only content does not enable TFT.
 See [supported imports and packaging](docs/pages-demo.md). This is a partial menu
-demo, with installer-only images and full gameplay still unsupported.
+demo with a bounded stored-base installer profile; other installer profiles and
+full gameplay remain unsupported.
 
 The optional `pcx-blp` `wasm_smoke` example requires `--features local-fixtures`
 and locally extracted `SelectionCircleLarge.blp`, `Footman.mdx` and `misc.tga`

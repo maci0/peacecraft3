@@ -7579,3 +7579,23 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   acquisition/retry, AI-to-map observer delivery, full Save/root restore,
   browser runtime validation of this build and full native tick parity remain
   unfinished.
+
+- 2026-11-13: Release 0.18.0 consolidates all current branches and worktrees.
+  Accepted implementations are merged; superseded source and deferred startup
+  candidates are preserved in main's ancestry with strict defaults restored.
+  The long-turn, observer and regular-playback candidates remain diagnostic or
+  unadmitted. Full Save/Load and native tick parity are not complete.
+
+  Final validation: 6,405 workspace tests passed, zero failed, 557 explicit or
+  input-dependent ignores; 35 source/witness gates, 449 additional application
+  executions and 102 JavaScript tests passed. Strict native/WASM checks,
+  formatting and library builds pass. Three final optimized-WASM import/browser
+  gates pass against the 27-file asset-free package. Consolidation fixed a
+  test-binary-relative helper path, a missing timer fixture contract, refusal
+  guard classification in the coverage audit, and formatting/lint issues without
+  relaxing production admission. Earlier failed receipts remain separate.
+
+  All temporary worktree and branch tips, including reconciled stashes, are
+  retained in history before cleanup. Finished sessions and idle validation
+  terminals are retired; unfinished tasks remain pending and stopped.
+  See [0.18.0 release notes](docs/releases/0.18.0.md) for scope and limitations.

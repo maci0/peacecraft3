@@ -4,7 +4,10 @@ use std::{collections::VecDeque, sync::Arc};
 
 #[test]
 fn ai_callback_boundary_refuses_underflow_and_preserves_foreign_frames_before_restore() {
-    let syntax = pcx_script::parse_script("").unwrap();
+    let syntax = pcx_script::parse_script(
+        "type agent extends handle\ntype timer extends agent\nnative CreateTimer takes nothing returns timer\nnative DestroyTimer takes timer t returns nothing\n",
+    )
+    .unwrap();
     let program = Arc::new(pcx_script::resolve(&syntax).unwrap());
     let inner = EnumHost::checked_selected(
         program,

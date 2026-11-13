@@ -1,5 +1,11 @@
 # PeaceCraft3 — Faithful Warcraft III Reimplementation
 
+Release checkpoint 0.18.0 consolidates the current source-derived components and
+preserves unfinished alternatives in history. Normal GUI native-counter startup,
+full Save/Load, complete automatic casting and native tick parity remain open.
+Diagnostic controller/observer work does not enable those features in production.
+See [release status](docs/releases/0.18.0.md) and TRACKER.md.
+
 The PeaceCraft configuration panel also offers gameplay-only 1×–4× internal
 resolution. Original menu/HUD targets stay at display resolution; this setting
 is not added to original options. See [internal resolution](docs/re-notes/internal-resolution.md).
