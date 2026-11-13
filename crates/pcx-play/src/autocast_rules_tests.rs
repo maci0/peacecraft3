@@ -533,7 +533,7 @@ fn selected_original_autocast_classes_bind() {
     let codes: Vec<[u8; 4]> = rules.classes.iter().map(|c| c.code).collect();
     for code in [
         b"Aweb", b"Afae", b"Aren", b"Ablo", b"AUfu", b"Arst", b"ANms", b"AEim", b"Arep", b"ANba",
-        b"Acrs", b"Ambt", b"Anhe", b"Asps", b"Afak",
+        b"Acrs", b"Ambt", b"Anhe", b"Asps", b"Afak", b"ANpa",
     ] {
         assert!(codes.contains(code), "missing autocast class {code:?}");
     }
@@ -541,7 +541,7 @@ fn selected_original_autocast_classes_bind() {
     // Inner Fire, Web, Raise Dead, Black Arrow and Heal share the decoded ON handler;
     // Mana Shield and Immolation override the update hook and stay undecoded.
     for code in [
-        b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt", b"Anhe", b"Asps", b"Afak",
+        b"Ainf", b"Aweb", b"Arai", b"ANba", b"Ahea", b"Ambt", b"Anhe", b"Asps", b"Afak", b"ANpa",
     ] {
         assert!(class(code).enable.is_some(), "no ON decode for {code:?}");
     }
@@ -569,6 +569,7 @@ fn selected_original_autocast_classes_bind() {
     );
     assert_eq!(class(b"Anhe").enable, class(b"Ahea").enable);
     assert_eq!(class(b"Asps").enable, class(b"Ahea").enable);
+    assert_eq!(class(b"ANpa").enable, class(b"Ahea").enable);
     let orb = class(b"Afak").enable.unwrap();
     assert_eq!(orb.group, class(b"ANba").enable.unwrap().group);
     assert_eq!(orb.first_tick, class(b"Ahea").enable.unwrap().first_tick);
@@ -580,7 +581,7 @@ fn selected_original_autocast_classes_bind() {
     let timing = class(b"Ahea").tick.expect("selected Heal tick timing");
     assert!(timing.retry > timing.minimum_after_cast);
     assert!(timing.minimum_after_cast > 0.);
-    for code in [b"Aslo", b"Anhe", b"Asps", b"Afak"] {
+    for code in [b"Aslo", b"Anhe", b"Asps", b"Afak", b"ANpa"] {
         assert_eq!(class(code).tick, Some(timing));
     }
     assert_ne!(class(b"Anhe").on, class(b"Ahea").on);
