@@ -305,6 +305,8 @@ pub mod sound_playback;
 
 pub struct MapStartupInputs {
     pub thematic_music_rules: Option<crate::playercolor_host::ThematicMusicRules>,
+    pub regular_music_volume_rules:
+        Option<Result<crate::playercolor_host::RegularMusicVolumeRules, String>>,
     /// Map members from the receiving chapter's selected source archive generation.
     pub cached_unit_source_maps: Vec<pcx_assets::AssetPath>,
     pub unit_decay: Option<crate::unit_decay::Rules>,
@@ -686,6 +688,7 @@ fn assemble_inner(
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
         thematic_music_rules,
+        regular_music_volume_rules,
         cached_unit_source_maps,
         unit_decay,
         unit_blend,
@@ -819,6 +822,9 @@ fn assemble_inner(
     }
     if let Some(rules) = thematic_music_rules {
         object = object.with_thematic_music_rules(rules)?;
+    }
+    if let Some(rules) = regular_music_volume_rules {
+        object = object.with_regular_music_volume_rules(rules)?;
     }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;

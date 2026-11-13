@@ -473,3 +473,41 @@ test('a cancelled replacement leaves the prior visible names, and a committed on
     assert.equal(api.stored_assets().some(name => name === call.source), false);
   }
 });
+
+test('auxiliary is explicitly co-selected and staged beside the main through a checked ticket', async () => {
+  const records = [];
+  const api = {
+    client_module_request: () => JSON.stringify({ status: 'available', module_name: 'OddBackend.bin' }),
+    begin_archive_import_bound() { records.push('begin'); return {
+      stage_archive: () => 'archive',
+      stage_client_sources(source, main, metadata, module) { records.push({ source, main: [...main], metadata: JSON.parse(metadata), module: [...module] }); },
+      commit() { records.push('commit'); return []; }, cancel() { records.push('cancel'); },
+    }; },
+  };
+  const main = new File([new Uint8Array([1, 2])], 'Main.exe');
+  const module = new File([new Uint8Array([7, 9])], 'ODDBACKEND.bin');
+  await importLocalArchives([main], api, { clientModuleFile: module });
+  assert.deepEqual(records, ['begin', { source: 'Main.exe', main: [1, 2], metadata: { kind: 'local', container: 'explicit loose co-selection', main_member: 'Main.exe', module_member: 'ODDBACKEND.bin', module_source: 'ODDBACKEND.bin' }, module: [7, 9] }, 'commit']);
+  await assert.rejects(importLocalArchives([], api, { clientModuleFile: module }), /main/);
+  await assert.rejects(importLocalArchives([main], api, { clientModuleFile: new File(['x'], 'other.bin') }), /filename/);
+  assert.equal(records.filter(v => v === 'begin').length, 2);
+  assert.equal(records.at(-1), 'cancel');
+});
+
+
+test('a delayed main read cannot replace or cancel a newer checked import', async () => {
+  let ticket = 0, commits = 0, cancel = 0;
+  const api = { begin_archive_import_bound() {
+    const own = ++ticket;
+    const check = () => { if (own !== ticket) throw new Error('retired ticket'); };
+    return { stage_archive() { check(); }, stage_client_sources() { check(); },
+      commit() { check(); commits++; return []; }, cancel() { if (own === ticket) cancel++; } };
+  }, client_module_request: () => JSON.stringify({ status: 'unsupported' }) };
+  let finish;
+  const old = { name: 'old.exe', size: 1, arrayBuffer: () => new Promise(resolve => { finish = resolve; }) };
+  const pending = importLocalArchives([old], api);
+  await importLocalArchives([new File(['n'], 'new.exe')], api);
+  finish(new Uint8Array([1]).buffer);
+  await assert.rejects(pending, /retired/);
+  assert.equal(commits, 1); assert.equal(cancel, 0);
+});
