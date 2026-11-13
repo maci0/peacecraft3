@@ -147,21 +147,66 @@ extended timer, exact timed-event callback scheduling, pause carry, retry withou
 extra time, and session replacement. Parser checks and these synthetic effects
 are not original-client ability or heading parity.
 
+## Independent frame and sleep queues
+
+The published session now accepts `advance_native_frame(Some(FrameInput), budget)`
+with independent granted game duration and raw real elapsed milliseconds. `None`
+resumes retained work. The owned FIFO finishes a frame's game work before its real
+work; a later frame cannot overtake either phase. Both queues retain their own
+completed point, pending wrap drains and selected callback point. The real queue
+uses the same source add/subtract and wrap implementation as the game queue.
+
+Native-code bindings identify the real event `0x40090094` at `0x5af4a3`, its
+unsigned-counter conversion table, binary32 conversion and SSE multiplication
+operand, forwarding through `0x5ea690` to `0x7f4820`, and the integer chunk
+initializer at `0x40d060`. The manager constructs its game and real queues through
+the same constructor and cycle operand. These operands are read from the selected
+image. The observed GetTickCount fallback supplies milliseconds; the alternative
+QPC initialization remains unqualified.
+
+Map `TriggerSleepAction` binds through `0x4ae850`, its VM frame flag and
+`0x4fbdd0` to an extended timer on the real queue. AI `Sleep` binds through
+`0xab7770`, `0xac3e20`, `0xab5640` and `0xad3560` to an extended timer on the
+game queue. They reuse the admitted extended-timer policy and current-entry
+epoch. Admission computes only the current entry; internal entries consume work
+when drained and do not resume a VM. Each queue rebases only its own requests.
+
+A map sleep captures the current real point even inside a game callback. Its
+real wake keeps the completed game point visible to timer creation and queries.
+AI wakes enter their exact selected game point. New sleeps capture that selected
+point, and scope cleanup runs after normal return, re-park and failure. Canonical
+thread contexts, AI player identities, VM locals and parked tickets remain owned.
+Fresh requests retain their separate legacy deadlines until driver selection;
+failed native preparation commits no frame, timer or wake row. Existing legacy
+AI zero/negative-duration refusals remain synchronous. Once native mode is
+selected, qualified zero and fractional-negative AI sleeps use the source minimum.
+
+Public regressions exercise both real map and game AI wakes, two independent AI
+locals, timer creation at the completed game cursor during a real wake, budget
+retry without replay, native refusal and world recovery, real and game wraps,
+segmented real sleeps, re-park origin, and real wake/unpause without game progress.
+These are actual published VM callers with synthetic scripts and nonstock queue
+parameters; they do not establish complete original-client campaign parity.
+
+The explicit frame transport does not infer native turn input from elapsed time.
+Normal application adoption still needs the source 25-unit quantum, admitted
+game-speed/N and carry adapter, including completion of an in-flight quantum when
+script pause is requested. The application accelerator is separate from script
+game speed. Native mode must be selected before globals/config/main in that
+platform factory. The generic Fresh/Legacy APIs and the earlier game-only pacing
+prototype keep their existing contracts; neither is a substitute for this adapter.
+
 ## Remaining fidelity work
 
-Parked script and AI wake records still carry caller-time deadlines. Their native
-queue/domain/phase and selected wake scope require separate qualification; a
-resume must not inherit the enclosing outer point or reconstruct a point from
-`f64`. Native adoption is held until those actual callers are connected. A strict
-preflight refusal can prevent corruption while a family is unbound, but is not a
-completed wake implementation.
+The normal application adapter and pre-startup mode selection remain open. The
+new called queue transport does not reconstruct source points from `f64`.
 
-The called prototype now refuses an unbound map wake before changing its public
+The older game-only prototype refuses an unbound map wake before changing its public
 clock or consuming its thread. An unbound AI wake refuses before the no-expiry
 path could advance the clock to its legacy deadline. Earlier qualified timers
 still run. Published regressions exercise both refusals, retained parked work,
 and the unchanged Legacy map sleep path. This guard is temporary; it does not
-qualify either native wake family or enable normal application adoption.
+implement the paired queues or enable normal application adoption.
 
 The generic equal-expiry heap comparator, source queue sequence rollover and
 ordering across timer, automatic-cast and physics consumers remain open. The
@@ -170,13 +215,15 @@ own source periodic event and callback/visual phases; existing activity projecti
 is not proof of that physics producer. Common automatic-cast retry/readiness,
 positive acquisition, Heal channel ownership and class lifecycle interruption
 remain active work. The omitted `Asps` and `Afak` default-class frontiers are
-separate class-qualification work, not a reason to skip due requests.
+already separately admitted; acquisition and effects still must execute rather
+than skip due requests.
 
-The existing session stops future delivery after a `PauseGame` callback. Its
-pending-step carry is tested, but same-native-step pause readpoints remain
-unqualified. The bounded `0x7f94a0` heap loop does not retest a queue/global pause
-bit between callbacks; the exact `PauseGame` mutation and cancellation join still
-needs qualification. Preserving the session contract is not native pause parity.
+The legacy and game-only prototype session stops future delivery after a
+`PauseGame` callback. The independent frame transport completes already granted
+game work. Native observations show completion of an in-flight 25-unit quantum,
+then suppression of later game quanta while real sleep continues. The normal
+adapter must reproduce that grant boundary; preserving either generic session
+contract by itself is not native pause parity.
 
 The outer native scheduler's speed/input/QPC calibration and wall-clock pacing
 are still only partially qualified. The new caller supplies nominal game-duration

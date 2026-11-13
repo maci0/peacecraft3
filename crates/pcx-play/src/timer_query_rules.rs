@@ -45,6 +45,7 @@ pub(crate) struct Epoch {
     remainder: u32,
     first: u32,
     /// Fallback projection, never the canonical queue entry.
+    /// Legacy final projection; sleep epochs retain the first entry and never read this field.
     pub(crate) expiry: f32,
 }
 
@@ -228,6 +229,32 @@ impl Rules {
         f32::from_bits(self.zero)
     }
 
+    /// Sleep retains only the current entry; future entries consume work when due.
+    pub(crate) fn begin_sleep(
+        &self,
+        n: &NumericPolicy,
+        now: f32,
+        delay: f32,
+        work: usize,
+    ) -> Result<Epoch, String> {
+        if work == 0 {
+            return Err(n.runtime_error("sleep preparation requires one current entry"));
+        }
+        real::from_f32(delay).map_err(|e| n.runtime_error(e))?;
+        if delay <= -f32::from_bits(self.segment) {
+            return Err(n.runtime_error("negative segmented sleep is unqualified"));
+        }
+        self.begin_entry(
+            n,
+            now,
+            if delay < 0.0 {
+                f32::from_bits(self.zero)
+            } else {
+                delay
+            },
+        )
+    }
+
     pub(crate) fn begin(
         &self,
         n: &NumericPolicy,
@@ -235,6 +262,25 @@ impl Rules {
         timeout: f32,
         work: usize,
     ) -> Result<Epoch, String> {
+        let mut epoch = self.begin_entry(n, now, timeout)?;
+        if usize::from(epoch.whole) > work {
+            return Err(n.runtime_error(real::MathError::Unsupported));
+        }
+        let project = || {
+            let mut expiry = epoch.first;
+            for _ in 1..epoch.whole {
+                expiry = real::add(expiry, self.segment)?;
+            }
+            if epoch.whole > 0 {
+                expiry = real::add(expiry, self.clamp(epoch.remainder))?;
+            }
+            Ok(expiry)
+        };
+        epoch.expiry = f32::from_bits(project().map_err(|e: real::MathError| n.runtime_error(e))?);
+        Ok(epoch)
+    }
+
+    fn begin_entry(&self, n: &NumericPolicy, now: f32, timeout: f32) -> Result<Epoch, String> {
         let calculate = || {
             let now = real::from_f32(now)?;
             let t = real::from_f32(timeout)?;
@@ -243,9 +289,6 @@ impl Rules {
             }
             let count = real::truncate(t)? / real::truncate(self.segment)?;
             let whole = u16::try_from(count).map_err(|_| real::MathError::Unsupported)?;
-            if usize::from(whole) > work {
-                return Err(real::MathError::Unsupported);
-            }
             // The remainder uses the fractional reciprocal product, not host `%`.
             let q = real::mul(t, n.reciprocal(self.segment))?;
             let fractional = real::sub(q, real::from_i32(real::truncate(q)?)?)?;
@@ -259,13 +302,6 @@ impl Rules {
                 self.clamp(remainder)
             };
             let first = real::add(now, period)?;
-            let mut expiry = first;
-            for _ in 1..whole {
-                expiry = real::add(expiry, self.segment)?;
-            }
-            if whole > 0 {
-                expiry = real::add(expiry, self.clamp(remainder))?;
-            }
             Ok(Epoch {
                 image: self.image,
                 period,
@@ -273,7 +309,7 @@ impl Rules {
                 remaining_count: whole,
                 remainder,
                 first,
-                expiry: f32::from_bits(expiry),
+                expiry: f32::from_bits(first),
             })
         };
         calculate().map_err(|e: real::MathError| n.runtime_error(e))

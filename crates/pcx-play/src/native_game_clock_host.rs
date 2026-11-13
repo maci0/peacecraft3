@@ -1,6 +1,6 @@
 //! The published source clock stays with its canonical arena and timer queue.
 use super::{Error, Failure, ObjectHost};
-use crate::native_game_clock::{Driver, Point, Segment, State};
+use crate::native_game_clock::{Domain, Driver, FrameInput, Point, Segment, SleepRequest, State};
 use std::time::Duration;
 
 impl ObjectHost {
@@ -71,6 +71,13 @@ impl ObjectHost {
         Ok(())
     }
     pub(crate) fn begin_native_queue_callback(&mut self, point: Point) -> Result<(), Error> {
+        self.begin_native_domain_callback(Domain::Game, point)
+    }
+    pub(crate) fn begin_native_domain_callback(
+        &mut self,
+        domain: Domain,
+        point: Point,
+    ) -> Result<(), Error> {
         if !self.native_clock_driving() {
             return Err(self.inner.error(
                 "native game clock",
@@ -80,10 +87,13 @@ impl ObjectHost {
         self.native_game_clock
             .as_mut()
             .expect("native clock")
-            .enter_callback(point)
+            .enter_domain_callback(domain, point)
             .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))
     }
     pub(crate) fn end_native_queue_callback(&mut self) -> Result<(), Error> {
+        self.end_native_domain_callback()
+    }
+    pub(crate) fn end_native_domain_callback(&mut self) -> Result<(), Error> {
         self.native_game_clock
             .as_mut()
             .expect("native clock")
@@ -94,6 +104,245 @@ impl ObjectHost {
         self.native_game_clock
             .as_ref()
             .is_some_and(|clock| clock.driver() == Driver::Native)
+    }
+    pub(crate) fn native_frame_active(&self) -> bool {
+        self.native_game_clock
+            .as_ref()
+            .is_some_and(State::frame_active)
+    }
+
+    pub(crate) fn enqueue_native_frame(
+        &mut self,
+        input: FrameInput,
+        work: &mut usize,
+    ) -> Result<(), Error> {
+        let fail = |e| self.inner.error("native frame", Failure::GameClock(e));
+        let clock = self
+            .native_game_clock
+            .as_ref()
+            .ok_or_else(|| fail("source clock is not admitted".into()))?;
+        let fresh = clock.driver() == Driver::Fresh;
+        let mut next = clock.clone();
+        next.enqueue_frame(input, work).map_err(fail)?;
+        let prepared = if fresh {
+            Some((
+                self.prepare_native_timer_admission(work)?,
+                self.prepare_native_thread_admission(work)?,
+            ))
+        } else {
+            None
+        };
+        if let Some((timers, threads)) = prepared {
+            self.commit_native_timer_rebase(timers);
+            self.commit_native_thread_rows(threads);
+        }
+        self.native_game_clock = Some(next);
+        Ok(())
+    }
+
+    pub(crate) fn next_native_frame_segment(
+        &mut self,
+        work: &mut usize,
+    ) -> Result<Option<(Domain, Segment)>, Error> {
+        let clock = self.native_game_clock.as_mut().ok_or_else(|| {
+            self.inner.error(
+                "native frame",
+                Failure::GameClock("source clock is not admitted".into()),
+            )
+        })?;
+        clock
+            .next_frame_segment(work)
+            .map_err(|e| self.inner.error("native frame", Failure::GameClock(e)))
+    }
+    pub(crate) fn native_game_clock_seconds(&self, point: Point) -> Result<f64, Error> {
+        self.native_game_clock
+            .as_ref()
+            .map(|clock| clock.rules().seconds(point))
+            .ok_or_else(|| {
+                self.inner.error(
+                    "native frame",
+                    Failure::GameClock("source clock is not admitted".into()),
+                )
+            })
+    }
+
+    pub(crate) fn finish_native_frame_segment(
+        &mut self,
+        domain: Domain,
+        segment: Segment,
+        work: &mut usize,
+    ) -> Result<(), Error> {
+        if domain == Domain::Game {
+            return self.finish_native_game_segment(segment, work);
+        }
+        let mut next = self
+            .native_game_clock
+            .as_ref()
+            .expect("admitted native frame")
+            .clone();
+        next.finish_frame_segment(domain, segment)
+            .map_err(|e| self.inner.error("native frame", Failure::GameClock(e)))?;
+        let threads = if segment.ends_cycle {
+            Some(self.prepare_native_thread_rebase(domain, work)?)
+        } else {
+            None
+        };
+        if let Some(threads) = threads {
+            self.commit_native_thread_rows(threads);
+        }
+        self.native_game_clock = Some(next);
+        Ok(())
+    }
+
+    pub fn native_queue_point(&self, domain: Domain) -> Option<Point> {
+        self.native_game_clock
+            .as_ref()
+            .filter(|clock| clock.driver() != Driver::Legacy)
+            .map(|clock| clock.queue_point(domain))
+    }
+
+    pub fn prepare_native_sleep(
+        &self,
+        domain: Domain,
+        delay: f32,
+        work: &mut usize,
+    ) -> Result<Option<SleepRequest>, Error> {
+        let Some(clock) = self
+            .native_game_clock
+            .as_ref()
+            .filter(|clock| clock.driver() != Driver::Legacy)
+        else {
+            return Ok(None);
+        };
+        let supported = match domain {
+            Domain::Game => clock.rules().sleep.ai,
+            Domain::Real => clock.rules().sleep.script,
+        };
+        if supported != domain {
+            return Err(self.inner.error(
+                "native sleep",
+                Failure::GameClock("sleep queue family is unsupported".into()),
+            ));
+        }
+        let request = SleepRequest {
+            domain,
+            delay: delay.to_bits(),
+            origin: clock.queue_point(domain),
+            epoch: None,
+            point: None,
+        };
+        let request = if clock.driver() == Driver::Native {
+            self.activate_native_sleep(request, work)?
+        } else {
+            *work = work
+                .checked_sub(1)
+                .ok_or_else(|| self.inner.error("native sleep", Failure::Capacity))?;
+            request
+        };
+        Ok(Some(request))
+    }
+
+    pub fn activate_native_sleep(
+        &self,
+        mut request: SleepRequest,
+        work: &mut usize,
+    ) -> Result<SleepRequest, Error> {
+        let fail = |e| self.inner.error("native sleep", Failure::GameClock(e));
+        let rules = self
+            .numeric
+            .as_ref()
+            .and_then(|numeric| numeric.timer_queries())
+            .ok_or_else(|| fail("extended sleep policy is not admitted".into()))?;
+        if let Some(epoch) = request.epoch {
+            if !rules.check_epoch(epoch)
+                || request
+                    .point
+                    .is_none_or(|point| point.local != epoch.entry_deadline().to_bits())
+            {
+                return Err(fail("native sleep entry identity differs".into()));
+            }
+            return Ok(request);
+        }
+        let numeric = self.numeric.as_ref().expect("source query policy");
+        let epoch = rules
+            .begin_sleep(
+                numeric,
+                f32::from_bits(request.origin.local),
+                f32::from_bits(request.delay),
+                *work,
+            )
+            .map_err(fail)?;
+        let remaining = work
+            .checked_sub(1)
+            .ok_or_else(|| self.inner.error("native sleep", Failure::Capacity))?;
+        request.epoch = Some(epoch);
+        request.point = Some(Point {
+            cycle: request.origin.cycle,
+            local: epoch.entry_deadline().to_bits(),
+        });
+        *work = remaining;
+        Ok(request)
+    }
+
+    pub fn advance_native_sleep(&self, request: &mut SleepRequest) -> Result<bool, Error> {
+        let fail = |e| self.inner.error("native sleep", Failure::GameClock(e));
+        let numeric = self
+            .numeric
+            .as_ref()
+            .ok_or_else(|| fail("numeric policy missing".into()))?;
+        let rules = numeric
+            .timer_queries()
+            .ok_or_else(|| fail("extended sleep policy missing".into()))?;
+        let mut next = *request;
+        let mut epoch = next
+            .epoch
+            .ok_or_else(|| fail("sleep entry is not active".into()))?;
+        let point = next
+            .point
+            .ok_or_else(|| fail("sleep point is not active".into()))?;
+        if point.local != epoch.entry_deadline().to_bits() {
+            return Err(fail("sleep point and entry differ".into()));
+        }
+        let terminal = rules.advance_entry(numeric, &mut epoch).map_err(fail)?;
+        next.epoch = Some(epoch);
+        next.point = Some(Point {
+            local: epoch.entry_deadline().to_bits(),
+            ..point
+        });
+        *request = next;
+        Ok(terminal)
+    }
+
+    pub fn rebase_native_sleep(&self, request: &mut SleepRequest) -> Result<(), Error> {
+        let fail = |e| self.inner.error("native sleep", Failure::GameClock(e));
+        let clock = self
+            .native_game_clock
+            .as_ref()
+            .ok_or_else(|| fail("native clock missing".into()))?;
+        let point = request
+            .point
+            .ok_or_else(|| fail("sleep point missing".into()))?;
+        if point.cycle != clock.queue_point(request.domain).cycle {
+            return Err(fail("sleep entry cycle differs".into()));
+        }
+        let numeric = self
+            .numeric
+            .as_ref()
+            .ok_or_else(|| fail("numeric policy missing".into()))?;
+        let rules = numeric
+            .timer_queries()
+            .ok_or_else(|| fail("extended sleep policy missing".into()))?;
+        let mut next = *request;
+        let mut epoch = next
+            .epoch
+            .ok_or_else(|| fail("sleep entry is not active".into()))?;
+        rules
+            .rebase_epoch(numeric, &mut epoch, clock.rules().simple.cycle.to_bits())
+            .map_err(fail)?;
+        next.point = Some(clock.rules().rebase(point).map_err(fail)?);
+        next.epoch = Some(epoch);
+        *request = next;
+        Ok(())
     }
     pub(crate) fn pace_native_game_clock(
         &mut self,
@@ -155,9 +404,12 @@ impl ObjectHost {
             .as_ref()
             .expect("admitted source clock")
             .clone();
-        clock
-            .finish_segment(segment)
-            .map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
+        let finished = if clock.frame_active() {
+            clock.finish_frame_segment(Domain::Game, segment)
+        } else {
+            clock.finish_segment(segment)
+        };
+        finished.map_err(|e| self.inner.error("native game clock", Failure::GameClock(e)))?;
         if segment.ends_cycle {
             let timers = self.prepare_native_timer_rebase(work)?;
             *work = work.checked_sub(self.autocast_ticks.len()).ok_or_else(|| {

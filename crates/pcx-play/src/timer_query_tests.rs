@@ -374,3 +374,47 @@ fn current_entry_readpoint_does_not_consume_an_equal_deadline() {
         "source addition/subtraction order must remain visible: {after} < {before}"
     );
 }
+
+#[test]
+fn sleep_minimum_uses_the_selected_domain_origin_and_keeps_timer_validation() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    for delay in [-7.5, -0.25, -0.0, 0.0, 0.0625] {
+        let game = rules.begin_sleep(&p, 1.0, delay, 8).unwrap();
+        let real = rules.begin_sleep(&p, 3.0, delay, 8).unwrap();
+        assert_eq!(game.entry_deadline(), 1.125);
+        assert_eq!(real.entry_deadline(), 3.125);
+        assert_eq!(game.remaining_count, 0);
+        assert_eq!(real.remaining_count, 0);
+    }
+    assert!(rules.begin(&p, 1.0, -0.25, 8).is_err());
+    for delay in [
+        -8.0,
+        -9.0,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NAN,
+        f32::from_bits(1),
+    ] {
+        assert!(rules.begin_sleep(&p, 1.0, delay, 8).is_err());
+    }
+}
+
+#[test]
+fn segmented_sleep_keeps_current_entries_and_refuses_insufficient_preparation_work() {
+    let p = policy(8, 0.125);
+    let rules = p.timer_queries().unwrap();
+    assert!(rules.begin_sleep(&p, 1.0, 16.0, 0).is_err());
+    assert!(rules.begin(&p, 1.0, 16.0, 1).is_err());
+    let mut epoch = rules.begin_sleep(&p, 1.0, 16.0, 1).unwrap();
+    assert_eq!(epoch.expiry, epoch.entry_deadline());
+    assert_eq!((epoch.entry_deadline(), epoch.remaining_count), (9.0, 2));
+    assert!(!rules.advance_entry(&p, &mut epoch).unwrap());
+    rules
+        .rebase_epoch(&p, &mut epoch, 16.0f32.to_bits())
+        .unwrap();
+    assert_eq!((epoch.entry_deadline(), epoch.remaining_count), (1.0, 1));
+    assert!(!rules.advance_entry(&p, &mut epoch).unwrap());
+    assert_eq!((epoch.entry_deadline(), epoch.remaining_count), (1.125, 0));
+    assert!(rules.advance_entry(&p, &mut epoch).unwrap());
+}

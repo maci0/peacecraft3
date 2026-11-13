@@ -12,7 +12,137 @@ fn rules() -> Rules {
         denominator: 8,
         step: 0.125f32.to_bits(),
         wrap_tolerance: 0.00001f32.to_bits(),
+        frame: frame::Rules {
+            unsigned_correction: [0f64.to_bits(), 4294967296f64.to_bits()],
+            scale: 0.125f32.to_bits(),
+            chunk: 1f32.to_bits(),
+        },
+        sleep: sleep::Rules {
+            script: Domain::Real,
+            ai: Domain::Game,
+        },
     }
+}
+
+#[test]
+fn paired_frames_keep_independent_cursors_and_causal_input_order() {
+    let mut state = State::new(rules()).unwrap();
+    let mut work = 32;
+    state
+        .enqueue_frame(
+            FrameInput {
+                game_elapsed: Duration::from_millis(250),
+                real_elapsed_ms: 3,
+            },
+            &mut work,
+        )
+        .unwrap();
+    let credit = state.credit;
+    assert!(state.pace(Duration::ZERO).is_err());
+    assert_eq!(state.credit, credit);
+    state
+        .enqueue_frame(
+            FrameInput {
+                game_elapsed: Duration::from_millis(125),
+                real_elapsed_ms: 1,
+            },
+            &mut work,
+        )
+        .unwrap();
+    let mut trace = Vec::new();
+    while let Some((domain, segment)) = state.next_frame_segment(&mut work).unwrap() {
+        trace.push((domain, segment.point.local));
+        if domain == Domain::Game && trace.len() <= 2 {
+            assert_eq!(
+                state.queue_point(Domain::Real),
+                Point { cycle: 0, local: 0 }
+            );
+        }
+        if domain == Domain::Real && trace.len() == 3 {
+            state
+                .enter_domain_callback(
+                    domain,
+                    Point {
+                        cycle: 0,
+                        local: 0.125f32.to_bits(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(state.queue_point(Domain::Game).local, 0.25f32.to_bits());
+            assert_eq!(state.queue_point(domain).local, 0.125f32.to_bits());
+            assert!(state.enter_callback(state.point()).is_err());
+            state.leave_callback().unwrap();
+            assert_eq!(state.queue_point(domain), segment.point);
+        }
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(
+        trace,
+        vec![
+            (Domain::Game, 0.125f32.to_bits()),
+            (Domain::Game, 0.25f32.to_bits()),
+            (Domain::Real, 0.375f32.to_bits()),
+            (Domain::Game, 0.375f32.to_bits()),
+            (Domain::Real, 0.5f32.to_bits())
+        ]
+    );
+    assert!(!state.frame_active());
+}
+
+#[test]
+fn real_chunks_wrap_without_game_progress_and_resume_the_same_pending_drain() {
+    let mut state = State::new(rules()).unwrap();
+    state
+        .enqueue_frame(
+            FrameInput {
+                game_elapsed: Duration::ZERO,
+                real_elapsed_ms: 33,
+            },
+            &mut 8,
+        )
+        .unwrap();
+    assert!(state.next_frame_segment(&mut 0).is_err());
+    let mut work = 16;
+    let mut wraps = 0;
+    while let Some((domain, segment)) = state.next_frame_segment(&mut work).unwrap() {
+        assert_eq!(domain, Domain::Real);
+        assert_eq!(
+            state.queue_point(Domain::Game),
+            Point { cycle: 0, local: 0 }
+        );
+        assert_eq!(
+            state.next_frame_segment(&mut 0).unwrap(),
+            Some((domain, segment))
+        );
+        wraps += usize::from(segment.ends_cycle);
+        state.finish_frame_segment(domain, segment).unwrap();
+    }
+    assert_eq!(wraps, 2);
+    assert_eq!(
+        state.queue_point(Domain::Real),
+        Point {
+            cycle: 2,
+            local: 0.125f32.to_bits()
+        }
+    );
+}
+
+#[test]
+fn real_counter_conversion_uses_its_loaded_sse_operands() {
+    let mut rule = rules().frame;
+    assert_eq!(rule.delta(0).unwrap(), None);
+    assert_eq!(rule.delta(3).unwrap(), Some(0.375f32.to_bits()));
+    assert_eq!(
+        rule.delta(0x80000000).unwrap(),
+        Some(268435456f32.to_bits())
+    );
+    rule.scale = 0.25f32.to_bits();
+    assert_eq!(rule.delta(3).unwrap(), Some(0.75f32.to_bits()));
+    rule.unsigned_correction[1] = 8589934592f64.to_bits();
+    assert_eq!(
+        rule.delta(0x80000000).unwrap(),
+        Some(1610612736f32.to_bits())
+    );
 }
 
 fn drain(state: &mut State, work: &mut usize) -> Vec<Segment> {
