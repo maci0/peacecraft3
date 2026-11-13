@@ -50,16 +50,16 @@ trigger-string resolution above, copies through `0x433500` with bound `0x400`,
 then selects `0x434600` for true or `0x4339e0` for false. The copy helper uses
 `min(strlen(source), bound - 1)` and always appends NUL for a nonzero bound;
 it does not preserve a UTF-8 boundary. Null/empty input returns a null string
-handle. Non-ASCII conversion and locale behavior still need decoding; the
-native remains refused.
+handle. The called policy below qualifies the initial C byte profile; other effective
+locales and operating-system NLS conversion remain unqualified.
 
 `SubString` registration at `0x49b54f` selects `0x4ac8f0`, which forwards to
 `0x4699c0`. That helper counts bytes, narrows indices and source length to
 16-bit values and uses signed comparisons (`0x469a18`..`0x469a37`) before
 constructing the result by temporarily writing a NUL at the end position.
-Negative/reversed indices and large lengths need further qualification; an
-ordinary Rust character slice or unconditional unsigned clamp is unsupported.
-This native remains refused.
+The called policy below preserves the signed branch order and safe reversed
+ranges. Effective negative pointer offsets remain refused; Rust character
+slicing or an unconditional unsigned clamp does not describe this helper.
 
 `StringHash` registration at `0x49b58b` selects `0x4ac5a0`. Null/empty returns
 zero; otherwise it calls `0x433890`, without the trigger-table lookup used by
@@ -126,8 +126,8 @@ branch uses encoded byte ranges, while the nonzero branch uses locale wrappers.
 Observed UTF-8 inputs follow the C-like ASCII path in this run. That does not
 qualify all locale states. Case can cut 1022 a bytes + é after byte C3. The earlier
 `Value::Str(String)` could not preserve these outputs. The byte payload migration
-below removes that representation limit; Case/SubString remain refused until
-their selected source policies are installed.
+below removes that representation limit. The following selected policies now
+implement the bounded Case/SubString paths.
 No Rust Unicode or lossy UTF-8 substitution is supported.
 
 ### Hash validation (2026-11-13)
@@ -245,7 +245,8 @@ library gates do not establish full campaign or rendered parity.
 
 ## Remaining scope
 
-S2I/S2R and case/substring byte, locale and index boundaries remain unimplemented. Additional map-string wrapper families remain refused until their
+S2I/S2R, non-C locale mapping and unsafe effective substring pointer domains remain
+unimplemented. Additional map-string wrapper families remain refused until their
 real native consumers are implemented. No native/runtime parity or campaign
 validation is claimed.
 
@@ -461,8 +462,8 @@ For SubString, source assembly narrows start, end and C-prefix length to signed
 After the signed end clamp, a safe reversed positive range copies the suffix
 from start, because its temporary NUL is before the copied source. Effective
 negative pointer offsets remain refused; no unsigned clamp is invented. The
-native byte representation now supports these results, but those policies still
-require their real builtin, selected factory and host integration.
+native byte representation supports these results; the following called-native
+implementation supplies the selected policies, factory and host integration.
 
 ### Byte migration validation (2026-11-13)
 
@@ -488,3 +489,92 @@ the failed run. The application message-history refusal/recovery test compiles;
 its execution and other application UI/session tests remain downstream gates.
 Case/SubString selected policies, non-C locales and rendered byte glyph behavior
 remain open; this validation does not establish full native string parity.
+
+
+### Combined application validation
+
+The current integration also executes the invalid-byte message-history
+refusal/recovery case, all nine message cases, five message-log cases and eight
+script-dialog cases. The extra application filters overlap the primary run.
+Native/WASM strict checks, library builds, source gates and ordinary package
+suites pass with unchanged source hashes; see the integration entry in TRACKER.
+This checks retained bytes and checked projection, not rendered native glyph
+parity.
+
+## Called StringCase and SubString policies
+
+The selected campaign client reader installs `ScriptStringPolicy` through normal
+campaign inputs and ObjectHost assembly. Exact builtin signatures and two readonly
+Host hooks reach that policy; both localization wrappers, selected neutral worlds,
+recording, startup, lent AI and preload forward the same path. No numeric, actor,
+AI routing, checkpoint-control or wire behavior changes in this slice.
+
+The reader admits fifteen bounded source windows and checks their complete-image
+fingerprint, individual identities, call joins and encodings. Case capacity and
+buffer/cookie relationship come from its wrapper; the decrement/minimum/NUL copy
+branch is verified. Signed case ranges and arithmetic come from the CRT fast
+branches. Every byte mapping is compared with the source initial locale tables;
+no host case conversion is called. The initial locale flag's PE storage and the
+entry/startup/CRT callback walk through the locale installation are checked.
+The profile is explicitly the initial C context. Later effective locale changes
+or NLS-provider behavior are not inferred from that initial state.
+
+Case performs one native WTS lookup before conversion and checks null/empty at
+its observed points. Copy and conversion may split UTF-8. Interning stops at the
+first output NUL; an allocated empty result stays distinct from null. SubString
+performs no WTS lookup, narrows source length/start/end to the admitted x86 signed
+word operands, takes its early-null branch before pointer access and then clamps
+end with the signed comparison. Safe reversed ranges copy the tail. An unsafe
+effective start/end is an error naming the narrowed offsets and length, without
+invented clamping or memory access. Input storage remains unchanged.
+
+The retained private Wine matrix supplies thirty-nine bounded Case/SubString
+observations. Replay goes through the actual builtins and selected ObjectHost
+policy, checking raw return null/empty, native hash, native length and expected
+comparison results. Split UTF-8 bytes are also asserted exactly. Four large
+SubString producers remain excluded because their actual raw lengths were not
+witnessed. A returned trigger token's fresh native length demand is tested as
+such, not used as its raw byte length. Source map identity, image/raw trace digest,
+frame nonce/order/count and result rows are cross-checked with the local receipt.
+No source map, trace, image or generated original content is committed.
+
+Nonstock tests vary case operands, capacity and table data, including output NUL
+and allocated empty results. VM tests exercise missing versus malformed WTS,
+missing entries, raw SubString tokens, signatures, absent policy, callbacks,
+parking, byte concatenation and recovery after real path-consumer refusal.
+This is a bounded called-native slice, not general locale, rendered glyph or
+campaign-completion parity.
+
+### Case/SubString validation (2026-11-13)
+
+From byte baseline `d36f2312`, the isolated worktree passes all three affected
+package suites: 3,576 passed, zero failed, 171 explicit ignores. All eleven new
+ordinary regressions execute, including the core signature/default-policy test
+and the real byte-result callback/park/path-refusal test. The separately enabled
+Case/SubString gate runs eleven focused tests and compares all thirty-nine
+bounded original observations through VM/ObjectHost. The four unwitnessed large
+producer lengths are excluded explicitly.
+
+The preserved Hash38, formatter194 and timer216 selected-image gates each run
+and pass. Strict native/WASM all-target/all-feature Clippy, both explicit-target
+library builds and application all-target/all-feature compilation pass. Frozen
+changed Rust hashes remain unchanged across every gate. Local commands, results
+and source witnesses are under `/tmp/sol01-case-validation/`; no original assets
+or generated original copies are committed. The checks use verified private
+Xvfb and null audio, without launching an original client or GPU window.
+
+This slice has no production application UI algorithm changes; its only app
+fixture addition supplies absent policy explicitly. Downstream combined app
+execution and checkpoint source-ledger admission remain separate integration
+gates. Non-C effective locales, unsafe pointer domains, unqualified producer
+lengths, S2I/S2R and rendered byte glyph behavior remain open.
+
+
+### Combined Case/SubString integration
+
+The combined application session, delivery, startup, audio, leaderboard and
+message-history executions pass alongside 3,607 package tests and twenty-two
+explicit source/witness gates. Native/WASM strict checks and library builds pass
+with unchanged Rust hashes. The earlier byte-UI execution evidence remains
+separate from rendered glyph parity. Full-root source admission is still open.
+See `/tmp/pc3-case-substring-main-validation/acceptance.json`.

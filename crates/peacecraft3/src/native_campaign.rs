@@ -1998,6 +1998,97 @@ pub(crate) mod tests {
                     })
                     .collect::<Vec<_>>();
                 println!("canonical dead-unit snapshot (at most16): {dead:?}");
+                let diagnostic = format!("{error:?}");
+                let token = diagnostic
+                    .split_once(" on HandleId(")
+                    .and_then(|(_, tail)| tail.split_once(')'))
+                    .and_then(|(token, _)| token.parse::<u64>().ok());
+                let objects = session.host().unwrap().objects();
+                println!(
+                    "frontier totals: units={} missing_combat={} missing_position={} combat_targets={}",
+                    objects.executed_units().count(),
+                    objects
+                        .executed_units()
+                        .filter(|(_, unit)| unit.combat.is_none())
+                        .count(),
+                    objects
+                        .executed_units()
+                        .filter(|(_, unit)| unit.position.is_none())
+                        .count(),
+                    objects
+                        .executed_units()
+                        .filter(|(_, unit)| unit
+                            .combat
+                            .as_ref()
+                            .is_some_and(|combat| combat.target.is_some()))
+                        .count(),
+                );
+                let targets = objects
+                    .executed_units()
+                    .filter_map(|(id, unit)| Some((id, unit.combat.as_ref()?.target?)))
+                    .take(64)
+                    .collect::<Vec<_>>();
+                println!("frontier combat targets (at most64): {targets:?}");
+                if let Some((caster_id, caster)) = objects
+                    .executed_units()
+                    .find(|(id, _)| Some(id.token()) == token)
+                {
+                    println!(
+                        "frontier caster player={:?} host_time={:?}",
+                        objects
+                            .player_settings(caster.owner)
+                            .map(|player| player.number),
+                        objects.timer_game_time(),
+                    );
+                    println!(
+                        "frontier caster: id={caster_id:?} kind={:?} owner={:?} position={:?} order={:?} vitals={:?} target={:?} shared_vision={} motion_and_cooldown=unavailable",
+                        caster.definition.rawcode,
+                        caster.owner,
+                        caster.position,
+                        objects.current_unit_order(caster_id),
+                        caster.vitals,
+                        caster.combat.as_ref().and_then(|combat| combat.target),
+                        objects.shared_vision_admitted(),
+                    );
+                    if let Some(origin) = caster.position {
+                        let mut nearby = objects
+                            .executed_units()
+                            .filter_map(|(id, unit)| {
+                                let point = unit.position?;
+                                let distance = (f64::from(point[0]) - f64::from(origin[0]))
+                                    .hypot(f64::from(point[1]) - f64::from(origin[1]));
+                                Some((distance, id, unit))
+                            })
+                            .collect::<Vec<_>>();
+                        nearby.sort_by(|left, right| {
+                            left.0.total_cmp(&right.0).then(left.1.cmp(&right.1))
+                        });
+                        println!(
+                            "frontier positioned units={} nearest_limit=64",
+                            nearby.len()
+                        );
+                        for (distance, id, unit) in nearby.into_iter().take(64) {
+                            let abilities = unit
+                                .abilities
+                                .as_ref()
+                                .map(|abilities| abilities.levels().take(64).collect::<Vec<_>>());
+                            println!(
+                                "frontier neighbor: id={id:?} distance={distance} kind={:?} owner={:?} position={:?} order={:?} vitals={:?} target={:?} dead={:?} enemy={} shown={} paused={:?} explicit_vision_grant={} abilities={abilities:?}",
+                                unit.definition.rawcode,
+                                unit.owner,
+                                unit.position,
+                                objects.current_unit_order(id),
+                                unit.vitals,
+                                unit.combat.as_ref().and_then(|combat| combat.target),
+                                unit.combat.as_ref().map(|combat| combat.dead),
+                                objects.is_enemy(caster_id, id),
+                                unit.shown,
+                                unit.paused_since,
+                                unit.vision_viewers.contains(&caster.owner),
+                            );
+                        }
+                    }
+                }
                 panic!("post-control campaign advance: {error:?}");
             }
             session.advance_queued_events(4096).unwrap();

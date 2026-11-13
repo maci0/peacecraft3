@@ -1274,6 +1274,21 @@ pub(crate) fn native_hash_world_fixture(
     wts: Option<&[u8]>,
     hash: Option<crate::playercolor_host::ScriptHashPolicy>,
 ) -> crate::map_startup_host::NeutralStack {
+    native_byte_policy_world_fixture(wts, hash, None)
+}
+
+pub(crate) fn native_case_world_fixture(
+    wts: Option<&[u8]>,
+    strings: crate::playercolor_host::ScriptStringPolicy,
+) -> crate::map_startup_host::NeutralStack {
+    native_byte_policy_world_fixture(wts, None, Some(strings))
+}
+
+fn native_byte_policy_world_fixture(
+    wts: Option<&[u8]>,
+    hash: Option<crate::playercolor_host::ScriptHashPolicy>,
+    strings: Option<crate::playercolor_host::ScriptStringPolicy>,
+) -> crate::map_startup_host::NeutralStack {
     use crate::playercolor_host::{EnumHost, Limits, MapConfigBudget, ObjectHost};
     let common = "type agent extends handle
 type timer extends agent
@@ -1296,7 +1311,19 @@ constant native GetStartLocationX takes integer n returns real
 constant native GetStartLocationY takes integer n returns real
 ";
     let map = "function length takes nothing returns integer\nreturn StringLength(\"TRIGSTR_7\")\nendfunction\nfunction hash takes string s returns integer\nreturn StringHash(s)\nendfunction\n";
-    let context = context_with_wts(257, common, map, "native-string-context", wts);
+    let (common, map) = if strings.is_some() {
+        (
+            format!(
+                "{common}native StringCase takes string s, boolean upper returns string\nnative SubString takes string s, integer first, integer last returns string\n"
+            ),
+            format!(
+                "{map}function change takes string s returns string\nreturn StringCase(s,true)\nendfunction\nfunction cut takes string s returns string\nreturn SubString(s,0,1)\nendfunction\n"
+            ),
+        )
+    } else {
+        (common.into(), map.into())
+    };
+    let context = context_with_wts(257, &common, &map, "native-string-context", wts);
     let enums = EnumHost::checked_selected(
         context.scripts.shared_program(),
         "native-string-context",
@@ -1318,6 +1345,10 @@ constant native GetStartLocationY takes integer n returns real
         .unwrap();
     let object = match hash {
         Some(policy) => object.with_script_hash(policy),
+        None => object,
+    };
+    let object = match strings {
+        Some(policy) => object.with_script_strings(policy),
         None => object,
     };
     let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), object).unwrap();

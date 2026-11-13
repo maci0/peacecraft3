@@ -287,6 +287,12 @@ pub(crate) struct PlayerStateChange {
     updates: Vec<PlayerStateEventUpdate>,
 }
 
+impl PlayerStateChange {
+    pub(crate) fn event_count(&self) -> usize {
+        self.updates.iter().filter(|update| update.fire).count()
+    }
+}
+
 impl Comparison {
     pub(super) fn at(index: usize) -> Option<Self> {
         Some(match index {
@@ -619,6 +625,16 @@ impl ObjectHost {
         changes: [(i32, i32); N],
         pending: usize,
     ) -> Result<[Option<PlayerStateChange>; N], Error> {
+        self.prepare_player_state_changes_after_reserving(player, changes, pending, &[])
+    }
+
+    pub(crate) fn prepare_player_state_changes_after_reserving<const N: usize>(
+        &mut self,
+        player: HandleId,
+        changes: [(i32, i32); N],
+        pending: usize,
+        prior: &[Option<&PlayerStateChange>],
+    ) -> Result<[Option<PlayerStateChange>; N], Error> {
         let ops = self
             .triggers
             .as_ref()
@@ -643,8 +659,15 @@ impl ObjectHost {
             for slot in 0..registrations {
                 let id = self.player_state_registration_id(slot)?;
                 let record = self.player_state_record(id)?;
-                if record.player != player || record.state_value != state || record.last == current
-                {
+                let index = usize::try_from(id.token() - 1)
+                    .map_err(|_| self.inner.error(REGISTER, Failure::Identity))?;
+                let last = prior
+                    .iter()
+                    .flatten()
+                    .rev()
+                    .find(|change| change.updates.iter().any(|update| update.index == index))
+                    .map_or(record.last, |change| change.current);
+                if record.player != player || record.state_value != state || last == current {
                     continue;
                 }
                 let fire = self
@@ -653,8 +676,6 @@ impl ObjectHost {
                 if fire {
                     count += 1;
                 }
-                let index = usize::try_from(id.token() - 1)
-                    .map_err(|_| self.inner.error(REGISTER, Failure::Identity))?;
                 if updates.len() == updates.capacity() {
                     updates
                         .try_reserve(1)
