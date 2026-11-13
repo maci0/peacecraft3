@@ -19,6 +19,8 @@ pub struct ScriptExecutionFailure {
 pub enum ScriptSessionError {
     #[error("no script session has been initialized")]
     NoSession,
+    #[error("script delivery cannot enter an unfinished timer projection")]
+    PendingTimerProjection,
     #[error("{identity:?}: function id {id:?} is not declared in the admitted program")]
     UnknownFunction {
         identity: AssetIdentity,
@@ -53,10 +55,12 @@ struct TimerDelivery {
     expiry: crate::playercolor_host::TimerExpiry,
     trigger: usize,
     phase: TimerDeliveryPhase,
+    projection_fault: Option<Arc<crate::playercolor_host::Error>>,
 }
 
 #[derive(Clone, Copy)]
 enum TimerDeliveryPhase {
+    MandatoryProjection,
     Trigger,
     Conditions { next: usize, accepted: bool },
     Actions { accepted: bool },
@@ -72,6 +76,19 @@ impl<H: Host + Send + Sync + 'static> Default for MapScriptSession<H> {
     }
 }
 impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
+    fn reject_unfinished_projection(&self) -> Result<(), ScriptSessionError> {
+        if self
+            .active
+            .as_ref()
+            .and_then(|active| active.timer_delivery.as_ref())
+            .is_some_and(|delivery| {
+                matches!(delivery.phase, TimerDeliveryPhase::MandatoryProjection)
+            })
+        {
+            return Err(ScriptSessionError::PendingTimerProjection);
+        }
+        Ok(())
+    }
     pub fn context(&self) -> Option<&Arc<ParsedMapContext>> {
         self.active.as_ref().map(|active| &active.context)
     }
@@ -201,6 +218,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
         id: FunctionId,
         args: &[Value],
     ) -> Result<Value, ScriptSessionError> {
+        self.reject_unfinished_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let name = function_name(&active.context, id)?;
         active
@@ -210,6 +228,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
     }
     /// Start trigger actions as one new thread; a sleep parks it in this VM.
     pub fn run_thread(&mut self, ids: &[FunctionId]) -> Result<(), ScriptSessionError> {
+        self.reject_unfinished_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         for &id in ids {
             function_name(&active.context, id)?;
@@ -219,6 +238,7 @@ impl<H: Host + Send + Sync + 'static> MapScriptSession<H> {
         })
     }
     pub fn resume_thread(&mut self, ticket: u64) -> Result<(), ScriptSessionError> {
+        self.reject_unfinished_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         active
             .vm
@@ -262,6 +282,8 @@ fn execution_failure<H: Host>(
 pub enum TimerSessionError {
     #[error("timer delivery is already active")]
     PendingDelivery,
+    #[error("mandatory world projection failed before timer delivery: {0}")]
+    MandatoryProjection(#[source] Arc<crate::playercolor_host::Error>),
     #[error("campaign AI: {0}")]
     Ai(String),
     #[error("native queue: {0}")]
@@ -279,6 +301,36 @@ pub enum TimerSessionError {
 }
 
 impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
+    pub(crate) fn check_pending_projection(&self) -> Result<(), TimerSessionError> {
+        if let Some(delivery) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.timer_delivery.as_ref())
+        {
+            if let Some(fault) = &delivery.projection_fault {
+                return Err(TimerSessionError::MandatoryProjection(Arc::clone(fault)));
+            }
+            return Err(TimerSessionError::PendingDelivery);
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn test_advance_timers_with_projection_work(
+        &mut self,
+        until: f64,
+        mut budget: usize,
+        mut work: usize,
+    ) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
+        let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+        let advances_clock = host.objects().game_paused() != Some(true);
+        if !host.objects().native_clock_driving() {
+            host.objects_mut()
+                .select_legacy_clock_domain(until, advances_clock)?;
+        }
+        self.advance_native_timers(until, &mut budget, &mut work)
+    }
     /// Admit one independently supplied frame, or resume retained frame work.
     /// This transport does not infer game speed or real time from a legacy horizon.
     pub fn advance_native_frame(
@@ -287,6 +339,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
         use crate::native_game_clock::Domain;
+        self.check_pending_projection()?;
         let mut work = 65536;
         if let Some(input) = input {
             let host = self.host().ok_or(ScriptSessionError::NoSession)?;
@@ -423,6 +476,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         until: f64,
         mut budget: usize,
     ) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let host = self.host().ok_or(ScriptSessionError::NoSession)?;
         let advances_clock = host.objects().game_paused() != Some(true);
         host.objects_mut()
@@ -436,6 +490,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         budget: &mut usize,
         activity_work: &mut usize,
     ) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let result = self.advance_timers_inner(until, budget, activity_work);
         if result.is_err()
             && let Some(host) = self.host()
@@ -570,6 +625,18 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .ok_or(ScriptSessionError::NoSession)?
                 .objects_mut()
                 .next_timer_expiry(step_until, budget)?;
+            let selected_expiry = expiry.is_some();
+            if let Some(expiry) = expiry {
+                self.active
+                    .as_mut()
+                    .expect("selected timer session")
+                    .timer_delivery = Some(TimerDelivery {
+                    expiry,
+                    trigger: 0,
+                    phase: TimerDeliveryPhase::MandatoryProjection,
+                    projection_fault: None,
+                });
+            }
             let movement = {
                 let objects = self
                     .host()
@@ -579,15 +646,14 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 objects.advance_unit_activity_mandatory(now, activity_work)
             };
             if let Err(error) = movement {
-                if let Some(expiry) = expiry {
-                    self.host()
-                        .ok_or(ScriptSessionError::NoSession)?
-                        .objects_mut()
-                        .finish_timer_expiry(expiry)?;
+                if selected_expiry {
+                    let error = Arc::new(error);
+                    self.timer_delivery_mut().projection_fault = Some(Arc::clone(&error));
+                    return Err(TimerSessionError::MandatoryProjection(error));
                 }
                 return Err(error.into());
             }
-            let Some(expiry) = expiry else {
+            if !selected_expiry {
                 if activity_wake == Some(step_until) {
                     *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
                     continue;
@@ -623,24 +689,13 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 objects.flush_unit_activity_routes(now, activity_work)?;
                 return Ok(delivered);
             };
-            self.deliver_timer_expiry(expiry)?;
+            self.timer_delivery_mut().phase = TimerDeliveryPhase::Trigger;
+            self.deliver_prepared_timer_expiry()?;
             delivered += 1;
         }
     }
 
-    fn deliver_timer_expiry(
-        &mut self,
-        expiry: crate::playercolor_host::TimerExpiry,
-    ) -> Result<(), TimerSessionError> {
-        let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
-        if active.timer_delivery.is_some() {
-            return Err(TimerSessionError::PendingDelivery);
-        }
-        active.timer_delivery = Some(TimerDelivery {
-            expiry,
-            trigger: 0,
-            phase: TimerDeliveryPhase::Trigger,
-        });
+    fn deliver_prepared_timer_expiry(&mut self) -> Result<(), TimerSessionError> {
         let result = self.drive_timer_delivery();
         let delivery = self
             .active
@@ -681,6 +736,9 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 .expect("prepared timer delivery");
             let trigger = delivery.trigger;
             match delivery.phase {
+                TimerDeliveryPhase::MandatoryProjection => {
+                    return Err(TimerSessionError::PendingDelivery);
+                }
                 TimerDeliveryPhase::Trigger => {
                     if trigger == delivery.expiry.triggers().len() {
                         self.timer_delivery_mut().phase = TimerDeliveryPhase::Handler;
@@ -817,6 +875,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
     /// One script boundary: range entries, then region membership and every
     /// queued event, each as a filtered trigger thread.
     pub fn advance_unit_ranges(&mut self, work: usize) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let delivered = drain_unit_ranges(&active.context, &mut active.vm, work)?;
         let mut work = work;
@@ -859,6 +918,7 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.events")
     )]
     pub fn advance_queued_events(&mut self, mut work: usize) -> Result<usize, TimerSessionError> {
+        self.check_pending_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let mut delivered = 0;
         while let Some(fired) = active.vm.host().inner.objects_mut().take_fired_event() {
