@@ -3306,3 +3306,76 @@ fn structure_upgrade_pending_form_mode_refuses_before_credit_or_queue_mutation()
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
     assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 16);
 }
+
+#[test]
+fn malformed_upgrade_profiles_preserve_public_training_and_research_and_refuse_upgrades_atomically()
+{
+    for key in [
+        "UpgradeRefundRate",
+        "RelativeUpgradeCost",
+        "UpgradeDamageRefundPenalty",
+        "UpgradeInProgressIdChange",
+    ] {
+        for value in ["bogus", "NaN", "1,0"] {
+            let profile =
+                format!("[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\n{key}={value}\n");
+            let parsed = || {
+                crate::training_rules::tests::fixture_from_profiles(&[(
+                    "invalid upgrade only",
+                    profile.as_bytes(),
+                )])
+                .unwrap()
+            };
+            let (mut vm, actor, producer) = fixture();
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            h.training_policy_fixture(parsed());
+            h.set_ai_replacement_count(4, 4).unwrap();
+            h.native("KillUnit", &[Value::Handle(actor)]).unwrap();
+            h.fill_ai_guard_posts(4).unwrap();
+            assert_eq!(
+                h.unit_training_queue(producer).unwrap().len(),
+                1,
+                "{key}={value}"
+            );
+            assert!(h.cancel_unit_training(producer, 0).unwrap());
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 74);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 96);
+
+            let (mut vm, actor, producer) = research_fixture();
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 100, 100);
+            let h = &mut vm.host().inner;
+            h.training_policy_fixture(parsed());
+            h.set_ai_upgrade(4, i32::from_be_bytes(RESEARCHED)).unwrap();
+            assert_eq!(
+                h.unit_training_queue(producer).unwrap().len(),
+                1,
+                "{key}={value}"
+            );
+            assert!(h.cancel_unit_training(producer, 0).unwrap());
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 80);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 92);
+
+            let (mut vm, actor, producer) = upgrade_credit_fixture();
+            let owner = vm.host().inner.executed_unit(actor).unwrap().owner;
+            fund(&mut vm, owner, 0, 16);
+            let h = &mut vm.host().inner;
+            h.training_policy_fixture(parsed());
+            let record = h.executed_unit(producer).unwrap().clone();
+            let random = h.script_random_state().cloned();
+            let handles = h.inner().handles();
+            let error = h
+                .set_ai_produce(4, 1, i32::from_be_bytes(*b"d001"), -1)
+                .unwrap_err();
+            assert!(error.to_string().contains(key), "{key}={value}: {error}");
+            assert_eq!(h.executed_unit(producer).unwrap(), &record);
+            assert_eq!(h.script_random_state(), random.as_ref());
+            assert_eq!(h.inner().handles(), handles);
+            assert!(h.unit_training_queue(producer).unwrap().is_empty());
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_GOLD"), 0);
+            assert_eq!(bank(h, owner, "PLAYER_STATE_RESOURCE_LUMBER"), 16);
+        }
+    }
+}

@@ -2434,6 +2434,20 @@ impl ObjectHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn training_policy_fixture(&mut self, mut training: crate::training_rules::Rules) {
+        let resources = self.players.as_mut().unwrap().resources.as_mut().unwrap();
+        training.image_sha256 = resources.rules.image_sha256;
+        training.ai_production = resources
+            .rules
+            .training
+            .as_ref()
+            .unwrap()
+            .ai_production
+            .clone();
+        resources.rules.training = Ok(training);
+    }
+
+    #[cfg(test)]
     pub(crate) fn training_clear_numeric_fixture(&mut self) {
         self.numeric = None;
     }

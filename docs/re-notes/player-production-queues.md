@@ -421,3 +421,15 @@ mutation. This is an admission guard, not an implementation of the enabled
 pending-form path. Training and research refunds remain independent. Positive
 synthetic policies explicitly select the disabled mode. Upgrade start/cancel/finish event publication and public numeric cancel
 dispatch also remain open; the prior native capture records their contract.
+
+
+Upgrade-only scalar semantics are isolated inside the upgrade policy result.
+Textual, nonfinite and list-shaped values for the upgrade refund rate, relative
+cost mode, damage penalty or pending-form selector reject structure upgrades
+without disabling ordinary training or research admission and cancellation.
+Global profile syntax, identity, budget and common refund-rate errors remain
+strict failures. Regressions exercise each upgrade key with `bogus`, `NaN` and
+`1,0` through the shared parser and actual production callers, checking rejected
+upgrades leave the producer, queue, banks, handles and RNG unchanged. This fixes
+the outer-parser error introduced by selecting an additional upgrade-only key;
+it does not admit any malformed upgrade value or implement the enabled mode.

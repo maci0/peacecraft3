@@ -176,26 +176,9 @@ impl Rules {
                 return Err(format!("{key} refund profile key differs"));
             }
         }
-        let (
-            [
-                rate,
-                research_rate,
-                upgrade_rate,
-                relative,
-                damage,
-                in_progress_id_change,
-            ],
-            profile_sources,
-        ) = pcx_objects::editor::misc::misc_scalars(
+        let ([rate, research_rate], profile_sources) = pcx_objects::editor::misc::misc_scalars(
             profiles,
-            [
-                "TrainRefundRate",
-                "ResearchRefundRate",
-                "UpgradeRefundRate",
-                "RelativeUpgradeCost",
-                "UpgradeDamageRefundPenalty",
-                "UpgradeInProgressIdChange",
-            ],
+            ["TrainRefundRate", "ResearchRefundRate"],
             profile_bytes,
         )?;
         let boolean = |key: &str, value: Option<f32>| match value {
@@ -205,6 +188,17 @@ impl Rules {
             None => Err(format!("missing Misc/{key}")),
         };
         let upgrade = (|| {
+            let ([upgrade_rate, relative, damage, in_progress_id_change], _) =
+                pcx_objects::editor::misc::misc_scalars(
+                    profiles,
+                    [
+                        "UpgradeRefundRate",
+                        "RelativeUpgradeCost",
+                        "UpgradeDamageRefundPenalty",
+                        "UpgradeInProgressIdChange",
+                    ],
+                    profile_bytes,
+                )?;
             Ok(UpgradePolicy {
                 refund_rate: upgrade_rate.ok_or("missing Misc/UpgradeRefundRate")?,
                 relative_cost: boolean("RelativeUpgradeCost", relative)?,
@@ -337,7 +331,7 @@ impl Rules {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
@@ -440,6 +434,10 @@ mod tests {
                     .ok_or("missing test window".into())
             },
         )
+    }
+
+    pub(crate) fn fixture_from_profiles(profiles: &[(&str, &[u8])]) -> Result<Rules, String> {
+        decode(&instructions(3), profiles)
     }
 
     #[test]
@@ -636,6 +634,36 @@ mod tests {
         let mut changed = source;
         changed.get_mut(&0xb635f9).unwrap()[1] ^= 1;
         assert!(decode(&changed, &[("base", profile.as_bytes())]).is_err());
+    }
+
+    #[test]
+    fn malformed_upgrade_scalars_preserve_other_refund_families() {
+        let (image, binding, budget) = crate::script_numeric::tests::fixture();
+        let numeric = NumericPolicy::read(&image, binding, budget, 64).unwrap();
+        for key in [
+            "UpgradeRefundRate",
+            "RelativeUpgradeCost",
+            "UpgradeDamageRefundPenalty",
+            "UpgradeInProgressIdChange",
+        ] {
+            for value in ["bogus", "NaN", "1,0"] {
+                let profile =
+                    format!("[Misc]\nTrainRefundRate=.37\nResearchRefundRate=.61\n{key}={value}\n");
+                let mut rules =
+                    decode(&instructions(3), &[("bad upgrade", profile.as_bytes())]).unwrap();
+                rules.image_sha256 = *numeric.image_sha256();
+                assert_eq!(rules.refund(&numeric, 43).unwrap(), 15);
+                assert_eq!(rules.research_refund(&numeric, 43).unwrap(), 26);
+                assert!(rules.upgrade_policy().unwrap_err().contains(key));
+            }
+        }
+        for profile in [
+            b"[Misc\nTrainRefundRate=.37\n".as_slice(),
+            b"[Misc]\nTrainRefundRate=NaN\n",
+            b"[Misc]\nTrainRefundRate=.37\nResearchRefundRate=bogus\n",
+        ] {
+            assert!(decode(&instructions(3), &[("invalid common", profile)]).is_err());
+        }
     }
 
     #[test]
