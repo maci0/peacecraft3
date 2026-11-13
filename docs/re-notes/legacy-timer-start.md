@@ -732,3 +732,62 @@ would lose the observed behavior. This section qualifies the domains and bounded
 readpoints; it does not claim that the recreation's parked map/AI wake integration,
 UI pause, QPC path, large negative waits, arbitrary yielding or full tick parity
 is complete.
+
+## Called sleep-domain integration (2026-11-13)
+
+Joint commit `b0f18d09` implements the preceding sleep-domain contract through
+actual callers. The source-family child module reads the map/AI registrations,
+embedded extended-timer constructors and queue selectors, including the real
+queue's manager/constructor/cycle relationship. `NumericPolicy` retains the
+existing bound extended-entry arithmetic. Its factored `begin_entry` prepares
+only the current entry in constant work; `begin_sleep` uses that entry and
+retained segment count. Ordinary timer `begin` still computes its separately
+budgeted legacy final projection. Sleep consumers use current entries, counts
+and source rebasing, and never select delivery from that projection.
+
+The canonical host retains domain, raw request and raw origin on fresh startup;
+Native admission prepares all retained epochs before committing the driver.
+Native requests prepare at their current domain point. Map thread rows use the
+real domain; AI rows use the game domain, including source-derived pause-retry
+words. Internal extended entries consume deterministic work without resuming a
+VM. Final wake delivery retains its selected domain scope through resume,
+re-park and failure cleanup. A real callback leaves the independent completed
+game point visible to `TimerStart`.
+
+The actual session accepts independently supplied game and raw-real frame input,
+drains game work before real work and retains unfinished frame debt. Its map
+thread and campaign-AI callers use those retained source requests and points.
+This API does not derive real elapsed from game elapsed, and it is not evidence
+for a complete automatic native counter/speed adapter. That adapter remains a
+separate source-qualification and application-adoption step.
+
+The frozen validation receipts for `b0f18d09` and the subsequent integration
+merge `b0e97098` each have 15 successful checks with unchanged source snapshots.
+An independent read compared all 798 recorded source-file digests against each
+committed Git tree. It also checked the exact two new helper test names and all
+12 new published caller test names in the successful logs, avoiding zero-filtered
+or stale-artifact acceptance. Verification is retained locally at
+`/tmp/pc3-sol02-sleep-joint-intake-verification.json`; original receipts are
+`/tmp/pc3-sol09-paired-frame-v5-status.json`,
+`/tmp/pc3-sol09-paired-frame-v5-app-builds.json`,
+`/tmp/pc3-sol09-paired-frame-63-status.json` and
+`/tmp/pc3-sol09-paired-frame-63-app-builds.json`.
+
+Both snapshots pass 22 public application clock cases, 61 AI cases (four explicit
+local-input cases ignored), 10 kernel cases, 58 timer cases (three ignored),
+14 current-handler cases and 35 Curse cases. Autocast has 52 passing cases in
+the first snapshot and 54 in the later merge. Strict native/WASM library and
+application checks and both application library builds pass. The new published
+cases exercise real sleep internal entries, deterministic budget retry, selected
+origin across a nonstock wrap, real sleep unpause with a held game cursor,
+atomic fresh admission refusal and timer creation at the completed game cursor.
+AI cases exercise world recovery after failure, retained paused tickets,
+multi-player locals, wrap/re-park, budget retry and zero/small-negative re-park.
+
+These are actual caller regressions with synthetic timing inputs, supported by
+the separately qualified original-client domains and readpoints. They do not
+claim a replay of all 744 original trace rows through the two-program observer
+bridge. The existing AI-to-map player-state callback guard remains a separate
+[qualified frontier](ai-player-state-callback-order.md). Automatic native pacing,
+the QPC alternative, UI pause, large negative waits, full save continuation and
+complete tick parity remain open.
