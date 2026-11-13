@@ -2004,10 +2004,42 @@ pub(crate) mod tests {
                     .and_then(|(_, tail)| tail.split_once(')'))
                     .and_then(|(token, _)| token.parse::<u64>().ok());
                 let objects = session.host().unwrap().objects();
+                println!(
+                    "frontier totals: units={} missing_combat={} missing_position={} combat_targets={}",
+                    objects.executed_units().count(),
+                    objects
+                        .executed_units()
+                        .filter(|(_, unit)| unit.combat.is_none())
+                        .count(),
+                    objects
+                        .executed_units()
+                        .filter(|(_, unit)| unit.position.is_none())
+                        .count(),
+                    objects
+                        .executed_units()
+                        .filter(|(_, unit)| unit
+                            .combat
+                            .as_ref()
+                            .is_some_and(|combat| combat.target.is_some()))
+                        .count(),
+                );
+                let targets = objects
+                    .executed_units()
+                    .filter_map(|(id, unit)| Some((id, unit.combat.as_ref()?.target?)))
+                    .take(64)
+                    .collect::<Vec<_>>();
+                println!("frontier combat targets (at most64): {targets:?}");
                 if let Some((caster_id, caster)) = objects
                     .executed_units()
                     .find(|(id, _)| Some(id.token()) == token)
                 {
+                    println!(
+                        "frontier caster player={:?} host_time={:?}",
+                        objects
+                            .player_settings(caster.owner)
+                            .map(|player| player.number),
+                        objects.timer_game_time(),
+                    );
                     println!(
                         "frontier caster: id={caster_id:?} kind={:?} owner={:?} position={:?} order={:?} vitals={:?} target={:?} shared_vision={} motion_and_cooldown=unavailable",
                         caster.definition.rawcode,
