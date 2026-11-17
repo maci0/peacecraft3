@@ -769,3 +769,199 @@ fn regular_journal_failed_controller_admission_leaves_pending_prefix_for_retry()
     assert!(h.regular_music_commands().unwrap().is_empty());
     assert_eq!(c.regular().unwrap().path, "a.ogg");
 }
+
+fn mixed_music_host(map: &str, capacity: usize) -> ObjectHost {
+    let common = COMMON.replacen("globals", "native SetMapMusic takes string name, boolean random, integer index returns nothing\nnative ClearMapMusic takes nothing returns nothing\nnative PlayThematicMusic takes string path returns nothing\nnative EndThematicMusic takes nothing returns nothing\nglobals", 1);
+    let regular = rules::Rules::fixture();
+    let mut thematic = super::super::music::thematic_rules::tests::rules();
+    thematic.image_sha256 = regular.image_sha256;
+    let mut volume = volume_rules::tests::rules();
+    volume.image_sha256 = regular.image_sha256;
+    host(&common, map)
+        .with_map_music_selection(64)
+        .unwrap()
+        .with_play_music(64)
+        .unwrap()
+        .with_thematic_music_rules(thematic)
+        .unwrap()
+        .with_regular_music_volume_rules(Ok(volume))
+        .unwrap()
+        .with_regular_music_journal(Arc::new(regular), capacity)
+        .unwrap()
+}
+
+#[test]
+fn regular_journal_mixed_vm_interleaving_preserves_voice_cursor_and_effect_order() {
+    use controller::{Controller, Effect, Operation};
+    let mut vm = mixed_music_host("function main takes nothing returns nothing\ncall PlayMusicEx(\"a.ogg\",12,0)\ncall StopMusic(false)\ncall PlayThematicMusicEx(\"theme.ogg\",10)\ncall SetThematicMusicPlayPosition(20)\ncall SetMusicVolume(3)\ncall SetMapMusic(\"set\",true,86)\ncall EndThematicMusic()\ncall ResumeMusic()\ncall ClearMapMusic()\ncall PlayMusicEx(\"b.ogg\",700,0)\ncall StopMusic(false)\ncall ResumeMusic()\nendfunction\n", 12).into_vm();
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let commands = vm.host().regular_music_commands().unwrap().clone();
+    assert_eq!(commands.len(), 12);
+    assert_eq!(
+        commands[5].operation,
+        Operation::Select {
+            name: "set".into(),
+            index: -5
+        }
+    );
+    let mut c = Controller::new(Arc::new(rules::Rules::fixture()), 22);
+    let mut effects = Vec::new();
+    for command in commands {
+        let resolved = if let Operation::Play { name, .. } = &command.operation {
+            Some(vec![name.clone()])
+        } else {
+            None
+        };
+        effects.extend(c.apply(command.operation, resolved, 100, &mut 100).unwrap());
+        match command.sequence {
+            4 => {
+                assert_eq!(
+                    (
+                        c.regular().unwrap().serial,
+                        c.regular().unwrap().start_ms,
+                        c.regular().unwrap().playing
+                    ),
+                    (1, 12, false)
+                );
+                assert_eq!(
+                    (c.thematic().unwrap().serial, c.thematic().unwrap().start_ms),
+                    (2, 20)
+                );
+            }
+            7 => {
+                assert!(c.thematic().is_none());
+                assert_eq!(
+                    (
+                        c.regular().unwrap().serial,
+                        c.regular().unwrap().start_ms,
+                        c.regular().unwrap().playing
+                    ),
+                    (1, 12, true)
+                );
+            }
+            _ => {}
+        }
+        vm.host()
+            .acknowledge_regular_music(command.sequence)
+            .unwrap();
+    }
+    assert!(vm.host().regular_music_commands().unwrap().is_empty());
+    assert!(vm.host().map_music_selection().is_none());
+    assert_eq!(c.regular().unwrap().serial, 3);
+    assert_eq!(c.regular().unwrap().start_ms, 700);
+    assert!(c.regular().unwrap().playing);
+    assert_eq!(
+        effects
+            .iter()
+            .filter_map(|e| if let Effect::Start(v) = e {
+                Some(v.serial)
+            } else {
+                None
+            })
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        effects
+            .iter()
+            .filter_map(|e| if let Effect::Retire(serial) = e {
+                Some(*serial)
+            } else {
+                None
+            })
+            .collect::<Vec<_>>(),
+        [2, 1]
+    );
+}
+
+#[test]
+fn regular_journal_mixed_overflow_preserves_all_accepted_snapshots() {
+    let mut h = mixed_music_host("", 2);
+    h.native(
+        "SetMapMusic",
+        &[Value::Str("set".into()), Value::Bool(false), Value::Int(8)],
+    )
+    .unwrap();
+    h.native(
+        "PlayThematicMusicEx",
+        &[Value::Str("theme.ogg".into()), Value::Int(10)],
+    )
+    .unwrap();
+    let thematic = h.thematic_music_request().unwrap().clone();
+    let volume = h.regular_music_volume_request().unwrap().clone();
+    for (name, args) in [
+        ("ClearMapMusic", vec![]),
+        ("EndThematicMusic", vec![]),
+        (
+            "SetMapMusic",
+            vec![
+                Value::Str("other".into()),
+                Value::Bool(true),
+                Value::Int(99),
+            ],
+        ),
+        (
+            "PlayThematicMusicEx",
+            vec![Value::Str("other.ogg".into()), Value::Int(11)],
+        ),
+        ("SetThematicMusicPlayPosition", vec![Value::Int(20)]),
+        ("SetMusicVolume", vec![Value::Int(3)]),
+    ] {
+        assert!(
+            h.native(name, &args)
+                .unwrap_err()
+                .contains("ordered music commands"),
+            "{name}"
+        );
+        assert_eq!(h.thematic_music_request().unwrap(), &thematic);
+        assert_eq!(h.map_music_selection().unwrap().name, "set");
+        assert_eq!(h.map_music_selection().unwrap().index, 8);
+        assert_eq!(
+            h.regular_music_volume_request().unwrap().revision,
+            volume.revision
+        );
+        assert_eq!(
+            h.regular_music_volume_request().unwrap().level,
+            volume.level
+        );
+        assert!(h.music_volume_request().is_none());
+        assert_eq!(h.regular_music_commands().unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn regular_journal_unqualified_mixed_policies_refuse_before_snapshot_publication() {
+    let mut h = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_journal(Arc::new(rules::Rules::fixture()), 8)
+        .unwrap();
+    assert!(h.native("SetMusicVolume", &[Value::Int(3)]).is_err());
+    assert!(h.music_volume_request().is_none());
+    assert!(
+        h.native(
+            "PlayThematicMusicEx",
+            &[Value::Str("theme.ogg".into()), Value::Int(4)]
+        )
+        .is_err()
+    );
+    assert!(h.thematic_music_ex_request().is_none());
+    assert!(
+        h.native("SetThematicMusicPlayPosition", &[Value::Int(5)])
+            .is_err()
+    );
+    assert!(h.thematic_play_position_request().is_none());
+    assert!(h.regular_music_commands().unwrap().is_empty());
+    let mut h = h
+        .with_regular_music_volume_rules(Ok(volume_rules::tests::rules()))
+        .unwrap();
+    assert!(
+        h.native("SetMusicVolume", &[Value::Int(3)])
+            .unwrap_err()
+            .contains("different client images")
+    );
+    assert!(h.music_volume_request().is_none());
+    assert_eq!(h.regular_music_volume_request().unwrap().revision, 0);
+    assert!(h.regular_music_commands().unwrap().is_empty());
+}
