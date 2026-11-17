@@ -93,3 +93,10 @@ Evaluate newly stabilized Rust features against the actual code. Apply relevant
 improvements without introducing unnecessary unsafe code or changing original
 game semantics. Run targeted tests, strict compile checks and affected native/WASM
 builds before recording a change as complete.
+
+Use a dedicated Cargo target directory for each checkout/worktree. Serialized
+cross-worktree reuse can still link stale path dependencies through mtime-based
+freshness checks. Acceptance receipts must identify the linked local dependency
+sources and artifacts, toolchain, features and Rust flags; a root executable hash
+alone does not prove the dependency closure. See
+[build provenance](docs/re-notes/build-provenance.md).
