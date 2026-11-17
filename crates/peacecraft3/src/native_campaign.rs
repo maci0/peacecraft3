@@ -1722,6 +1722,8 @@ fn render_campaign_panel(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    mod counter;
+
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::{
@@ -2364,6 +2366,18 @@ pub(crate) mod tests {
 
     /// An app with the selected install's chapter index loaded and no chapter configured.
     fn chapter_app(install_dir: String, expansion: bool) -> App {
+        chapter_app_with_startup(
+            install_dir,
+            expansion,
+            peacecraft3::campaign_startup::install,
+        )
+    }
+
+    fn chapter_app_with_startup(
+        install_dir: String,
+        expansion: bool,
+        startup: fn(&mut App),
+    ) -> App {
         crate::campaign_workers::initialize();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -2379,7 +2393,7 @@ pub(crate) mod tests {
             // The normal map-ground plugin declares this renderer capability too.
             .insert_resource(peacecraft3::map_ground::NoOcclusionPass);
         peacecraft3::map_requests::install(&mut app);
-        peacecraft3::campaign_startup::install(&mut app);
+        startup(&mut app);
         crate::campaign_prepare::install(&mut app);
         crate::button_actions::install(&mut app);
         install(&mut app);
@@ -2425,7 +2439,16 @@ pub(crate) mod tests {
         expansion: bool,
     ) -> (App, Arc<CampaignRecipe>) {
         let mut app = chapter_app(install_dir, expansion);
-        let (campaign, mission, indexed_recipe) = locate_chapter(&app, map);
+        let indexed_recipe = enqueue_selected_chapter(&mut app, map);
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_published_chapter(&mut app, map, Arc::clone(&indexed_recipe), true);
+        (app, indexed_recipe)
+    }
+
+    fn enqueue_selected_chapter(app: &mut App, map: &str) -> Arc<CampaignRecipe> {
+        let (campaign, mission, indexed_recipe) = locate_chapter(app, map);
         app.world_mut()
             .run_system_once(
                 move |launcher: Res<crate::launch_gui::Launcher>,
@@ -2451,11 +2474,7 @@ pub(crate) mod tests {
                 },
             )
             .expect("probe system runs");
-        for _ in 0..6 {
-            app.update();
-        }
-        assert_published_chapter(&mut app, map, Arc::clone(&indexed_recipe), true);
-        (app, indexed_recipe)
+        indexed_recipe
     }
 
     pub(crate) fn started_app() -> App {
