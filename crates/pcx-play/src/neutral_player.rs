@@ -371,6 +371,18 @@ impl<H: Host> Host for SelectedMapNeutralHost<H> {
             self.inner.begin_script_call(name, args)
         }
     }
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        owner: pcx_script::eval::InitializedVmCall<'_>,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        if name == self.rule.native_name {
+            Ok(None)
+        } else {
+            self.inner.begin_initialized_script_call(name, args, owner)
+        }
+    }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
         self.inner.continue_script_call(value)
     }

@@ -3503,3 +3503,71 @@ fn case_substring_missing_policy_signatures_and_empty_recovery_are_explicit() {
         );
     }
 }
+
+#[test]
+fn initialized_vm_callback_owner_is_absent_in_globals_and_present_in_calls_and_resumed_threads() {
+    struct Boundary {
+        program: Arc<crate::resolve::Program>,
+        phases: Vec<bool>,
+    }
+    impl crate::Host for Boundary {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            Err(format!("unexpected native {name}"))
+        }
+        fn begin_script_call(
+            &mut self,
+            _: &str,
+            _: &[Value],
+        ) -> Result<Option<crate::ScriptCall>, String> {
+            self.phases.push(false);
+            Ok(Some(crate::ScriptCall::Return(Value::Int(
+                self.phases.len() as i32,
+            ))))
+        }
+        fn begin_initialized_script_call(
+            &mut self,
+            _: &str,
+            _: &[Value],
+            owner: crate::eval::InitializedVmCall<'_>,
+        ) -> Result<Option<crate::ScriptCall>, String> {
+            assert!(owner.matches_program(&self.program));
+            assert!(!owner.matches_program(&self.program.as_ref().clone()));
+            self.phases.push(true);
+            Ok(Some(crate::ScriptCall::Return(Value::Int(
+                self.phases.len() as i32,
+            ))))
+        }
+        fn suspend(&mut self, name: &str, _: &[Value]) -> bool {
+            name == "Pause"
+        }
+        fn park_thread(&mut self) -> Result<u64, String> {
+            Ok(1)
+        }
+        fn resume_thread(&mut self, _: u64) -> Result<(), String> {
+            Ok(())
+        }
+        fn leave_thread(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let program = program_of(
+        "native Marker takes nothing returns integer\nnative Pause takes nothing returns nothing\nglobals\ninteger first=nested()\ninteger count=0\nendglobals\nfunction nested takes nothing returns integer\nreturn Marker()\nendfunction\nfunction worker takes nothing returns nothing\nset count=nested()\ncall Pause()\nset count=nested()\nendfunction\n",
+    );
+    let program = Arc::new(program);
+    let worker = program.function_id("worker").unwrap();
+    let mut vm = Vm::new(
+        &program,
+        Boundary {
+            program: Arc::clone(&program),
+            phases: Vec::new(),
+        },
+    );
+    vm.init_globals().unwrap();
+    assert_eq!(vm.global("first"), Value::Int(1));
+    assert_eq!(vm.call("nested", &[]).unwrap(), Value::Int(2));
+    vm.run_thread(&[worker]).unwrap();
+    assert_eq!(vm.global("count"), Value::Int(3));
+    vm.resume_thread(1).unwrap();
+    assert_eq!(vm.global("count"), Value::Int(4));
+    assert_eq!(vm.host().phases, [false, true, true, true]);
+}

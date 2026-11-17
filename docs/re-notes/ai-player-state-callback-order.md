@@ -2,8 +2,8 @@
 
 The selected executable is 1.29.2.9231, SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-This records a bounded source/runtime qualification. The recreation's AI-to-map
-callback guard remains in place; the cross-program caller bridge is unfinished.
+This records a bounded source/runtime qualification. The recreation admits the bounded initialized-map-VM bridge below. Other
+cross-program callback families remain unsupported.
 The separate [sleep-domain qualification](legacy-timer-start.md#script-and-ai-sleep-clock-domains-2026-11-13)
 does not depend on that bridge being complete.
 
@@ -71,7 +71,7 @@ inside this boundary were not tested.
 
 ## Minimum caller bridge
 
-The existing guard is necessary until the real two-program route is implemented.
+The two-program route must preserve the following ownership requirements.
 Map `ScriptCall::Call` and `Spawn` function IDs belong to the map program;
 forwarding those IDs into the AI VM would execute the wrong program.
 
@@ -112,11 +112,12 @@ retained in pending retirement without a world loan. Cleanup must not replay the
 committed setter or its remaining script tail.
 
 These are recreation failure policies, not original-client error observations.
-The production bridge remains disabled. Capture from AI global initializers, direct-host
-capture, sleeping/reentrant observers and active-bridge checkpoint publication
+That diagnostic validation kept the production bridge disabled. Capture from AI
+global initializers, direct-host observers, sleeping/reentrant observers and
+active-bridge checkpoint publication
 remain refused; full Save/Load and general native tick parity remain open.
 
-Validation on 2026-11-17 executes all ten application bridge cases against
+The diagnostic validation on 2026-11-17 executes all ten bridge cases against
 the selected executable above, with both legacy and native counter branches.
 They cover immediate rereads and nested callbacks, condition failures at initial
 entry and wake, first-error/retry fault identity, pure-map entry gates, ordinary
@@ -126,5 +127,54 @@ passes 73 tests with four explicit input-dependent skips; the expanded callback
 boundary case passes separately. Four focused bridge core cases overlap that
 AI filter. Strict native all-target and WASM library Clippy, native/WASM library
 builds, formatting and the frozen eleven-file Rust hash check pass. Local logs
-and the source freeze are under `/tmp/pc3-continue-ai-bridge-*`. No fresh
-original-client run, browser execution or production admission is claimed.
+and the source freeze are under `/tmp/pc3-continue-ai-bridge-*`. Those runs
+claimed no fresh original-client run, browser execution or production admission.
+
+
+## Initialized map VM admission (2026-11-18)
+
+Ordinary `MapScriptSession` construction now admits `StartCampaignAI` observer
+handoffs only through a native dispatch issued after the map VM completes its
+globals. The VM mints a private-constructor, non-copyable token borrowing its
+resolved program. The host requires pointer identity with the retained map
+program before arming the bridge. A separately resolved or cloned equivalent
+program cannot authorize the map's callback IDs. Existing host implementations
+retain their default dispatch; supplied decorators forward this context while
+preserving neutral-native exclusions and once-only native recording.
+
+The token identifies a program and initialized dispatch, not a published session
+or global store. The ordinary session keeps its exclusive host and globals in
+one retained VM. Embedders transferring execution must preserve that pairing;
+this mechanism does not establish full-root restore or arbitrary VM interchange.
+The existing session entry barriers and sticky/active bridge checks remain.
+
+An initialized owner retains bridge capability even when no observers exist at
+AI startup, allowing later registrations before a wake. No-observer starts from
+direct hosts or map global initializers retain their previous native path and do
+not acquire that capability. If observers are subsequently registered, those
+unowned continuations refuse before their next player-state write. AI global
+initializer writes with observers, reentrant starts, sleeping map observers and
+active-bridge checkpoint publication remain unsupported.
+
+Fresh checked extraction of the unchanged selected Human02 container and script
+matches the identities in [the runtime notes](campaign-ai-runtime.md). Its
+`main` registers the introduction and introduction-cancel action functions
+through `InitCustomTriggers`, as well as the gold/lumber player-state observers.
+Both introduction actions contain `StartCampaignAI` and map sleeps. These are
+source caller/registration paths, not a new execution of either cinematic or a
+passing mission horizon. The selected executable also matches the retained
+14-record original-client ordering witness above; its raw backing traces are
+not available in the restarted scratch environment.
+
+The final program-bound source passes 3,637 package tests with 193 explicit or
+input-dependent skips, strict native all-target/WASM library Clippy and actual
+native/WASM library builds. Fourteen ordinary-constructor application cases and
+the existing generic campaign caller pass under verified private Xvfb and null
+audio. The equivalent-program rejection case also passes separately. Cases
+cover resumed map-thread startup, later registrations with all three ownership
+origins, primary fault identity, scope recovery and preservation of unrelated
+work. The first matrix run passed 13 cases and failed before reaching the foreign
+program gate because its second global store exceeded the synthetic trigger
+budget. The corrected fixture capacity and all final results are recorded
+separately under `/tmp/pc3-ai-admission-*`. No new original-client run, browser
+execution, full Save/Load or general native tick parity is claimed.

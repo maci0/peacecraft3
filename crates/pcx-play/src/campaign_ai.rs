@@ -1511,7 +1511,7 @@ impl<W: AiWorld> Host for AiHost<W> {
         if name != "SetPlayerState" || !self.world()?.has_map_player_state_callbacks() {
             return Ok(false);
         }
-        if !self.bridge_enabled || !cfg!(any(test, feature = "test-fixtures")) {
+        if !self.bridge_enabled {
             return Err("SetPlayerState: map callbacks from campaign AI initializer or direct host are not admitted".into());
         }
         if self.pending_map.is_some() {

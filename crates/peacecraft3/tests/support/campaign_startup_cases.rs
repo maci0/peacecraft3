@@ -994,14 +994,15 @@ fn campaign_ai_uses_the_published_world_and_map_timer_order() {
             .unwrap(),
         1
     );
-    let error = session
+    session
         .call_function(
             context.scripts.program().function_id("blocked").unwrap(),
             &[],
         )
-        .unwrap_err();
-    assert!(error.to_string().contains("map callbacks"), "{error}");
-    assert_eq!(bank(&mut session, 2), Value::Int(0));
+        .unwrap();
+    assert_eq!(bank(&mut session, 2), Value::Int(7));
+    session.advance_timers(0.5, 8).unwrap();
+    assert_eq!(bank(&mut session, 2), Value::Int(14));
     assert_eq!(
         session
             .host()
