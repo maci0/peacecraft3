@@ -849,11 +849,15 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 }
                 if let Some(wake) = native_ai.filter(|wake| Some(wake.point) == native_target) {
                     *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
-                    let outcome = self
-                        .host()
-                        .ok_or(ScriptSessionError::NoSession)?
-                        .deliver_native_ai_wake(wake, activity_work)
-                        .map_err(TimerSessionError::Ai)?;
+                    let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+                    let outcome =
+                        host.deliver_native_ai_wake(wake, activity_work)
+                            .map_err(|error| {
+                                host.ai_bridge_fault().map_or(
+                                    TimerSessionError::Ai(error),
+                                    TimerSessionError::AiBridge,
+                                )
+                            })?;
                     if outcome == crate::campaign_ai::AiWakeDelivery::MapBridge {
                         let call = self
                             .host()
@@ -875,11 +879,11 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 }
                 if let Some((_, player, ticket)) = ai_wake {
                     *budget = budget.checked_sub(1).ok_or(TimerSessionError::WakeBudget)?;
-                    let call = self
-                        .host()
-                        .ok_or(ScriptSessionError::NoSession)?
-                        .resume_ai(player, ticket)
-                        .map_err(TimerSessionError::Ai)?;
+                    let host = self.host().ok_or(ScriptSessionError::NoSession)?;
+                    let call = host.resume_ai(player, ticket).map_err(|error| {
+                        host.ai_bridge_fault()
+                            .map_or(TimerSessionError::Ai(error), TimerSessionError::AiBridge)
+                    })?;
                     if let Some(call) = call {
                         self.deliver_ai_map_bridge(call)?;
                     }

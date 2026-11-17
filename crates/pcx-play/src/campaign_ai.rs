@@ -1087,7 +1087,8 @@ impl<W: AiWorld> Runtime<W> {
             self.active.insert(player, vm);
             self.pending_retirement.insert(player);
             return Err(format!(
-                "StartCampaignAI player {player}: retirement: {error}"
+                "StartCampaignAI player {player}: {}; retirement: {error}",
+                result.as_ref().expect_err("failed AI execution")
             ));
         }
         result.map_err(|e| format!("StartCampaignAI player {player}: {e}"))?;
@@ -1194,7 +1195,10 @@ impl<W: AiWorld> Runtime<W> {
         {
             self.active.insert(player, vm);
             self.pending_retirement.insert(player);
-            return Err(format!("campaign AI player {player}: retirement: {error}"));
+            return Err(format!(
+                "campaign AI player {player}: {}; retirement: {error}",
+                result.as_ref().expect_err("failed AI execution")
+            ));
         }
         result.map_err(|e| format!("campaign AI player {player}: {e}"))
     }

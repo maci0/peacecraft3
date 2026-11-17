@@ -22,6 +22,7 @@ integer queuedCalls=0
 integer trace=0
 integer oldTail=0
 boolean accepts=true
+boolean conditionFails=false
 integer firstSeen=0
 integer secondSeen=0
 real before=0.0
@@ -35,7 +36,13 @@ set trace=trace*10+4
 endfunction
 function accepted takes nothing returns boolean
 set trace=trace*10+1
+if conditionFails then
+return 1/0==0
+endif
 return accepts
+endfunction
+function failConditions takes nothing returns nothing
+set conditionFails=true
 endfunction
 function reject takes nothing returns nothing
 set accepts=false
@@ -675,47 +682,63 @@ fn ai_map_bridge_initial_failure_gates_pure_vm_entries_and_retains_primary_cause
 #[test]
 #[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
 fn ai_map_bridge_ordinary_error_without_capture_preserves_other_ai_and_old_park() {
-    const ORDINARY_ERROR: &str = "function main takes nothing returns nothing\nlocal integer x=0\nif GetAiPlayer()==0 then\ncall Sleep(0.0317)\nset x=GetUnitGoldCost('xxxx')\nelse\ncall Sleep(0.0634)\ncall SetPlayerState(Player(1),PLAYER_STATE_RESOURCE_LUMBER,55)\nendif\nendfunction\n";
-    for native in [false, true] {
+    for (native, wake) in [(false, false), (false, true), (true, false), (true, true)] {
+        let delay = if wake { "call Sleep(0.0317)" } else { "" };
+        let ordinary_error = format!(
+            "function main takes nothing returns nothing\nlocal integer x=0\nif GetAiPlayer()==0 then\n{delay}\nset x=GetUnitGoldCost('xxxx')\nelse\ncall Sleep(0.0634)\ncall SetPlayerState(Player(1),PLAYER_STATE_RESOURCE_LUMBER,55)\nendif\nendfunction\n"
+        );
         let (mut session, loads) = publish(
             native,
-            ORDINARY_ERROR,
+            &ordinary_error,
             "call SetPlayerState(Player(0),PLAYER_STATE_RESOURCE_LUMBER,value+1)",
         );
         let program = session.context().unwrap().scripts.shared_program();
         let old = program.function_id("parkOld").unwrap();
         session.run_thread(&[old]).unwrap();
-        start(&mut session).unwrap();
         session
             .call_function(program.function_id("startOther").unwrap(), &[])
             .unwrap();
-        let error = if native {
-            session
-                .advance_native_frame(
-                    Some(pcx_play::native_game_clock::FrameInput {
-                        game_elapsed: Duration::from_millis(125),
-                        real_elapsed_ms: 125,
-                    }),
-                    128,
-                )
-                .unwrap_err()
+        let error = if wake {
+            start(&mut session).unwrap();
+            let error = if native {
+                session
+                    .advance_native_frame(
+                        Some(pcx_play::native_game_clock::FrameInput {
+                            game_elapsed: Duration::from_millis(125),
+                            real_elapsed_ms: 125,
+                        }),
+                        128,
+                    )
+                    .unwrap_err()
+            } else {
+                session.advance_timers(0.125, 128).unwrap_err()
+            };
+            assert!(
+                matches!(
+                    error,
+                    peacecraft3::map_script_session::TimerSessionError::Ai(_)
+                ),
+                "{error}"
+            );
+            error.to_string()
         } else {
-            session.advance_timers(0.125, 128).unwrap_err()
+            start(&mut session).unwrap_err().to_string()
         };
-        assert!(
-            matches!(
-                error,
-                peacecraft3::map_script_session::TimerSessionError::Ai(_)
-            ),
-            "{error}"
-        );
-        assert!(error.to_string().contains("GetUnitGoldCost"), "{error}");
+        assert!(error.contains("GetUnitGoldCost"), "{error}");
         session
             .call_function(program.function_id("nested").unwrap(), &[])
             .unwrap();
         assert_eq!(session.global("trace"), Some(Value::Int(4)));
         if native {
-            session.advance_native_frame(None, 128).unwrap();
+            session
+                .advance_native_frame(
+                    (!wake).then_some(pcx_play::native_game_clock::FrameInput {
+                        game_elapsed: Duration::from_millis(125),
+                        real_elapsed_ms: 125,
+                    }),
+                    128,
+                )
+                .unwrap();
         } else {
             session.advance_timers(0.125, 128).unwrap();
         }
@@ -783,6 +806,147 @@ fn ai_map_bridge_fault_preserves_unrelated_queued_event_and_parked_context() {
         assert_eq!(session.host().unwrap().objects().parked_thread_count(), 1);
         assert_eq!(session.global("oldTail"), Some(Value::Int(0)));
         assert_eq!(session.global("queuedCalls"), Some(Value::Int(0)));
+        assert_eq!(trigger_after_fault(&mut session), Value::Null);
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn ai_map_bridge_condition_errors_retain_source_and_committed_write_at_initial_and_wake() {
+    use peacecraft3::map_script_session::TimerSessionError;
+    for (native, wake) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut session, _) = publish(
+            native,
+            AI,
+            "call SetPlayerState(Player(0),PLAYER_STATE_RESOURCE_LUMBER,value+1)",
+        );
+        if wake {
+            start(&mut session).unwrap();
+        }
+        let fail = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("failConditions")
+            .unwrap();
+        session.call_function(fail, &[]).unwrap();
+        let primary = if wake {
+            let error = if native {
+                session
+                    .advance_native_frame(
+                        Some(pcx_play::native_game_clock::FrameInput {
+                            game_elapsed: Duration::from_millis(125),
+                            real_elapsed_ms: 125,
+                        }),
+                        128,
+                    )
+                    .unwrap_err()
+            } else {
+                session.advance_timers(0.125, 128).unwrap_err()
+            };
+            let TimerSessionError::AiBridge(error) = error else {
+                panic!("{error}")
+            };
+            error.to_string()
+        } else {
+            start(&mut session).unwrap_err().to_string()
+        };
+        assert!(
+            primary.contains("division by zero") && primary.contains("war3map.j:"),
+            "{primary}"
+        );
+        assert_eq!(session.global("calls"), Some(Value::Int(i32::from(wake))));
+        assert_eq!(
+            bank(&mut session, 0, "PLAYER_STATE_RESOURCE_GOLD"),
+            Value::Int(if wake { 9 } else { 7 })
+        );
+        assert_eq!(
+            bank(&mut session, 0, "PLAYER_STATE_RESOURCE_LUMBER"),
+            Value::Int(if wake { 31 } else { 11 })
+        );
+        let fault = session.advance_timers(1., 128).unwrap_err();
+        let TimerSessionError::AiBridge(fault) = fault else {
+            panic!("{fault}")
+        };
+        assert!(fault.contains(&primary), "{fault}");
+        let TimerSessionError::AiBridge(repeated) = session.advance_timers(1., 128).unwrap_err()
+        else {
+            panic!("retained failure")
+        };
+        assert!(Arc::ptr_eq(&fault, &repeated));
+        assert_eq!(trigger_after_fault(&mut session), Value::Null);
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn ai_map_bridge_capture_error_at_wake_returns_the_retained_fault_arc() {
+    use peacecraft3::map_script_session::TimerSessionError;
+    const INVALID_SETTER: &str = "function main takes nothing returns nothing\ncall Sleep(0.0317)\ncall SetPlayerState(Player(0),null,7)\ncall SetPlayerState(Player(1),PLAYER_STATE_RESOURCE_LUMBER,99)\nendfunction\n";
+    for native in [false, true] {
+        let (mut session, loads) = publish(native, INVALID_SETTER, "");
+        start(&mut session).unwrap();
+        let error = if native {
+            session
+                .advance_native_frame(
+                    Some(pcx_play::native_game_clock::FrameInput {
+                        game_elapsed: Duration::from_millis(125),
+                        real_elapsed_ms: 125,
+                    }),
+                    128,
+                )
+                .unwrap_err()
+        } else {
+            session.advance_timers(0.125, 128).unwrap_err()
+        };
+        let TimerSessionError::AiBridge(fault) = error else {
+            panic!("capture failure must retain its identity: {error}")
+        };
+        assert!(
+            fault.contains("SetPlayerState") && fault.contains("observed.ai:"),
+            "{fault}"
+        );
+        let world = session.host().unwrap().capture_world_snapshot();
+        let handles = session.host().unwrap().objects().inner().handles();
+        let clock = format!(
+            "{:?}",
+            session.host().unwrap().objects().test_native_clock_state()
+        );
+        for entry in 0..3 {
+            let error = match entry {
+                0 => session
+                    .advance_native_frame(
+                        Some(pcx_play::native_game_clock::FrameInput {
+                            game_elapsed: Duration::from_secs(1),
+                            real_elapsed_ms: 1000,
+                        }),
+                        128,
+                    )
+                    .unwrap_err(),
+                1 => session.advance_native_frame(None, 128).unwrap_err(),
+                _ => session.advance_timers(1., 128).unwrap_err(),
+            };
+            let TimerSessionError::AiBridge(repeated) = error else {
+                panic!("retained capture failure: {error}")
+            };
+            assert!(Arc::ptr_eq(&fault, &repeated));
+            assert_eq!(session.host().unwrap().capture_world_snapshot(), world);
+            assert_eq!(session.host().unwrap().objects().inner().handles(), handles);
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    session.host().unwrap().objects().test_native_clock_state()
+                ),
+                clock
+            );
+        }
+        assert_eq!(session.global("calls"), Some(Value::Int(0)));
+        assert_eq!(
+            bank(&mut session, 1, "PLAYER_STATE_RESOURCE_LUMBER"),
+            Value::Int(0)
+        );
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
         assert_eq!(trigger_after_fault(&mut session), Value::Null);
     }
 }

@@ -587,3 +587,88 @@ fn ai_map_bridge_post_write_capture_failure_returns_attempt_status_without_repla
     assert!(runtime.active.is_empty());
     assert!(runtime.pending_retirement.is_empty());
 }
+
+#[test]
+fn ai_map_bridge_continuation_error_returns_world_without_repeating_committed_setter() {
+    let script = program(
+        "continuation.ai",
+        "function main takes nothing returns nothing\nlocal integer x=0\ncall SetPlayerState(Player(GetAiPlayer()),null,7)\nset x=1/0\ncall SetPlayerState(Player(GetAiPlayer()),null,99)\nendfunction\n",
+    );
+    let mut runtime = Runtime::<World>::default();
+    runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+    let state = Arc::new(Mutex::new(State {
+        callbacks: true,
+        map_owner: true,
+        ..State::default()
+    }));
+    let mut world = Some(World(Arc::clone(&state)));
+    let mut captured = false;
+    runtime
+        .start_with_bridge(&mut world, 1, "continuation.ai", true, &mut captured)
+        .unwrap();
+    assert!(captured);
+    assert!(runtime.take_map_call(1).is_some());
+    let error = runtime
+        .resume_map_call(&mut world, 1, Ok(Value::Null))
+        .unwrap_err();
+    assert!(error.contains("division by zero"), "{error}");
+    assert!(world.is_some());
+    assert!(runtime.active.is_empty());
+    assert_eq!(state.lock().unwrap().gold.get(&2), Some(&7));
+    let before = state.lock().unwrap().clone();
+    assert!(
+        runtime
+            .resume_map_call(&mut world, 1, Ok(Value::Null))
+            .is_err()
+    );
+    runtime
+        .abort_map_call(&mut world, 1, "later cleanup")
+        .unwrap();
+    assert_eq!(*state.lock().unwrap(), before);
+}
+
+#[test]
+fn ai_map_bridge_capture_failure_keeps_primary_when_initial_or_wake_retirement_fails() {
+    for wake in [false, true] {
+        let delay = if wake { "call Sleep(0.25)" } else { "" };
+        let script = program(
+            "capture.ai",
+            &format!(
+                "function main takes nothing returns nothing\n{delay}\ncall SetPlayerState(Player(GetAiPlayer()),null,7)\ncall SetPlayerState(Player(GetAiPlayer()),null,99)\nendfunction\n"
+            ),
+        );
+        let mut runtime = Runtime::<World>::default();
+        runtime.set_loader(move |_| Ok(Arc::clone(&script)));
+        let state = Arc::new(Mutex::new(State {
+            callbacks: true,
+            map_owner: true,
+            capture_error: true,
+            retirement_blocked: true,
+            ..State::default()
+        }));
+        let mut world = Some(World(Arc::clone(&state)));
+        let mut captured = true;
+        let result = runtime.start_with_bridge(&mut world, 1, "capture.ai", true, &mut captured);
+        let error = if wake {
+            result.unwrap();
+            assert!(!captured);
+            state.lock().unwrap().clock = 0.25;
+            let (_, player, ticket) = runtime.next_wake(0.25).unwrap();
+            runtime
+                .resume_with_capture(&mut world, player, ticket, &mut captured)
+                .unwrap_err()
+        } else {
+            result.unwrap_err()
+        };
+        assert!(captured);
+        assert!(error.contains("post-write capture failure"), "{error}");
+        assert!(
+            error.contains("retirement: route retirement refused"),
+            "{error}"
+        );
+        assert!(world.is_some());
+        assert!(runtime.pending_retirement.contains(&1));
+        assert!(runtime.active.get_mut(&1).unwrap().host().world.is_none());
+        assert_eq!(state.lock().unwrap().gold.get(&2), Some(&7));
+    }
+}
