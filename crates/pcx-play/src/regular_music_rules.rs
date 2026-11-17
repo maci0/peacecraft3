@@ -20,6 +20,7 @@ pub struct Rules {
     pub(super) initial_enabled: bool,
     pub(super) random_index: i32,
     pub(super) plain_play_ms: u32,
+    pub(super) map_random_index: i32,
     pub(super) maximum_level: u32,
     pub(super) name_bytes: usize,
     pub(super) default_fade_ms: u32,
@@ -253,6 +254,15 @@ impl Rules {
         }
         // TEST EAX,EAX / JNE skips playback; the fallthrough pushes that zero word twice.
         let plain_play_ms = 0;
+        let map_random_index = i32::from(operand(read, 0x4a9346, &[0x83, 0xc8], 1)?[0] as i8);
+        if map_random_index != -1
+            || bytes(read, 0x4a9349, 9)? != [0x83, 0x7d, 0x0c, 0, 0x0f, 0x44, 0x45, 0x10, 0x50]
+            || bytes(read, 0x4a9357, 1)? != [0x50]
+        {
+            return Err("map music random-index argument flow differs".into());
+        }
+        direct_call(read, 0x4a9352, 0x469010)?;
+        direct_call(read, 0x4a9358, 0x5da520)?;
         let enabled = word(read, 0x10dc6dc)?;
         if enabled > 1 {
             return Err("unsupported music-enabled initializer".into());
@@ -272,6 +282,7 @@ impl Rules {
             initial_enabled,
             random_index,
             plain_play_ms,
+            map_random_index,
             maximum_level,
             name_bytes: name_bytes as usize,
             default_fade_ms,
@@ -340,6 +351,7 @@ impl Rules {
             initial_enabled: true,
             random_index: -3,
             plain_play_ms: 23,
+            map_random_index: -5,
             name_bytes: 128,
             default_fade_ms: 31,
             fade_interval_ms: 7,

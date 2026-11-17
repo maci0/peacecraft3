@@ -37,6 +37,8 @@ fn fixture() -> BTreeMap<u32, u8> {
         (0x4a41a3, 0x5add50),
         (0x4a41b4, 0x469010),
         (0x4a41ba, 0x5d8af0),
+        (0x4a9352, 0x469010),
+        (0x4a9358, 0x5da520),
     ] {
         immediate(
             &mut m,
@@ -94,6 +96,13 @@ fn fixture() -> BTreeMap<u32, u8> {
         0x4a41a8,
         &[0x85, 0xc0, 0x75, 0x16, 0x8b, 0x4d, 0x08, 0x50, 0x50],
     );
+    emit(&mut m, 0x4a9346, &[0x83, 0xc8, 0xff]);
+    emit(
+        &mut m,
+        0x4a9349,
+        &[0x83, 0x7d, 0x0c, 0, 0x0f, 0x44, 0x45, 0x10, 0x50],
+    );
+    emit(&mut m, 0x4a9357, &[0x50]);
     emit(&mut m, 0x4a41b3, &[0x50]);
     emit(&mut m, 0x4a41b9, &[0x50]);
     emit(&mut m, 0x5d6d36, &41u32.to_le_bytes());
@@ -131,6 +140,7 @@ fn regular_music_rules_derive_nonstock_callback_units_names_fold_and_limits() {
     assert_eq!(rules.maximum_level, 9);
     assert_eq!(rules.random_index, -3);
     assert_eq!(rules.plain_play_ms, 0);
+    assert_eq!(rules.map_random_index, -1);
     assert_eq!(
         rules.edition_key("Tune", 7).unwrap(),
         "prefix-Tune-edition-7.list"
@@ -142,8 +152,9 @@ fn regular_music_rules_derive_nonstock_callback_units_names_fold_and_limits() {
 #[test]
 fn regular_music_rules_refuse_broken_call_stream_fold_and_duration_relationships() {
     for at in [
-        0x4a41a3, 0x4a41aa, 0x4a41af, 0x4a41b0, 0x4a41b3, 0x4a41b4, 0x4a41b9, 0x4a41ba, 0x5d700d,
-        0x5d8bef, 0x845d7c, 0xa99c27, 0x5d6d30, 0x5ce482, 0x5d8b2d,
+        0x4a9348, 0x4a9349, 0x4a934d, 0x4a9352, 0x4a9357, 0x4a9358, 0x4a41a3, 0x4a41aa, 0x4a41af,
+        0x4a41b0, 0x4a41b3, 0x4a41b4, 0x4a41b9, 0x4a41ba, 0x5d700d, 0x5d8bef, 0x845d7c, 0xa99c27,
+        0x5d6d30, 0x5ce482, 0x5d8b2d,
     ] {
         let mut map = fixture();
         *map.get_mut(&at).unwrap() ^= 0x40;

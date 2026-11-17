@@ -17,6 +17,57 @@ pub struct Journal {
     capacity: usize,
 }
 
+impl Journal {
+    pub(crate) fn check_image(&self, image: [u8; 32]) -> Result<(), Failure> {
+        if image != self.rules.image_sha256 {
+            return Err(Failure::MusicState(
+                "music policies use different client images",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn selection_index(&self, random: bool, index: i32) -> i32 {
+        if random {
+            self.rules.map_random_index
+        } else {
+            index
+        }
+    }
+
+    pub(crate) fn prepare(&mut self, operation: Operation) -> Result<Command, Failure> {
+        if let Operation::Play { name, .. }
+        | Operation::Select { name, .. }
+        | Operation::Theme { path: name, .. } = &operation
+        {
+            if name.len() >= self.rules.name_bytes || name.contains('\0') {
+                return Err(Failure::MusicState("music name exceeds source bound"));
+            }
+        }
+        if matches!(&operation, Operation::Theme { path, .. } if path.is_empty()) {
+            return Err(Failure::MusicState("empty thematic path is unsupported"));
+        }
+        if self.commands.len() >= self.capacity {
+            return Err(Failure::Budget("ordered music commands"));
+        }
+        let sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or(Failure::Budget("ordered music sequence"))?;
+        self.commands
+            .try_reserve(1)
+            .map_err(|_| Failure::Capacity)?;
+        Ok(Command {
+            sequence,
+            operation,
+        })
+    }
+    pub(crate) fn commit(&mut self, command: Command) {
+        self.sequence = command.sequence;
+        self.commands.push_back(command);
+    }
+}
+
 impl ObjectHost {
     /// Diagnostic capability only; does not qualify native or browser playback.
     pub fn with_regular_music_journal(
@@ -135,17 +186,6 @@ impl ObjectHost {
                     )));
                 }
             };
-            if journal.commands.len() >= journal.capacity {
-                return Err(fail(Failure::Budget("ordered music commands")));
-            }
-            let sequence = journal
-                .sequence
-                .checked_add(1)
-                .ok_or_else(|| fail(Failure::Budget("ordered music sequence")))?;
-            journal
-                .commands
-                .try_reserve(1)
-                .map_err(|_| fail(Failure::Capacity))?;
             let request = if let Operation::Play { name: track, .. } = &operation {
                 Some(super::PlayMusicRequest {
                     name: super::checked_name(track, max_name_bytes, &fail)?,
@@ -169,11 +209,8 @@ impl ObjectHost {
             } else {
                 state.resumes
             };
-            journal.commands.push_back(Command {
-                sequence,
-                operation,
-            });
-            journal.sequence = sequence;
+            let command = journal.prepare(operation).map_err(fail)?;
+            journal.commit(command);
             if let Some(request) = request {
                 state.request = Some(request);
             }

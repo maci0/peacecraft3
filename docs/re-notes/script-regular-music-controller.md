@@ -2,8 +2,9 @@
 
 This is an incomplete candidate. The controller, independent audio random stream,
 source reader and ordered host journal are available only under `test` or
-`test-fixtures`. Explicit diagnostic journal configuration now connects the five
-regular operations to VM dispatch; normal builds retain their existing refusal.
+`test-fixtures`. Explicit diagnostic journal configuration connects regular and
+source-qualified mixed music operations to VM dispatch; normal builds retain
+their existing regular-playback refusal.
 Application playback is not connected. Previously accepted thematic music and
 regular volume behavior is unchanged.
 
@@ -138,3 +139,50 @@ These results supersede no earlier playback receipt. The older temporary evidenc
 paths above are historical and were unavailable in this environment. Retained
 sinks, source retirement, menu-to-map epoch ownership and browser execution still
 need qualification before production admission.
+
+
+## Mixed music order (2026-11-17)
+
+The same diagnostic journal now includes Theme, EndTheme, ThemeSeek, Volume,
+Select and Clear. Each hook validates and reserves a command before updating its
+accepted snapshot. Publication and sequence advancement follow that preflight;
+queue exhaustion preserves the accepted thematic revision/position, selection,
+regular volume revision/level and pending prefix. Without a journal, the existing
+snapshot behavior is unchanged. Missing required policies, incompatible client
+image identities and unsupported thematic starts refuse before publication.
+Ignored thematic seeks remain source-defined no-ops. This adds no event bus,
+clock transport, startup admission or application playback consumer.
+
+The selected image's `SetMapMusic` wrapper at `4a9340` forms its effective index
+independently of the plain-play wrapper: OR with an all-ones immediate establishes
+a negative selector; CMP/CMOVE replaces it with the authored index only when the
+random flag is zero. The reader checks the comparison, conditional move, pushes,
+string conversion and `5da520` call, and reads the selector separately. Synthetic
+mutations reject changed control/data flow. The raw selection snapshot continues
+to retain the authored random flag and index, including when random is true.
+This proves the wrapper argument flow, not complete native selection behavior.
+
+A twelve-call VM test consumes the actual ordered commands through the controller
+and checks retained regular serial/cursor across a thematic start, independent
+seek, volume and selection, thematic end, clear, regular replacement and resume.
+The expected start and retirement order is checked as effects, alongside the
+intermediate voice states. Overflow tests exercise every mixed snapshot boundary;
+missing and mismatched policy tests verify refusal before publication.
+
+With the same private display/null audio helper and two build jobs:
+
+- Music family: 32 passed, four explicit local-input skips
+  (`mixed-family-tests.log`).
+- Existing map/thematic snapshot family: eight passed, one explicit local-input
+  skip (`mixed-map-regression.log`).
+- Exact canonical selected-image reader gate: one passed, zero skipped
+  (`mixed-selected-source.log`).
+- Strict native and WASM fixture checks passed (`mixed-native-check.log`,
+  `mixed-wasm-check.log`).
+- Native and WASM fixture library builds passed (`mixed-native-build.log`,
+  `mixed-wasm-build.log`, structured exits in `mixed-build-status.json`).
+
+The frozen code manifest is `mixed-inputs.sha256` under the same private receipt
+directory. These remain diagnostic controller/host results. The actual retained
+sink, decoder/seek failure handling, source epoch, browser ownership and normal
+startup still require the application qualification described above.

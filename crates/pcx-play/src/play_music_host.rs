@@ -52,7 +52,7 @@ pub struct ThematicMusicExRequest {
 
 pub(super) struct State {
     #[cfg(any(test, feature = "test-fixtures"))]
-    journal: Option<regular::Journal>,
+    pub(super) journal: Option<regular::Journal>,
     max_name_bytes: usize,
     request: Option<PlayMusicRequest>,
     stop_fade_out: Option<bool>,
@@ -65,7 +65,7 @@ pub(super) struct State {
     thematic_play_position: Option<i32>,
 }
 
-fn checked_name(
+pub(super) fn checked_name(
     text: impl AsRef<[u8]>,
     max_name_bytes: usize,
     fail: &dyn Fn(Failure) -> Error,
@@ -269,6 +269,22 @@ impl ObjectHost {
         if let Some(result) = self.regular_music_native(name, args) {
             return Some(result);
         }
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if self
+            .play_music
+            .as_ref()
+            .is_some_and(|s| s.journal.is_some())
+            && matches!(name, "PlayThematicMusicEx" | "SetThematicMusicPlayPosition")
+            && self
+                .map_music
+                .as_ref()
+                .is_none_or(|s| !s.has_thematic_rules())
+        {
+            return Some(Err(self.inner.error(
+                name,
+                Failure::MusicState("journal thematic rules are missing"),
+            )));
+        }
         match (name, args) {
             ("PlayThematicMusicEx", [Value::Str(path), Value::Int(from)])
                 if self
@@ -344,6 +360,20 @@ impl ObjectHost {
                             .ok_or_else(|| {
                                 fail(Failure::Budget("regular music volume revision"))
                             })?;
+                        #[cfg(any(test, feature = "test-fixtures"))]
+                        let command = state
+                            .journal
+                            .as_mut()
+                            .map(|journal| {
+                                journal.check_image(rules.image_sha256)?;
+                                journal.prepare(controller::Operation::Volume(level))
+                            })
+                            .transpose()
+                            .map_err(&fail)?;
+                        #[cfg(any(test, feature = "test-fixtures"))]
+                        if let Some(command) = command {
+                            state.journal.as_mut().unwrap().commit(command);
+                        }
                         state.volume_request = Some(RegularMusicVolumeRequest {
                             rules: Arc::clone(rules),
                             level,
@@ -351,6 +381,12 @@ impl ObjectHost {
                         });
                         state.volume = Some(*volume);
                         return Ok(Value::Null);
+                    }
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    if state.journal.is_some() {
+                        return Err(fail(Failure::MusicState(
+                            "journal volume backend rules are missing",
+                        )));
                     }
                     state.volume = Some(*volume);
                 }
