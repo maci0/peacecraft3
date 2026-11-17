@@ -7693,3 +7693,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   old controls disabled acquisition. Native zero-radius scans include collision
   bounds as well. The bounded turning task is reopened for no-active-weapon
   admission and source-note correction before further production widening.
+
+  The safety correction (`e54808d7`) now limits long timed turns to unarmed
+  mobile units. Its exclusive-target core validation passes 26 exact checks,
+  3,303 ordinary tests, strict native/WASM checks and both library builds.
+  Fresh application linkage verification establishes the current local
+  dependency closure, but runtime acceptance remains pending: the first build
+  exposed an upstream Parley deprecated ICU call. `f600481e` replaces that
+  private ordinal dependency with named bidi-class masks, preserving published
+  sources and licenses. Two targeted bidi tests and strict native/WASM checks
+  pass; the warning-free application rebuild and exact runtime matrix follow
+  separately. No old shared-target horizon is reinstated by these core checks.
