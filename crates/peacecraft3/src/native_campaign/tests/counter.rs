@@ -184,13 +184,61 @@ fn print_counter_failure_candidates(session: &mut MapScriptSession<MapStartupHos
         match objects.executed_unit(unit) {
             Ok(record) => {
                 eprintln!(
-                    "Counter failure candidate: global={name} unit={unit:?} record={record:#?}"
+                    "Counter failure candidate: global={name} unit={unit:?} type={:?} owner={:?} creation_owner={} position={:?} face={} shown={} paused_since={:?} construction={} morph={:?} admitted_order={:?} acquire_request={:?}",
+                    record.definition.rawcode,
+                    record.owner,
+                    record.executed_owner,
+                    record.position,
+                    record.face,
+                    record.shown,
+                    record.paused_since,
+                    record.construction.is_some(),
+                    record.morph.as_ref().map(|m| (
+                        m.ability,
+                        m.normal,
+                        m.alternate,
+                        m.revision,
+                        m.phase
+                    )),
+                    record.admitted_order,
+                    record.acquire_range,
                 );
+                if let Some(activity) = &record.activity {
+                    eprintln!(
+                        "Counter failure candidate: global={name} movable={} held={} moving={} speed={:?} destination={:?} followed_unit={:?} follow_range={:?} waypoint_count={} next_waypoint={} internal_heading=not_exposed",
+                        activity.movable(),
+                        activity.held(),
+                        activity.moving(),
+                        activity.speed(),
+                        activity.destination(),
+                        activity.followed_unit(),
+                        activity.follow_range(),
+                        activity.waypoints().0.len(),
+                        activity.waypoints().1,
+                    );
+                } else {
+                    eprintln!("Counter failure candidate: global={name} activity=absent");
+                }
+                if let Some(combat) = &record.combat {
+                    eprintln!(
+                        "Counter failure candidate: global={name} dead={} weapon_range_acquire_cooldown={:?} target={:?} attack_destination={:?} ground_target={:?}",
+                        combat.dead,
+                        combat
+                            .weapon
+                            .as_ref()
+                            .map(|w| (w.range, w.acquire, w.cooldown)),
+                        combat.target,
+                        combat.attack_destination,
+                        combat.ground_target,
+                    );
+                } else {
+                    eprintln!("Counter failure candidate: global={name} combat=absent");
+                }
                 eprintln!(
-                    "Counter failure candidate: global={name} current_order={:?} queued={:?} training={:?} owner_captains={:?} guard={:?}",
+                    "Counter failure candidate: global={name} current_order={:?} queued_count={} training_count={:?} owner_captains={:?} guard={:?}",
                     objects.current_unit_order(unit),
-                    objects.queued_orders(unit),
-                    objects.unit_training_queue(unit),
+                    objects.queued_orders(unit).len(),
+                    objects.unit_training_queue(unit).map(|queue| queue.len()),
                     objects.campaign_captain_state(record.owner),
                     objects.guard_state().and_then(|state| state.get(unit)),
                 );
