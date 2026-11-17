@@ -39,10 +39,9 @@ impl Journal {
         if let Operation::Play { name, .. }
         | Operation::Select { name, .. }
         | Operation::Theme { path: name, .. } = &operation
+            && (name.len() >= self.rules.name_bytes || name.contains('\0'))
         {
-            if name.len() >= self.rules.name_bytes || name.contains('\0') {
-                return Err(Failure::MusicState("music name exceeds source bound"));
-            }
+            return Err(Failure::MusicState("music name exceeds source bound"));
         }
         if matches!(&operation, Operation::Theme { path, .. } if path.is_empty()) {
             return Err(Failure::MusicState("empty thematic path is unsupported"));

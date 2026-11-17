@@ -179,7 +179,7 @@ impl ObjectHost {
                 .thematic_rules
                 .as_ref()
                 .ok_or_else(|| fail(Failure::MusicState("thematic music rules are missing")))?;
-            journal.check_image(rules.image_sha256).map_err(&fail)?;
+            journal.check_image(rules.image_sha256).map_err(fail)?;
             let position = position
                 .ok_or_else(|| fail(Failure::MusicState("thematic start offset is unqualified")))?;
             let position_ms = u32::try_from(position.as_millis())
@@ -189,7 +189,7 @@ impl ObjectHost {
                     path: super::play_music::checked_name(&owned, state.max_name_bytes, &fail)?,
                     position_ms,
                 })
-                .map_err(&fail)?;
+                .map_err(fail)?;
             journal.commit(command);
         }
         state.thematic = Some(ThematicMusicRequest {
@@ -228,10 +228,10 @@ impl ObjectHost {
         if let Some(journal) = self.play_music.as_mut().and_then(|s| s.journal.as_mut()) {
             let position_ms = u32::try_from(position.as_millis())
                 .map_err(|_| fail(Failure::MusicState("thematic offset exceeds source range")))?;
-            journal.check_image(rules.image_sha256).map_err(&fail)?;
+            journal.check_image(rules.image_sha256).map_err(fail)?;
             let command = journal
                 .prepare(Operation::ThemeSeek(position_ms))
-                .map_err(&fail)?;
+                .map_err(fail)?;
             journal.commit(command);
         }
         request.position = Some(position);
@@ -309,7 +309,7 @@ impl ObjectHost {
                         name: super::play_music::checked_name(&name, state.max_name_bytes, &fail)?,
                         index: selected_index,
                     })
-                    .map_err(&fail)?;
+                    .map_err(fail)?;
                 journal.commit(command);
             }
             state.selection = Some(MapMusicSelection {

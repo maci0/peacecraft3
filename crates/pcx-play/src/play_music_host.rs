@@ -369,7 +369,7 @@ impl ObjectHost {
                                 journal.prepare(controller::Operation::Volume(level))
                             })
                             .transpose()
-                            .map_err(&fail)?;
+                            .map_err(fail)?;
                         #[cfg(any(test, feature = "test-fixtures"))]
                         if let Some(command) = command {
                             state.journal.as_mut().unwrap().commit(command);
