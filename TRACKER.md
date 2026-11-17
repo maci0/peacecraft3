@@ -7704,3 +7704,21 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   sources and licenses. Two targeted bidi tests and strict native/WASM checks
   pass; the warning-free application rebuild and exact runtime matrix follow
   separately. No old shared-target horizon is reinstated by these core checks.
+
+- 2026-11-18: Fresh main application validation at `f114c9db` is warning-free
+  with verified dependency linkage and unchanged sources/artifacts after tests.
+  All fourteen callback cases and the generic caller pass. Human01's Counter
+  horizon consumes all 299,975,000,000 ns accepted input with zero pending input
+  and Game-point advancement after control restoration. Undead02 executes and
+  fails at frame 45, Game time about 1.125, on `SetUnitFacingTimed` through
+  `Scripts\Blizzard.j:4735`. The current diagnostic combines weapon/order and
+  other admission checks; it does not identify the actor or failing clause.
+  Turning qualification remains open; no guard or refusal was bypassed.
+
+  The exact matrix is 16 passed, one failed and zero skipped. The original
+  private result parser misread Human01's interleaved `--nocapture` output;
+  a separate corrected result uses its exact name, exit and one-pass summary.
+  Raw logs and the warning-failed first attempt are preserved. Callback
+  acceptance and this Human01 horizon supersede their attribution holds;
+  Undead02's old shared-target horizon stays withdrawn. Receipts remain local
+  under `/tmp/pc3-main-verified-callback-counter-20261118/attempt-02/`.

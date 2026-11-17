@@ -178,3 +178,12 @@ program gate because its second global store exceeded the synthetic trigger
 budget. The corrected fixture capacity and all final results are recorded
 separately under `/tmp/pc3-ai-admission-*`. No new original-client run, browser
 execution, full Save/Load or general native tick parity is claimed.
+
+The shared-target application results above required fresh linkage verification;
+new root-test symbols alone were insufficient. A subsequent warning-free main
+build at `f114c9db` passes all fourteen cases and the generic caller with verified
+local libraries, dependency artifact hashes and unchanged inputs/binaries after
+execution. This establishes the bounded callback matrix independently of the
+older cache. The same run passes Human01's Counter horizon but fails Undead02 on
+timed-turn admission; callback acceptance does not imply mission acceptance.
+See [build provenance](build-provenance.md).
