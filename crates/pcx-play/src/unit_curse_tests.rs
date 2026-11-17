@@ -53,6 +53,7 @@ struct Config {
     map: &'static str,
     script: &'static str,
     heading: bool,
+    acquire: Option<&'static str>,
     mana_minimum: Option<f32>,
     /// `abilList` of every fixture unit.
     abilities: &'static str,
@@ -76,6 +77,7 @@ impl Default for Config {
             map: HOLY_MAP,
             script: "",
             heading: false,
+            acquire: None,
             mana_minimum: Some(0.),
             abilities: "Aslo",
             slow: Vec::new(),
@@ -385,6 +387,13 @@ fn host_with(config: &Config) -> ObjectHost {
         }),
     }));
     let mut fields = hero_fields("STR");
+    if let Some(range) = config.acquire {
+        for (_, field) in &mut fields {
+            if field.metadata.as_ref().is_some_and(|m| matches!(&m.source, FieldSource::Column { slk: SlkId::UnitWeapons, column } if column == "acquire")) {
+                field.value = Ok(FieldValue::Cell(range.into()));
+            }
+        }
+    }
     if let Some(profile) = activity.heading.as_ref().and_then(|h| h.profile.as_ref()) {
         fields.push(column(
             b"Shtn",
@@ -735,11 +744,12 @@ fn heading_session_with(
     HandleId,
     HandleId,
 ) {
-    heading_session_with_script(HEADING_CALLBACKS, prepare)
+    heading_session_with_script(HEADING_CALLBACKS, None, prepare)
 }
 
 fn heading_session_with_script(
     script: &'static str,
+    acquire: Option<&'static str>,
     prepare: impl FnOnce(
         crate::map_startup_host::MapStartupHost,
     ) -> crate::map_startup_host::MapStartupHost,
@@ -755,6 +765,7 @@ fn heading_session_with_script(
     };
     let mut host = host_with(&Config {
         heading: true,
+        acquire,
         script,
         ..Config::default()
     });
@@ -2890,6 +2901,7 @@ native IssuePointOrder takes unit u, string order, real x, real y returns boolea
 native IssueTargetOrder takes unit u, string order, widget target returns boolean
 native KillUnit takes unit u returns nothing
 native RemoveUnit takes unit u returns nothing
+native SetUnitAcquireRange takes unit u, real range returns nothing
 native SetUnitFacingTimed takes unit u, real angle, real duration returns nothing
 constant native GetUnitFacing takes unit u returns real
 type gamespeed extends handle
@@ -2922,6 +2934,8 @@ elseif mode==6 then
 call IssueTargetOrder(u,"attack",target)
 elseif mode==7 then
 call IssueTargetOrder(u,"alpha",target)
+elseif mode==9 then
+call SetUnitAcquireRange(u,64.0)
 else
 call IssueImmediateOrderById(u,hold)
 endif
@@ -2936,7 +2950,17 @@ fn timed_counter_session() -> (
     HandleId,
     HandleId,
 ) {
-    heading_session_with_script(TIMED_FACING_SCRIPT, |mut host| {
+    timed_counter_session_with_acquisition("0")
+}
+
+fn timed_counter_session_with_acquisition(
+    acquire: &'static str,
+) -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
+    heading_session_with_script(TIMED_FACING_SCRIPT, Some(acquire), |mut host| {
         let context = Arc::clone(host.context());
         let speed = host
             .objects_mut()
@@ -3181,6 +3205,120 @@ endfunction
 }
 
 #[test]
+#[ignore = "requires PCX_WAR3_EXE; Counter admission excludes automatic acquisition and paused or moving units"]
+fn counter_timed_controller_acquisition_and_activity_admission_preserves_state_on_refusal() {
+    for mode in 0..4 {
+        let (mut session, caster, _) =
+            timed_counter_session_with_acquisition(if mode == 0 { "64" } else { "0" });
+        let function = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("TimedFacing")
+            .unwrap();
+        if mode == 1 {
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native("PauseUnit", &[Value::Handle(caster), Value::Bool(true)])
+                .unwrap();
+        }
+        if mode == 2 {
+            let objects = session.host().unwrap().objects_mut();
+            let movement = objects
+                .standard_command_order(caster, crate::standard_command::Kind::Move)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                objects
+                    .native(
+                        "IssuePointOrderById",
+                        &[
+                            Value::Handle(caster),
+                            Value::Int(movement),
+                            Value::Real(64.),
+                            Value::Real(64.)
+                        ]
+                    )
+                    .unwrap(),
+                Value::Bool(true)
+            );
+        }
+        if mode == 3 {
+            let objects = session.host().unwrap().objects_mut();
+            let context = Arc::clone(objects.player_context().unwrap());
+            objects
+                .admit_campaign_captains(
+                    &context,
+                    crate::campaign_captain_policy::CaptainPolicy::fixture(),
+                )
+                .unwrap();
+            assert!(objects.activate_campaign_ai_player(4).unwrap());
+            objects.fixture_captain_member(4, true, caster);
+        }
+        let objects = session.host().unwrap().objects();
+        let before = objects.executed_unit(caster).unwrap().clone();
+        let clock = format!("{:?}", objects.test_native_clock_state());
+        let error = session
+            .call_function(
+                function,
+                &[Value::Handle(caster), Value::Real(135.), Value::Real(1.)],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("qualified stationary unit"),
+            "mode {mode}: {error}"
+        );
+        let objects = session.host().unwrap().objects();
+        assert_eq!(objects.executed_unit(caster).unwrap(), &before);
+        assert_eq!(format!("{:?}", objects.test_native_clock_state()), clock);
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .take_fired_event()
+                .is_none()
+        );
+    }
+    let (mut session, caster, _) = timed_counter_session();
+    let function = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("TimedFacing")
+        .unwrap();
+    session
+        .call_function(
+            function,
+            &[Value::Handle(caster), Value::Real(135.), Value::Real(1.)],
+        )
+        .unwrap();
+    let quantum = session
+        .host()
+        .unwrap()
+        .objects()
+        .test_native_clock_state()
+        .unwrap()
+        .rules()
+        .turn
+        .quantum_ms;
+    session
+        .advance_native_counter_frame(
+            Some(std::time::Duration::from_millis(u64::from(quantum))),
+            100,
+        )
+        .unwrap();
+    let objects = session.host().unwrap().objects();
+    assert!(objects.require_no_static_heading(caster, "probe").is_err());
+    assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+}
+
+#[test]
 #[ignore = "requires PCX_WAR3_EXE; actual Counter static-facing calls and transition atomicity"]
 fn counter_timed_controller_retains_direct_facing_replaces_and_stops_without_a_parallel_turn_job() {
     let (mut session, caster, _) = timed_counter_session();
@@ -3416,6 +3554,11 @@ fn counter_timed_controller_unqualified_transitions_refuse_before_unit_clock_or_
             8,
             "IssueImmediateOrderById",
             vec![Value::Handle(caster), Value::Int(hold)],
+        ),
+        (
+            9,
+            "SetUnitAcquireRange",
+            vec![Value::Handle(caster), Value::Real(64.)],
         ),
     ] {
         let objects = session.host().unwrap().objects();

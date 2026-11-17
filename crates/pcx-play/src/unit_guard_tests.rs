@@ -1685,3 +1685,130 @@ fn remove_all_guard_positions_releases_only_that_players_guards() {
 
 #[path = "campaign_captain_recruitment_tests.rs"]
 mod campaign_captain_recruitment;
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source heading with actual captain recruitment and guard release"]
+fn timed_controller_captain_recruitment_and_guard_release_refuse_before_ownership_mutation() {
+    let (image, origin, numeric, budget) =
+        crate::unit_activity::heading::tests::selected_numeric_image();
+    let registry = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
+    let heading = crate::campaign_client::unit_activity(&image, origin, &registry)
+        .unwrap()
+        .with_heading(&image, &numeric, budget)
+        .unwrap()
+        .heading
+        .unwrap();
+    let profile = heading.profile.as_ref().unwrap();
+    let fields = [
+        column(
+            b"Shtr",
+            SlkId::UnitData,
+            &profile.turn_column,
+            FieldKind::Real,
+            "0.5",
+        ),
+        column(
+            b"Shwi",
+            SlkId::UnitData,
+            &profile.window_column,
+            FieldKind::Real,
+            "53",
+        ),
+        column(
+            b"Shsi",
+            SlkId::UnitData,
+            &profile.selector_column,
+            FieldKind::Int,
+            "5",
+        ),
+    ];
+    let (registry, mut activity) = super::super::activity::rules();
+    activity.heading = Some(heading);
+    let (mut vm, unit, _) = guarded_configured_with_orders(
+        (128., 256., 1.),
+        None,
+        (
+            &fields,
+            "native SetUnitFacingTimed takes unit u, real a, real d returns nothing\n",
+        ),
+        2,
+        (registry, activity),
+        |host| host.with_script_numeric(numeric),
+    );
+    let h = &mut vm.host().inner;
+    let context = Arc::clone(h.player_context().unwrap());
+    h.admit_campaign_gathering(
+        &context,
+        crate::campaign_gathering_policy::GatheringPolicy::fixture(),
+    )
+    .unwrap();
+    h.admit_campaign_captains(
+        &context,
+        crate::campaign_captain_policy::CaptainPolicy::fixture(),
+    )
+    .unwrap();
+    h.activate_campaign_ai_player(4).unwrap();
+    h.create_ai_captains(4).unwrap();
+    h.admit_native_game_clock().unwrap();
+    assert!(
+        h.pace_native_game_clock(std::time::Duration::ZERO, &mut 100)
+            .unwrap()
+    );
+    let kind = i32::from_be_bytes(h.executed_unit(unit).unwrap().definition.rawcode);
+    h.native(
+        "SetUnitFacingTimed",
+        &[Value::Handle(unit), Value::Real(135.), Value::Real(1.)],
+    )
+    .unwrap();
+    for recruit in [true, false] {
+        let units = h
+            .executed_units()
+            .map(|(id, r)| (id, r.clone()))
+            .collect::<Vec<_>>();
+        let clock = format!("{:?}", h.test_native_clock_state());
+        let guard = format!("{:?}", h.guard_state().unwrap().get(unit));
+        let members = h.fixture_captain_members(4, false).to_vec();
+        let error = if recruit {
+            h.add_ai_defenders(4, 1, kind).unwrap_err().to_string()
+        } else {
+            h.native("RemoveGuardPosition", &[Value::Handle(unit)])
+                .unwrap_err()
+        };
+        assert!(error.contains("static timed-facing relation"), "{error}");
+        assert_eq!(
+            h.executed_units()
+                .map(|(id, r)| (id, r.clone()))
+                .collect::<Vec<_>>(),
+            units
+        );
+        assert_eq!(format!("{:?}", h.test_native_clock_state()), clock);
+        assert_eq!(format!("{:?}", h.guard_state().unwrap().get(unit)), guard);
+        assert_eq!(h.fixture_captain_members(4, false), members);
+        assert!(h.take_fired_event().is_none());
+    }
+    let stop = h
+        .standard_command_order(unit, crate::standard_command::Kind::Stop)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        h.native(
+            "IssueImmediateOrderById",
+            &[Value::Handle(unit), Value::Int(stop)]
+        )
+        .unwrap(),
+        Value::Bool(true)
+    );
+    assert!(h.add_ai_defenders(4, 1, kind).unwrap());
+    assert_eq!(h.fixture_captain_members(4, false), &[unit]);
+    let before = h.executed_unit(unit).unwrap().clone();
+    assert!(
+        h.native(
+            "SetUnitFacingTimed",
+            &[Value::Handle(unit), Value::Real(135.), Value::Real(1.)]
+        )
+        .is_err()
+    );
+    assert_eq!(h.executed_unit(unit).unwrap(), &before);
+    h.native("RemoveGuardPosition", &[Value::Handle(unit)])
+        .unwrap();
+}
