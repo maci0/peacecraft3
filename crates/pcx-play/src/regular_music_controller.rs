@@ -388,6 +388,7 @@ impl Controller {
                 }
             }
             Operation::Theme { path, position_ms } => {
+                self.validate_tracks(std::slice::from_ref(&path))?;
                 Self::retire(&mut self.thematic, effects);
                 self.start_voice(Role::Thematic, path, position_ms, false, effects)?;
                 self.stop(true, now, effects);

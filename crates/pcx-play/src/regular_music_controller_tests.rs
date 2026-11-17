@@ -198,3 +198,48 @@ fn regular_controller_stale_theme_completion_and_session_retirement_preserve_epo
         expected.choose(31, &mut 100).unwrap()
     );
 }
+
+#[test]
+fn regular_controller_invalid_theme_preserves_existing_voices_and_fade() {
+    let mut c = controller();
+    play(&mut c, "a.ogg", 0);
+    c.apply(
+        Operation::Theme {
+            path: "theme.ogg".into(),
+            position_ms: 12,
+        },
+        None,
+        0,
+        &mut 100,
+    )
+    .unwrap();
+    for path in [
+        String::new(),
+        "bad\0.ogg".into(),
+        "x".repeat(c.rules.name_bytes),
+    ] {
+        let mut expected = c.clone();
+        assert!(
+            c.apply(
+                Operation::Theme {
+                    path,
+                    position_ms: 0
+                },
+                None,
+                2,
+                &mut 100
+            )
+            .is_err()
+        );
+        assert_eq!(c.regular(), expected.regular());
+        assert_eq!(c.thematic(), expected.thematic());
+        assert_eq!(
+            c.pump(7, &mut 100).unwrap(),
+            expected.pump(7, &mut 100).unwrap()
+        );
+        assert_eq!(
+            c.pump(50, &mut 100).unwrap(),
+            expected.pump(50, &mut 100).unwrap()
+        );
+    }
+}

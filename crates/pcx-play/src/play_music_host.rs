@@ -20,6 +20,9 @@ pub(crate) mod controller;
 #[path = "regular_music_random.rs"]
 pub(crate) mod random;
 #[cfg(any(test, feature = "test-fixtures"))]
+#[path = "regular_music_host.rs"]
+pub(crate) mod regular;
+#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_rules.rs"]
 pub(crate) mod rules;
 
@@ -48,6 +51,8 @@ pub struct ThematicMusicExRequest {
 }
 
 pub(super) struct State {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    journal: Option<regular::Journal>,
     max_name_bytes: usize,
     request: Option<PlayMusicRequest>,
     stop_fade_out: Option<bool>,
@@ -178,6 +183,8 @@ impl ObjectHost {
             }
         }
         self.play_music = Some(State {
+            #[cfg(any(test, feature = "test-fixtures"))]
+            journal: None,
             max_name_bytes,
             request: None,
             stop_fade_out: None,
@@ -258,6 +265,10 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.play_music.as_ref()?;
+        #[cfg(any(test, feature = "test-fixtures"))]
+        if let Some(result) = self.regular_music_native(name, args) {
+            return Some(result);
+        }
         match (name, args) {
             ("PlayThematicMusicEx", [Value::Str(path), Value::Int(from)])
                 if self

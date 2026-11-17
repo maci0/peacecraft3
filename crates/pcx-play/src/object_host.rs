@@ -1487,6 +1487,7 @@ pub use play_music::{
         Operation as RegularMusicOperation, Role as MusicRole, Voice as MusicVoice,
     },
     random::AudioRandom,
+    regular::Command as RegularMusicCommand,
     rules::Rules as RegularMusicRules,
 };
 

@@ -19,6 +19,7 @@ pub struct Rules {
     pub(super) initial_level: u32,
     pub(super) initial_enabled: bool,
     pub(super) random_index: i32,
+    pub(super) plain_play_ms: u32,
     pub(super) maximum_level: u32,
     pub(super) name_bytes: usize,
     pub(super) default_fade_ms: u32,
@@ -241,6 +242,17 @@ impl Rules {
         if random_index >= 0 {
             return Err("music random selector is not negative".into());
         }
+        direct_call(read, 0x4a41a3, 0x5add50)?;
+        direct_call(read, 0x4a41b4, 0x469010)?;
+        direct_call(read, 0x4a41ba, 0x5d8af0)?;
+        if bytes(read, 0x4a41a8, 9)? != [0x85, 0xc0, 0x75, 0x16, 0x8b, 0x4d, 0x08, 0x50, 0x50]
+            || bytes(read, 0x4a41b3, 1)? != [0x50]
+            || bytes(read, 0x4a41b9, 1)? != [0x50]
+        {
+            return Err("regular music plain-play guard or argument flow differs".into());
+        }
+        // TEST EAX,EAX / JNE skips playback; the fallthrough pushes that zero word twice.
+        let plain_play_ms = 0;
         let enabled = word(read, 0x10dc6dc)?;
         if enabled > 1 {
             return Err("unsupported music-enabled initializer".into());
@@ -259,6 +271,7 @@ impl Rules {
             initial_level,
             initial_enabled,
             random_index,
+            plain_play_ms,
             maximum_level,
             name_bytes: name_bytes as usize,
             default_fade_ms,
@@ -326,6 +339,7 @@ impl Rules {
             maximum_level: 13,
             initial_enabled: true,
             random_index: -3,
+            plain_play_ms: 23,
             name_bytes: 128,
             default_fade_ms: 31,
             fade_interval_ms: 7,

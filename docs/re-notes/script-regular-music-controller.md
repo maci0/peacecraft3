@@ -1,11 +1,11 @@
 # Regular music controller candidate
 
-This is an incomplete checkpoint, stopped for integration wrap-up. The new
-controller, independent audio random stream and source reader are available only
-under `test` or `test-fixtures`. They are not connected to native dispatch or
-application playback. `PlayMusic`, `PlayMusicEx`, `StopMusic`, `ResumeMusic` and
-regular seek retain their existing explicit refusal. Previously accepted thematic
-music and regular volume behavior is unchanged.
+This is an incomplete candidate. The controller, independent audio random stream,
+source reader and ordered host journal are available only under `test` or
+`test-fixtures`. Explicit diagnostic journal configuration now connects the five
+regular operations to VM dispatch; normal builds retain their existing refusal.
+Application playback is not connected. Previously accepted thematic music and
+regular volume behavior is unchanged.
 
 ## Evidence and candidate behavior
 
@@ -88,3 +88,53 @@ replacement need called app and null-sink tests. The candidate's disabled/pendin
 filename state and automatic selected-map startup ordering need further source
 qualification. Acknowledgement counter/cooldown families, full root persistence,
 audible amplitude and native callback jitter remain open.
+
+
+## Ordered host journal and plain-play source flow (2026-11-17)
+
+The diagnostic host journal preserves every accepted Play/Ex, Stop, Resume and
+regular seek in execution order. Its caller supplies a memory bound. Checked
+sequence numbers survive prefix retirement; a full queue, invalid argument or
+invalid acknowledgement leaves the pending commands intact. The consumer must
+acknowledge only after accepting an operation. Resolution failure therefore leaves
+its command and later commands available for retry. Existing last-request getters
+retain the raw script arguments, including absent plain-play timing parameters.
+This does not install a presentation consumer or qualify playback success.
+
+Static inspection of the selected executable at `4a41a0` establishes the
+plain-play argument flow: after the guard call, `TEST EAX,EAX` and `JNE` skip the
+play call for a nonzero result. Fallthrough pushes the tested zero register for
+both timing arguments before string conversion and the bound `5d8af0` call.
+The reader validates the branch, pushes and direct calls. The zero is derived
+from the tested-register condition; it is not a copied asset record. Synthetic
+mutations reject altered branches, pushes and call targets. A nonstock timing
+fixture verifies that diagnostic dispatch uses its supplied policy. This is
+static instruction/control-flow evidence, not an original-client observation or
+a completed runtime replay guard. A fresh deep function analysis timed out;
+that attempt supplied no additional evidence.
+
+The controller also validates a replacement thematic path before retiring the
+accepted voice or changing its regular fade. Invalid empty, NUL-containing and
+source-boundary paths preserve both voices and callback state.
+
+Fresh checks use `/tmp/pc3-continue-music-target`, two build jobs and the private
+helper under `/tmp/pc3-continue-music-receipts/`. The helper verifies its Xvfb
+display and default ALSA null configuration before launching any test. The first
+sandboxed attempt failed before launching tests; the isolated reruns succeeded.
+Source hashes are frozen in `core-inputs.sha256` in that directory.
+
+- Final `regular_` filter: 18 passed, zero failures, three explicit local-input
+  skips (`regular-final-tests.log`).
+- Entire music host/controller/rules/random family: 29 passed, zero failures,
+  four explicit local-input skips (`music-family-tests.log`).
+- Exact selected-client controller rules gate with the canonical executable
+  explicitly supplied: one passed, zero skipped (`selected-source-direct.log`).
+- Strict native and WASM `test-fixtures` checks passed (`check-final-core.log`
+  and `wasm-check.log`).
+- Native and WASM `test-fixtures` library builds passed (`native-build.log`
+  and `wasm-build.log`).
+
+These results supersede no earlier playback receipt. The older temporary evidence
+paths above are historical and were unavailable in this environment. Retained
+sinks, source retirement, menu-to-map epoch ownership and browser execution still
+need qualification before production admission.

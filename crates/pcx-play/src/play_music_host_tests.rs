@@ -629,3 +629,143 @@ fn regular_volume_selected_blizzard_percent_helper_reaches_backend_qualified_sta
         );
     }
 }
+
+#[test]
+fn regular_journal_vm_retains_order_and_controller_consumes_acknowledged_prefix() {
+    use super::controller::{Controller, Effect, Operation};
+    let rules = Arc::new(rules::Rules::fixture());
+    let mut vm = host(COMMON, "function main takes nothing returns nothing\ncall PlayMusicEx(\"a.ogg\",12,0)\ncall StopMusic(false)\ncall SetMusicPlayPosition(421)\ncall ResumeMusic()\ncall StopMusic(true)\nendfunction\n")
+        .with_play_music(64).unwrap()
+        .with_regular_music_journal(Arc::clone(&rules), 5).unwrap()
+        .into_vm();
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.host().stop_music_fade_out(), Some(true));
+    assert_eq!(vm.host().resume_music_requests(), Some(1));
+    assert_eq!(vm.host().music_play_position_request(), Some(421));
+    assert_eq!(vm.host().play_music_request().unwrap().from_msecs, Some(12));
+    let commands = vm.host().regular_music_commands().unwrap().clone();
+    assert_eq!(
+        commands.iter().map(|c| c.sequence).collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5]
+    );
+    assert_eq!(commands[2].operation, Operation::Seek(421));
+    let mut controller = Controller::new(rules, 0x1234);
+    let mut effects = Vec::new();
+    for command in &commands {
+        let resolved =
+            matches!(command.operation, Operation::Play { .. }).then(|| vec!["a.ogg".into()]);
+        effects.extend(
+            controller
+                .apply(command.operation.clone(), resolved, 100, &mut 100)
+                .unwrap(),
+        );
+        vm.host()
+            .acknowledge_regular_music(command.sequence)
+            .unwrap();
+    }
+    assert!(vm.host().regular_music_commands().unwrap().is_empty());
+    let voice = controller.regular().unwrap();
+    assert_eq!(voice.start_ms, 421);
+    assert!(voice.playing);
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Start(_)))
+            .count(),
+        1
+    );
+    assert!(effects.contains(&Effect::Pause(voice.serial)));
+    assert!(effects.contains(&Effect::Resume(voice.serial)));
+    assert!(controller.pump(107, &mut 100).unwrap().is_empty());
+    controller.pump(145, &mut 100).unwrap();
+    assert!(!controller.regular().unwrap().playing);
+}
+
+#[test]
+fn regular_journal_full_queue_refuses_without_losing_or_consuming_commands() {
+    let mut h = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_journal(Arc::new(rules::Rules::fixture()), 1)
+        .unwrap();
+    h.native("StopMusic", &[Value::Bool(false)]).unwrap();
+    assert!(
+        h.native("ResumeMusic", &[])
+            .unwrap_err()
+            .contains("ordered music commands")
+    );
+    assert_eq!(h.regular_music_commands().unwrap().len(), 1);
+    assert!(h.acknowledge_regular_music(2).is_err());
+    assert_eq!(h.regular_music_commands().unwrap()[0].sequence, 1);
+    h.acknowledge_regular_music(1).unwrap();
+    h.acknowledge_regular_music(1).unwrap();
+    h.native("ResumeMusic", &[]).unwrap();
+    assert_eq!(h.regular_music_commands().unwrap()[0].sequence, 2);
+    assert!(h.acknowledge_regular_music(0).is_err());
+    assert_eq!(h.regular_music_commands().unwrap()[0].sequence, 2);
+}
+
+#[test]
+fn regular_journal_invalid_commands_preserve_queue_and_plain_defaults_are_source_bound() {
+    let mut h = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_journal(Arc::new(rules::Rules::fixture()), 8)
+        .unwrap();
+    for args in [
+        vec![Value::Str("a".into()), Value::Int(-1), Value::Int(0)],
+        vec![Value::Str("a".into()), Value::Int(0), Value::Int(-1)],
+        vec![Value::Str("a\0".into()), Value::Int(0), Value::Int(0)],
+        vec![
+            Value::Str("x".repeat(65).into()),
+            Value::Int(0),
+            Value::Int(0),
+        ],
+        vec![Value::Null, Value::Int(0), Value::Int(0)],
+    ] {
+        assert!(h.native("PlayMusicEx", &args).is_err());
+        assert!(h.regular_music_commands().unwrap().is_empty());
+    }
+    assert!(h.native("SetMusicPlayPosition", &[Value::Int(-1)]).is_err());
+    assert!(h.regular_music_commands().unwrap().is_empty());
+    h.native("PlayMusic", &[Value::Str("a".into())]).unwrap();
+    assert_eq!(h.regular_music_commands().unwrap()[0].sequence, 1);
+    assert_eq!(
+        h.regular_music_commands().unwrap()[0].operation,
+        controller::Operation::Play {
+            name: "a".into(),
+            position_ms: 23,
+            fade_ms: 23,
+        }
+    );
+}
+
+#[test]
+fn regular_journal_failed_controller_admission_leaves_pending_prefix_for_retry() {
+    use super::controller::Controller;
+    let rules = Arc::new(rules::Rules::fixture());
+    let mut h = host(COMMON, "")
+        .with_play_music(64)
+        .unwrap()
+        .with_regular_music_journal(Arc::clone(&rules), 1)
+        .unwrap();
+    h.native(
+        "PlayMusicEx",
+        &[Value::Str("a".into()), Value::Int(0), Value::Int(0)],
+    )
+    .unwrap();
+    let command = h.regular_music_commands().unwrap()[0].clone();
+    let mut c = Controller::new(rules, 77);
+    assert!(
+        c.apply(command.operation.clone(), None, 0, &mut 100)
+            .is_err()
+    );
+    assert!(c.regular().is_none());
+    assert_eq!(h.regular_music_commands().unwrap().len(), 1);
+    c.apply(command.operation, Some(vec!["a.ogg".into()]), 0, &mut 100)
+        .unwrap();
+    h.acknowledge_regular_music(command.sequence).unwrap();
+    assert!(h.regular_music_commands().unwrap().is_empty());
+    assert_eq!(c.regular().unwrap().path, "a.ogg");
+}
