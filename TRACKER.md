@@ -7632,3 +7632,15 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Separate test-only unchanged-chapter Counter probes await app validation;
   GUI startup and unsupported wider turning classes are unchanged. Combined-main
   validation remains separate from these component receipts.
+
+  Callback error ownership (`53c59c0d`) and mixed music ordering (`e89a30f7`)
+  are integrated after immutable-source review. Callback checks pass 73 core
+  tests (four explicit ignores), one boundary check and ten app cases covering
+  Native and Legacy paths; focused checks overlap that core total. Music checks
+  pass 32 family tests (four skips), eight map/thematic regressions (one skip)
+  and the selected-image rules gate. Both components pass strict native/WASM
+  checks and library builds. Production observer and regular-playback admission
+  remain closed pending their next connected consumer/context changes.
+  Combined-main core checks are now running. The first unchanged Human01
+  Counter probe lacked full input-drain accounting, so its green return is not
+  accepted as a campaign horizon; strengthened chapter probes are in progress.
