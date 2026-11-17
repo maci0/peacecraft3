@@ -43,8 +43,15 @@ fn chapter_counter_horizon(expected: &str) {
     let input = Duration::from_millis(25);
     let mut runtime = CampaignRuntime::new(input, 8, 65536);
     let mut cinematic = false;
-    let mut controlled = false;
-    for frame in 0..12000 {
+    let initial_progress = session
+        .host()
+        .unwrap()
+        .objects()
+        .native_counter_progress_ns()
+        .unwrap();
+    let mut control_point = None;
+    const FRAMES: u32 = 12000;
+    for frame in 0..FRAMES {
         runtime.advance(&mut session, input);
         let objects = session.host().unwrap().objects();
         assert!(
@@ -56,9 +63,18 @@ fn chapter_counter_horizon(expected: &str) {
         );
         let state = objects.presentation().unwrap();
         cinematic |= state.control_enabled == Some(false);
-        controlled |= cinematic
-            && state.control_enabled == Some(true)
-            && state.interface_visible == Some(true);
+        if cinematic && state.control_enabled == Some(true) && state.interface_visible == Some(true)
+        {
+            control_point.get_or_insert(objects.native_game_point().unwrap());
+        }
+        if frame % 1000 == 0 {
+            println!(
+                "Counter progress: chapter={map} frame={frame} game={:?} committed_ns={:?} pending_ns={:?}",
+                objects.native_game_point(),
+                objects.native_counter_progress_ns(),
+                objects.native_counter_pending_ns()
+            );
+        }
         if state.control_enabled == Some(false) && frame % 10 == 0 {
             session
                 .host()
@@ -74,8 +90,63 @@ fn chapter_counter_horizon(expected: &str) {
             context.sources.map,
         );
     }
+    let control_point = control_point
+        .expect("Counter chapter must restore player control within the diagnostic horizon");
+    // Runtime's first session bind deliberately discards that call's input.
+    let submitted_ns = u128::from(FRAMES - 1) * input.as_nanos();
+    let objects = session.host().unwrap().objects();
+    let committed = objects.native_counter_progress_ns().unwrap() - initial_progress;
+    let pending = objects.native_counter_pending_ns().unwrap();
+    println!(
+        "Counter input accounting: chapter={map} submitted_ns={submitted_ns} committed_ns={committed} pending_ns={pending} control={control_point:?} game={:?}",
+        objects.native_game_point()
+    );
+    assert_eq!(
+        committed.checked_add(pending).unwrap(),
+        submitted_ns,
+        "Counter input accounting: {map}"
+    );
+    // Diagnostic retry bound; these calls supply no new elapsed input or additional per-call budget.
+    for drain in 0..64 {
+        if session
+            .host()
+            .unwrap()
+            .objects()
+            .native_counter_pending_ns()
+            == Some(0)
+        {
+            break;
+        }
+        if let Err(error) = session.advance_native_counter_frame(None, 65536) {
+            assert!(
+                session.native_pacing_can_resume(&error),
+                "Counter drain frontier: chapter={map} drain={drain} clock={:?} context={:?} error={error}",
+                session.host().unwrap().objects().native_game_point(),
+                context.sources.map
+            );
+        }
+        assert!(
+            requested_exit(&mut session).is_none(),
+            "unexpected Counter exit while draining {map}"
+        );
+    }
+    let objects = session.host().unwrap().objects();
+    let final_point = objects.native_game_point().unwrap();
+    let committed = objects.native_counter_progress_ns().unwrap() - initial_progress;
+    let pending = objects.native_counter_pending_ns().unwrap();
+    println!(
+        "Counter final: chapter={map} submitted_ns={submitted_ns} committed_ns={committed} pending_ns={pending} control={control_point:?} game={final_point:?}"
+    );
+    assert_eq!(pending, 0, "persistent recoverable Counter refusal: {map}");
+    assert_eq!(
+        committed, submitted_ns,
+        "Counter input must drain completely: {map}"
+    );
+    // The cycle distinguishes native local-clock wraps; local stores a binary32 time word.
     assert!(
-        controlled,
-        "Counter chapter must restore player control within the diagnostic horizon"
+        final_point.cycle > control_point.cycle
+            || (final_point.cycle == control_point.cycle
+                && f32::from_bits(final_point.local) > f32::from_bits(control_point.local)),
+        "Game point did not advance after control: chapter={map} control={control_point:?} game={final_point:?}"
     );
 }

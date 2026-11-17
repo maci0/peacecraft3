@@ -295,5 +295,42 @@ invocation), including the retained 65/44/169 native numeric witnesses, plus
 Strict native and WASM Clippy and both library builds pass. Private receipts
 and frozen source hashes are in `/tmp/pc3-continue-turning-validation/`;
 `run-v1` through `run-v4` retain the failed fixture attempts separately.
-The new application-only Counter chapter probes remain separate from that core
-cohort; no unchanged-map application result is claimed here.
+The application-only Counter chapter probes below remain separate from that core
+cohort.
+
+
+## Opt-in unchanged chapter Counter horizons (2026-11-17)
+
+The test-only chapter setup can install the public Counter startup factory before
+map admission. Generic chapter tests and GUI startup retain their existing
+factory. The same chapter index, recipe and bounded importer supply the unchanged
+RoC `Maps\Campaign\Human01.w3m` and `Maps\Campaign\Undead02.w3m` members.
+The selected Legacy executable remains the image pinned at the top of this note.
+
+Both exact ignored probes pass after independent private display, null-audio and
+fresh-profile checks:
+
+- `native_campaign::tests::counter::selected_human01_counter_frontier`
+- `native_campaign::tests::counter::selected_undead02_counter_frontier`
+
+Each submits 12,000 diagnostic 25 ms calls through `CampaignRuntime::advance`.
+The Runtime's first bind discards its input by design, leaving 11,999 accepted
+inputs. Both runs account for all 299,975,000,000 ns as committed input with zero
+pending input, restore player control, and advance the source Game point beyond
+the first restored-control point. Neither reaches a runtime refusal or early
+exit within that input horizon. The comparison retains the Game point's cycle
+and binary32 local word rather than flattening wraps into assumed game seconds.
+
+The probes allow at most 64 public Session drain retries with no new Counter
+input and the same per-call callback/work budget. Nonresumable failures,
+persistent pending input, missing input, early exit or absent post-control Game
+progress fail the probe. Neither accepted run needed a drain retry. An earlier
+pair without these accounting checks remains only historical weak-probe evidence.
+
+The frozen application-source manifest, exact one-test receipts, executable and
+binary identities, isolation/profile receipts and both pairs of logs stay local
+under `/tmp/pc3-continue-turning-validation/`; the accepted pair is summarized in
+`chapter-counter-acceptance.json`. Build attempts using different cache flags
+remain separate. No original-client run, retained native control map replay, complete
+mission playthrough, general admission for moving or acquiring units or native timing
+parity is established by these recreation caller horizons.
