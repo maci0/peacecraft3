@@ -63,4 +63,29 @@ fn ai_callback_boundary_refuses_underflow_and_preserves_foreign_frames_before_re
     host.threads.expired_timer = None;
     host.abort_ai_callback_boundary(explicit_null).unwrap();
     assert_eq!(host.threads.expired_timer, Some(None));
+
+    let parent = host.thread_context();
+    host.threads.stack.push((parent, 0));
+    host.threads.next = 7;
+    host.threads.sleepers.insert(
+        7,
+        Sleeper {
+            sleep: Sleep {
+                legacy_deadline: 1.,
+                native: None,
+            },
+            context: parent,
+        },
+    );
+    let owned = host.capture_ai_callback_boundary();
+    host.threads.stack.push((parent, 0));
+    host.events.subject.spell_ability = Some(99);
+    host.abort_ai_callback_boundary(owned).unwrap();
+    assert_eq!(host.threads.stack.len(), 1);
+    assert_eq!(host.threads.stack[0].0.subject, parent.subject);
+    assert_eq!(host.events.subject, parent.subject);
+    assert_eq!(host.threads.next, 7);
+    assert_eq!(host.parked_thread_count(), 1);
+    assert_eq!(host.threads.sleepers[&7].context.subject, parent.subject);
+    assert_eq!(host.threads.expired_timer, Some(None));
 }

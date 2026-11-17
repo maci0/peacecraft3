@@ -95,3 +95,36 @@ Acceptance needs the actual map and AI VMs sharing one world with these banks,
 initially and after a non-dyadic Sleep, plus scope/world recovery and a callback
 failure proving no duplicate mutation. Separate arithmetic tests, a manually
 recreated intended loop or a copied passing fixture do not close this frontier.
+
+## Failure ownership
+
+The diagnostic bridge reserves its capture marker before calling the setter.
+A setter failure can therefore retain the owning callback fault even when no
+map action starts. Both native and legacy wake entry return that same retained
+fault identity; subsequent frame retries refuse before changing the world or
+clock. An ordinary AI error without a capture remains an AI execution error,
+allowing unrelated players and previously parked map threads to continue.
+
+Initial AI entry and legacy wake preserve the original script error when player
+retirement also fails, appending the retirement error rather than replacing the
+cause. The canonical world returns to the map owner while the failed AI VM stays
+retained in pending retirement without a world loan. Cleanup must not replay the
+committed setter or its remaining script tail.
+
+These are recreation failure policies, not original-client error observations.
+The production bridge remains disabled. Capture from AI global initializers, direct-host
+capture, sleeping/reentrant observers and active-bridge checkpoint publication
+remain refused; full Save/Load and general native tick parity remain open.
+
+Validation on 2026-11-17 executes all ten application bridge cases against
+the selected executable above, with both legacy and native counter branches.
+They cover immediate rereads and nested callbacks, condition failures at initial
+entry and wake, first-error/retry fault identity, pure-map entry gates, ordinary
+no-capture errors, unrelated queued events and older parked threads. All ten
+pass under verified private Xvfb and null audio. The current core AI filter
+passes 73 tests with four explicit input-dependent skips; the expanded callback
+boundary case passes separately. Four focused bridge core cases overlap that
+AI filter. Strict native all-target and WASM library Clippy, native/WASM library
+builds, formatting and the frozen eleven-file Rust hash check pass. Local logs
+and the source freeze are under `/tmp/pc3-continue-ai-bridge-*`. No fresh
+original-client run, browser execution or production admission is claimed.
