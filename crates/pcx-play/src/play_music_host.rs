@@ -4,7 +4,7 @@
 //! non-constant; the `frommsecs` parameter spelling is the shipped typo and is
 //! not corrected here). Source-qualified thematic calls update the shared
 //! map-music request. Regular volume additionally requires the selected client and
-//! backend policy. Other calls retain their arguments and refuse until consumed.
+//! backend policy. Regular playback requires an explicitly configured ordered consumer.
 use super::{Error, Failure, ObjectHost};
 use pcx_script::Value;
 use std::sync::Arc;
@@ -12,17 +12,13 @@ use std::sync::Arc;
 #[path = "regular_music_volume_rules.rs"]
 pub(crate) mod volume_rules;
 
-// Candidate controller remains outside native dispatch until its app consumers are qualified.
-#[cfg(any(test, feature = "test-fixtures"))]
+// Default hosts keep regular playback unsupported until an ordered consumer is configured.
 #[path = "regular_music_controller.rs"]
 pub(crate) mod controller;
-#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_random.rs"]
 pub(crate) mod random;
-#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_host.rs"]
 pub(crate) mod regular;
-#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "regular_music_rules.rs"]
 pub(crate) mod rules;
 
@@ -51,7 +47,6 @@ pub struct ThematicMusicExRequest {
 }
 
 pub(super) struct State {
-    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) journal: Option<regular::Journal>,
     max_name_bytes: usize,
     request: Option<PlayMusicRequest>,
@@ -183,7 +178,6 @@ impl ObjectHost {
             }
         }
         self.play_music = Some(State {
-            #[cfg(any(test, feature = "test-fixtures"))]
             journal: None,
             max_name_bytes,
             request: None,
@@ -265,11 +259,9 @@ impl ObjectHost {
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
         self.play_music.as_ref()?;
-        #[cfg(any(test, feature = "test-fixtures"))]
         if let Some(result) = self.regular_music_native(name, args) {
             return Some(result);
         }
-        #[cfg(any(test, feature = "test-fixtures"))]
         if self
             .play_music
             .as_ref()
@@ -360,7 +352,6 @@ impl ObjectHost {
                             .ok_or_else(|| {
                                 fail(Failure::Budget("regular music volume revision"))
                             })?;
-                        #[cfg(any(test, feature = "test-fixtures"))]
                         let command = state
                             .journal
                             .as_mut()
@@ -370,7 +361,6 @@ impl ObjectHost {
                             })
                             .transpose()
                             .map_err(fail)?;
-                        #[cfg(any(test, feature = "test-fixtures"))]
                         if let Some(command) = command {
                             state.journal.as_mut().unwrap().commit(command);
                         }
@@ -382,7 +372,6 @@ impl ObjectHost {
                         state.volume = Some(*volume);
                         return Ok(Value::Null);
                     }
-                    #[cfg(any(test, feature = "test-fixtures"))]
                     if state.journal.is_some() {
                         return Err(fail(Failure::MusicState(
                             "journal volume backend rules are missing",
@@ -418,6 +407,5 @@ impl ObjectHost {
 #[path = "play_music_host_tests.rs"]
 mod tests;
 
-#[cfg(test)]
 #[path = "regular_music_loop.rs"]
 pub(crate) mod loop_rules;

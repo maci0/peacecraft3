@@ -7722,3 +7722,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   acceptance and this Human01 horizon supersede their attribution holds;
   Undead02's old shared-target horizon stays withdrawn. Receipts remain local
   under `/tmp/pc3-main-verified-callback-counter-20261118/attempt-02/`.
+
+- 2026-11-18: Native regular music integration (`b86e1f46`) connects the ordered
+  host journal, source epochs, retained seekable sinks, menu continuation and
+  acknowledgement random stream. The isolated branch passes ten exact consumer
+  cases and the corrected opening probe, scoped core/older-family regressions,
+  strict native/WASM checks and library builds. Parent confirmation reports zero
+  compiler or Cargo warnings. Independent ownership/failure-path review is clear.
+  These receipts qualify that branch only; combined-main linkage, regressions and
+  actual WASM application build remain pending. Browser regular playback,
+  Windows execution and original audible/seam parity remain unqualified. No
+  release, deployment or timed-turn admission change accompanies this intake.

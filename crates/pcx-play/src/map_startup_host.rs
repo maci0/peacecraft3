@@ -308,6 +308,8 @@ pub struct ResolvedObservations {
 pub mod sound_playback;
 
 pub struct MapStartupInputs {
+    /// Present only when an application consumer owns the matching source epoch.
+    pub regular_music_rules: Option<Arc<crate::playercolor_host::RegularMusicRules>>,
     pub thematic_music_rules: Option<crate::playercolor_host::ThematicMusicRules>,
     pub regular_music_volume_rules:
         Option<Result<crate::playercolor_host::RegularMusicVolumeRules, String>>,
@@ -764,6 +766,7 @@ fn assemble_inner(
     inputs: MapStartupInputs,
 ) -> Result<MapStartupHost, MapStartupError> {
     let MapStartupInputs {
+        regular_music_rules,
         thematic_music_rules,
         regular_music_volume_rules,
         cached_unit_source_maps,
@@ -903,6 +906,10 @@ fn assemble_inner(
     }
     if let Some(rules) = regular_music_volume_rules {
         object = object.with_regular_music_volume_rules(rules)?;
+    }
+    if let Some(rules) = regular_music_rules {
+        // Application memory policy, independent of authored music lists.
+        object = object.with_regular_music_journal(rules, 65_536)?;
     }
     // Retained SetUnitExploded flags only; explosion presentation is not implemented.
     object = object.with_unit_explosions(budgets.units.max_records)?;

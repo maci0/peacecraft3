@@ -16,6 +16,7 @@ pub struct Voice {
     pub start_ms: u32,
     pub looping: bool,
     pub playing: bool,
+    pub ended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,8 +129,17 @@ impl Controller {
     pub fn regular(&self) -> Option<&Voice> {
         self.regular.as_ref()
     }
+    pub fn next_epoch(&self, rules: Arc<Rules>) -> Result<Self, String> {
+        let random = self.random.rebind(Arc::clone(&rules))?;
+        let mut next = Self::new(rules, self.random.initialized_at());
+        next.random = random;
+        Ok(next)
+    }
     pub fn thematic(&self) -> Option<&Voice> {
         self.thematic.as_ref()
+    }
+    pub fn regular_loop_parameters(&self) -> (i32, usize) {
+        (self.rules.ordinary_mode(), self.tracks.len())
     }
     pub fn target_level(&self) -> u32 {
         self.level
@@ -170,6 +180,7 @@ impl Controller {
             start_ms: position_ms,
             looping,
             playing: true,
+            ended: false,
         };
         effects.push(Effect::Start(voice.clone()));
         match role {
@@ -208,7 +219,7 @@ impl Controller {
             Role::Regular,
             path,
             position_ms,
-            self.tracks.len() == 1,
+            self.rules.looping(self.tracks.len())?,
             effects,
         )?;
         self.effective_level = if fade_ms == 0 { self.level } else { 0 };
@@ -263,12 +274,20 @@ impl Controller {
         if !self.enabled || self.thematic.as_ref().is_some_and(|v| v.playing) {
             return Ok(());
         }
-        if let Some(v) = &mut self.regular {
-            if v.playing {
+        if self.regular.is_some() {
+            if self.regular.as_ref().unwrap().playing {
                 return Ok(());
             }
-            v.playing = true;
-            effects.push(Effect::Resume(v.serial));
+            if self.regular.as_ref().unwrap().ended {
+                let old = self.regular.as_ref().unwrap().clone();
+                Self::retire(&mut self.regular, effects);
+                // Processed EOF closes the native stream; Resume reopens its member at the beginning.
+                self.start_voice(Role::Regular, old.path, 0, old.looping, effects)?;
+            } else {
+                let voice = self.regular.as_mut().unwrap();
+                voice.playing = true;
+                effects.push(Effect::Resume(voice.serial));
+            }
             self.effective_level = if fade { 0 } else { self.level };
             self.emit_level(effects);
             if fade {
@@ -517,6 +536,7 @@ impl Controller {
             {
                 if let Some(v) = &mut next.regular {
                     v.playing = false;
+                    v.ended = true;
                 }
                 if next.tracks.len() > 1 {
                     next.index = (next.index + 1) % next.tracks.len();

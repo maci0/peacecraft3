@@ -13,8 +13,9 @@ remain unsupported. Fresh warning-free builds with verified dependency linkage
 pass all fifteen callback checks and the Human01 Counter horizon, including full
 input consumption. Undead02 fails at frame 45 on the bounded timed-turn
 admission; its earlier shared-target horizon remains withdrawn. GUI startup
-is unchanged. Regular playback still awaits connected source/epoch
-integration beyond its tested retained-sink component.
+is unchanged. Native regular playback now connects source epochs, ordered commands
+and retained sinks. Its isolated-branch checks pass; combined-main validation is
+pending. Browser regular playback and original audible parity remain open.
 
 The PeaceCraft configuration panel also offers gameplay-only 1×–4× internal
 resolution. Original menu/HUD targets stay at display resolution; this setting

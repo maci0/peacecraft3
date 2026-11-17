@@ -68,7 +68,7 @@ impl Journal {
 }
 
 impl ObjectHost {
-    /// Diagnostic capability only; does not qualify native or browser playback.
+    /// Opt in to ordered playback; the caller owns consumption and accepted-prefix acknowledgement.
     pub fn with_regular_music_journal(
         mut self,
         rules: Arc<Rules>,
@@ -99,6 +99,10 @@ impl ObjectHost {
 
     pub fn regular_music_commands(&self) -> Option<&VecDeque<Command>> {
         Some(&self.play_music.as_ref()?.journal.as_ref()?.commands)
+    }
+
+    pub fn regular_music_rules(&self) -> Option<&Arc<Rules>> {
+        Some(&self.play_music.as_ref()?.journal.as_ref()?.rules)
     }
 
     /// Retire only a consumed prefix; repeated acknowledgements are harmless.

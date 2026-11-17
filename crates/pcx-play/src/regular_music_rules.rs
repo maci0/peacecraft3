@@ -16,6 +16,13 @@ pub struct Rules {
     pub image_sha256: [u8; 32],
     pub origin: AssetIdentity,
     pub(super) random: Arc<Policy>,
+    loop_predicate: super::loop_rules::Predicate,
+    ordinary_mode: i32,
+    menu_name: String,
+    menu_mode: i32,
+    menu_index: i32,
+    menu_position_ms: u32,
+    menu_fade_ms: u32,
     pub(super) initial_level: u32,
     pub(super) initial_enabled: bool,
     pub(super) random_index: i32,
@@ -130,10 +137,20 @@ impl Rules {
             },
         )
         .map_err(|e| e.to_string())?;
-        Self::decode(&read, origin, Arc::new(random))
+        Self::decode(
+            &read,
+            origin,
+            Arc::new(random),
+            super::loop_rules::Predicate::read(image)?,
+        )
     }
 
-    fn decode(read: &Read<'_>, origin: AssetIdentity, random: Arc<Policy>) -> Result<Self, String> {
+    fn decode(
+        read: &Read<'_>,
+        origin: AssetIdentity,
+        random: Arc<Policy>,
+        loop_predicate: super::loop_rules::Predicate,
+    ) -> Result<Self, String> {
         // The seed, music and sound consumers must use the same independent stream.
         let stream = immediate(read, 0x5d7013, &[0xb9])?;
         if stream != immediate(read, 0x5d8bee, &[0x68])?
@@ -254,6 +271,43 @@ impl Rules {
         }
         // TEST EAX,EAX / JNE skips playback; the fallthrough pushes that zero word twice.
         let plain_play_ms = 0;
+        direct_call(read, 0x4a41d3, 0x5add50)?;
+        direct_call(read, 0x4a41e8, 0x469010)?;
+        direct_call(read, 0x4a41ee, 0x5d8af0)?;
+        if bytes(read, 0x4a41d8, 13)?
+            != [
+                0x85, 0xc0, 0x75, 0x1a, 0xff, 0x75, 0x10, 0x8b, 0x4d, 0x08, 0xff, 0x75, 0x0c,
+            ]
+            || bytes(read, 0x4a41e7, 1)? != [0x50]
+            || i32::from(operand(read, 0x4a41e5, &[0x6a], 1)?[0] as i8) != random_index
+            || bytes(read, 0x5d8c0e, 3)? != [0xff, 0x75, 0x0c]
+            || bytes(read, 0x5d8cef, 3)? != [0xff, 0x75, 0x0c]
+            || immediate(read, 0x5d8bc7, &[0x8b, 0x35])? != loop_predicate.playlist_count_global
+        {
+            return Err("regular music mode/count caller flow differs".into());
+        }
+        direct_call(read, 0x5d8c14, 0x5d8c30)?;
+        direct_call(read, 0x5d8cf6, 0x5d8d40)?;
+        // Both native guards push the tested zero EAX as mode, then preserve that stack argument.
+        let ordinary_mode = 0;
+        let menu_name = string(read, word(read, 0xe84440)?, name_bytes as usize)?;
+        if menu_name.is_empty()
+            || immediate(read, 0x586279, &[0x68])? != immediate(read, 0x5d8b3a, &[0x68])?
+            || immediate(read, 0x58626c, &[0xff, 0x35])?
+                != immediate(read, 0x5d8b2d, &[0xff, 0x35])?
+            || bytes(read, 0x5862f5, 1)? != [0x53]
+        {
+            return Err("menu music name/version caller flow differs".into());
+        }
+        direct_call(read, 0x586292, 0x5c30a0)?;
+        direct_call(read, 0x5862f6, 0x5d8af0)?;
+        let menu_mode = i32::from(operand(read, 0x5862f3, &[0x6a], 1)?[0] as i8);
+        let menu_index = i32::from(operand(read, 0x5862f1, &[0x6a], 1)?[0] as i8);
+        let menu_position_ms =
+            u32::try_from(i32::from(operand(read, 0x5862ef, &[0x6a], 1)?[0] as i8))
+                .map_err(|_| "negative menu music offset")?;
+        let menu_fade_ms = u32::try_from(i32::from(operand(read, 0x5862ed, &[0x6a], 1)?[0] as i8))
+            .map_err(|_| "negative menu music fade")?;
         let map_random_index = i32::from(operand(read, 0x4a9346, &[0x83, 0xc8], 1)?[0] as i8);
         if map_random_index != -1
             || bytes(read, 0x4a9349, 9)? != [0x83, 0x7d, 0x0c, 0, 0x0f, 0x44, 0x45, 0x10, 0x50]
@@ -278,6 +332,13 @@ impl Rules {
             image_sha256: REVIEWED_IMAGE,
             origin,
             random,
+            loop_predicate,
+            ordinary_mode,
+            menu_name,
+            menu_mode,
+            menu_index,
+            menu_position_ms,
+            menu_fade_ms,
             initial_level,
             initial_enabled,
             random_index,
@@ -307,6 +368,33 @@ impl Rules {
             }
         };
         a.len() == b.len() && a.bytes().zip(b.bytes()).all(|(a, b)| fold(a) == fold(b))
+    }
+
+    pub fn menu_start(&self) -> (&str, i32, i32, u32, u32) {
+        (
+            &self.menu_name,
+            self.menu_mode,
+            self.menu_index,
+            self.menu_position_ms,
+            self.menu_fade_ms,
+        )
+    }
+
+    pub fn ordinary_mode(&self) -> i32 {
+        self.ordinary_mode
+    }
+    pub fn looping(&self, count: usize) -> Result<bool, String> {
+        self.loop_predicate.should_loop(self.ordinary_mode, count)
+    }
+
+    pub fn fade_interval_ms(&self) -> u32 {
+        self.fade_interval_ms
+    }
+    pub fn default_fade_ms(&self) -> u32 {
+        self.default_fade_ms
+    }
+    pub fn next_interval_ms(&self) -> u32 {
+        self.next_interval_ms
     }
 
     pub fn edition_key(&self, name: &str, edition: i32) -> Result<String, String> {
@@ -346,6 +434,13 @@ impl Rules {
                 version: "fixture".into(),
             },
             random: Arc::new(crate::script_random::profile::fixture()),
+            loop_predicate: super::loop_rules::Predicate::fixture(),
+            ordinary_mode: 0,
+            menu_name: "FixtureGlueTune".into(),
+            menu_mode: 0,
+            menu_index: -9,
+            menu_position_ms: 0,
+            menu_fade_ms: 0,
             initial_level: 8,
             maximum_level: 13,
             initial_enabled: true,

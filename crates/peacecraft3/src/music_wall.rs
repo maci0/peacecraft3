@@ -15,6 +15,7 @@ fn boot_word(seconds: u64, nanoseconds: u32) -> Result<u32, String> {
 }
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[allow(unsafe_code)] // Scoped platform clock ABI; the call and layout contracts are documented below.
 pub(super) fn sample() -> Result<Sample, String> {
     use std::os::raw::{c_int, c_long};
     #[repr(C)]
@@ -49,6 +50,7 @@ pub(super) fn sample() -> Result<Sample, String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // Scoped system clock import with no retained pointers.
 pub(super) fn sample() -> Result<Sample, String> {
     #[link(name = "kernel32")]
     unsafe extern "system" {

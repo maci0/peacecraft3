@@ -1,12 +1,111 @@
-# Regular music controller candidate
+# Regular music controller and native consumer
 
-This is an incomplete candidate. The controller, independent audio random stream,
-source reader and ordered host journal are available only under `test` or
-`test-fixtures`. Explicit diagnostic journal configuration connects regular and
-source-qualified mixed music operations to VM dispatch; normal builds retain
-their existing regular-playback refusal.
-Application playback is not connected. Previously accepted thematic music and
-regular volume behavior is unchanged.
+The native candidate connects the ordered journal to retained audio sinks during
+normal startup. The selected executable and backend must qualify first; default
+hosts and the browser regular family retain explicit refusal. Qualification is
+bounded to the checks below. It is not complete native audible parity.
+
+## Native application path (2026-11-18)
+
+The application observes the committed client bundle before menu selection and
+passes the same rules allocation into map startup. A publication revision change
+retires live and staged voices even when content generation is unchanged. Missing
+and failed source getters are observed before stamp comparisons. A new policy
+rebinds the controller while preserving the random stream only under the current
+generator admission key. This key restriction is not evidence that other images
+have incompatible generator algorithms.
+
+The regular journal consumer validates source identity, bounded encoded input,
+decoder/seek support and gain before staging a paused replacement. It retains the
+old stream until the new sink is accepted, then acknowledges only the consumed
+prefix. Async failure is visible and sticky; source/session retirement is the
+recovery boundary. Old producers are checked against the current rules allocation
+before consuming commands or callbacks. The acknowledgement caller uses that same
+binding, so withdrawal followed by restoration of the same bundle cannot replay
+an old unacknowledged choice or let an old producer draw from the new epoch.
+An initial required-clock failure also marks the installed epoch unavailable,
+so acknowledgement audio cannot fall back to a separate random stream.
+
+There is one authoritative audio random stream across menu and map sessions.
+Synchronous acceptance reserves a music draw once. Pending controller snapshots
+never replace intervening menu or acknowledgement draws. Menu EOF completion and
+continuation use the controller's existing ordered callbacks, preserving duplicate
+playlist entries and advancing sequentially without another random choice.
+
+The loop predicate comes from parsed numeric mode and playlist count. The ordinary
+and menu caller modes are independently bound to their instruction flows. The
+selected backend's stream and buffered-sample built-in paths qualify indefinite
+repetition; alternate DLL dispatch is unsupported. The application uses the
+installed decoder's seekable loop implementation with backend `ONCE` settings,
+because the backend's generic repeated-buffer wrapper loses seek support. The
+controller's logical loop flag remains distinct. A drained infinite stream is an
+explicit fault. After processed ordinary EOF, Resume recreates the old member
+from the beginning while retaining its already scheduled next callback.
+
+The paired input is the local `Mss32.dll` shipped with Legacy 1.29.2.9231, SHA256
+`cc142b9d8b5223e2720c6440cb7a124c0a80d2fb04ecf59ad7331dfd6e3cb51f`.
+Builtin behavior is a selected source capability; no static initializer is treated
+as proof of the original client's live DLL-dispatch state.
+
+Menu publication and replacements retain the menu user-volume bus and intro/camera
+pause ownership. Regular level changes keep their source curve, group gain and
+current user gain, including changes during staged publication. Music callbacks
+use boot-relative presentation time; they do not alter Game/REAL clock transport
+or speed controls. Volume-group interpolation retains its separate existing REAL
+audio clock. The deterministic consumer test advances that group clock directly
+by the parsed transition duration and period; it does not qualify `Runtime.frame`
+transport.
+
+### Current qualification
+
+Ten exact native cases passed with private offscreen/null output, local selected
+inputs and a fresh profile per case. They cover normal startup consumption;
+cursor/seek/fade and thematic handoff; processed EOF Resume; pending backend state;
+sync/async failures; menu singleton/duplicate/distinct continuation; real menu and
+unit-voice interleaving; and same-stamp source withdrawal/restoration with old
+producer refusal. The group test checks the strict fade endpoint through the
+actual consumer, then idle and pending group transitions and user-gain promotion.
+The tenth case checks that an initial required-wall failure refuses the real
+acknowledgement caller before random initialization or voice publication.
+
+The unchanged Human01 opening probe separately passed one exact case. Its fixture
+installs the epoch before map admission and observes acknowledgement entities at
+the producer boundary, before physical null-device completion. It retains the
+thematic-first, map-playlist handoff and Arthas What/Yes publication assertions;
+it does not establish audible amplitude or lifetime.
+
+Core/controller/source groups passed 51 tests, with six default-run source ignores
+whose selected-source gates also ran explicitly. Older thematic, volume, menu and
+acknowledgement groups retain 45 scoped passes and three default-run source ignores;
+their selected-source cases ran explicitly too. The opening probe's earlier
+failure remains separate from its corrected one-pass retry. Source/config hashes
+justify reuse of the unchanged core and older successful paths.
+
+Strict native core, default application and fixture checks passed. The actual
+default-feature native binary and its libraries built successfully. WASM core
+library/tests and application all-target/fixture checks passed, followed by both
+affected library builds. The final unchanged confirmation recorded zero compiler
+diagnostics and zero Cargo warnings for all six commands that had restricted
+cache-metadata warnings. No warning suppression or source change was required.
+
+Private receipts are under `/tmp/pc3-continue-music-receipts/`. The qualified native
+binary is SHA256
+`6ec387e2a87369df2c16eb108ba1502756d7d2aa0d98877c27837e54e8395c7e`.
+Its source/metadata, active local dependency artifacts, compiler extern inputs,
+external source bytes and pre/post original-input hashes are recorded separately
+from prior failed attempts. An earlier shared target was invalid for cross-worktree
+dependency attribution; those observations do not qualify this candidate. Private
+cache-write and isolation setup failures launched zero tests and remain separate
+from runtime failures.
+
+These receipts qualify the frozen music branch. A combined main build requires
+its own source/dependency closure and newly selected executable; these binary
+hashes do not qualify later merges. Browser regular playback, Windows builds and
+runtime execution, original-client audible/seam comparison, arbitrary callback
+ordering and replay guard behavior remain unqualified. Native platforms without
+the supported boot clock refuse explicitly. No original client was launched by
+this implementation scope. The older diagnostic checkpoints below are historical
+and do not qualify the current final source.
 
 ## Evidence and candidate behavior
 
@@ -43,7 +142,7 @@ complete map-worker callback relationship and unrelated equal-time callbacks
 remain unverified. No original client was launched during this implementation
 phase. Prior volume LUT and null-sink results do not prove this playback family.
 
-## Actual checks
+## Historical diagnostic checks
 
 Checks ran against `/tmp/pc3-lane07-regular-playback-worktree` with isolated
 target `/tmp/pc3-fidelity-sol61-07-playback-target`, two build jobs, a verified
@@ -66,7 +165,7 @@ native/WASM build, browser execution or app test of this checkpoint was run.
 The browser typed getter and its test gate are candidates, not validated runtime
 admission. The unlinked `music_wall.rs` prototype is not a called wall producer.
 
-## Work still required
+## Earlier work requirements (historical)
 
 Connect a bounded ordered host journal, startup inputs and the actual application
 controller before admitting any new native. The application-global audio epoch

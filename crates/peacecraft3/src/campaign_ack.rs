@@ -6,7 +6,7 @@
 //! The `<unitSound><Suffix>` row names are shipped bytes; which order plays which
 //! suffix is an inference (`docs/re-notes/campaign-audio.md`).
 
-use crate::campaign_audio::{CampaignAudio, CampaignAudioSet, GameSound, Sources};
+use crate::campaign_audio::{CampaignAudio, CampaignAudioSet, SoundOutput, Sources};
 use crate::campaign_input::{CampaignInput, CampaignInputSet};
 use bevy::prelude::*;
 use pcx_objects::editor::{FieldSource, SlkId};
@@ -94,15 +94,15 @@ pub(crate) fn unit_sound(definition: &Definition) -> Result<Option<String>, Stri
     Ok((!matches!(text, "" | "_" | "-")).then(|| text.to_owned()))
 }
 
-#[allow(clippy::too_many_arguments)] // Bevy system param set, matches existing pattern in this crate
-fn unit_voices(
-    mut commands: Commands,
+pub(crate) fn unit_voices(
+    mut output: SoundOutput,
     input: Res<CampaignInput>,
     mut audio: ResMut<CampaignAudio>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
-    mut assets: ResMut<Assets<AudioSource>>,
     sources: Sources,
-    live: Query<(Entity, &GameSound)>,
+    #[cfg(not(target_arch = "wasm32"))] mut epoch: Option<
+        ResMut<crate::regular_music_epoch::Epoch>,
+    >,
     preferences: Option<Res<crate::menu_screens::Navigation>>,
 ) {
     // UnitCheckBox (`unit` preference) gates this producer only; text, orders
@@ -151,7 +151,25 @@ fn unit_voices(
         }
     };
     let effects = sources.settings.audio.effective_effects();
-    if let Err(error) = audio.play(ACK_TABLE, &name, effects, &mut commands, &mut assets, &live) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let random = if let Some(epoch) = epoch.as_deref_mut().filter(|epoch| epoch.observed) {
+        let Some(bundle) = sources.client_sources() else {
+            audio.report("acknowledgement source publication is absent".into());
+            return;
+        };
+        match epoch.random_for(&bundle, objects.regular_music_rules()) {
+            Ok(random) => Some(random),
+            Err(error) => {
+                audio.report(error);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(target_arch = "wasm32")]
+    let random = None;
+    if let Err(error) = audio.play(ACK_TABLE, &name, effects, &mut output, random) {
         audio.report(error);
     } else {
         // The portrait holds its Talk variant while this row stays live.
@@ -164,6 +182,7 @@ fn unit_voices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::campaign_audio::GameSound;
     use bevy::ecs::system::RunSystemOnce;
     use pcx_play::player_command_log::StartIdentity;
 
