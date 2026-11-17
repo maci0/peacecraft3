@@ -53,6 +53,9 @@ fn chapter_counter_horizon(expected: &str) {
     const FRAMES: u32 = 12000;
     for frame in 0..FRAMES {
         runtime.advance(&mut session, input);
+        if runtime.last_error.is_some() {
+            print_counter_failure_candidates(&mut session);
+        }
         let objects = session.host().unwrap().objects();
         assert!(
             runtime.last_error.is_none(),
@@ -149,4 +152,52 @@ fn chapter_counter_horizon(expected: &str) {
                 && f32::from_bits(final_point.local) > f32::from_bits(control_point.local)),
         "Game point did not advance after control: chapter={map} control={control_point:?} game={final_point:?}"
     );
+}
+
+fn print_counter_failure_candidates(session: &mut MapScriptSession<MapStartupHost>) {
+    for name in ["udg_IntroCinematicSkip", "bj_cineModeAlreadyIn"] {
+        eprintln!(
+            "Counter failure global: name={name} value={:?}",
+            session.global(name)
+        );
+    }
+    // These source-script globals are candidates, not a trace of the refused call's arguments.
+    for name in [
+        "udg_Arthas",
+        "gg_unit_Hpb1_0018",
+        "gg_unit_uaco_0048",
+        "gg_unit_Utic_0006",
+        "gg_unit_nsqt_0054",
+        "gg_unit_nsqe_0072",
+        "udg_KelThuzad",
+    ] {
+        let value = session.global(name);
+        eprintln!("Counter failure candidate: global={name} value={value:?}");
+        let Some(pcx_script::Value::Handle(unit)) = value else {
+            continue;
+        };
+        let Some(host) = session.host() else {
+            eprintln!("Counter failure candidate: global={name} session host absent");
+            continue;
+        };
+        let objects = host.objects();
+        match objects.executed_unit(unit) {
+            Ok(record) => {
+                eprintln!(
+                    "Counter failure candidate: global={name} unit={unit:?} record={record:#?}"
+                );
+                eprintln!(
+                    "Counter failure candidate: global={name} current_order={:?} queued={:?} training={:?} owner_captains={:?} guard={:?}",
+                    objects.current_unit_order(unit),
+                    objects.queued_orders(unit),
+                    objects.unit_training_queue(unit),
+                    objects.campaign_captain_state(record.owner),
+                    objects.guard_state().and_then(|state| state.get(unit)),
+                );
+            }
+            Err(error) => eprintln!(
+                "Counter failure candidate: global={name} unit={unit:?} read_error={error}"
+            ),
+        }
+    }
 }
