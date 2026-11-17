@@ -269,10 +269,7 @@ impl CampaignRuntime {
             // This frame's wall interval belongs to the paused state even if a UI callback resumes it.
             return false;
         }
-        if self.paused || self.view_paused || self.last_error.is_some() {
-            return false;
-        }
-        true
+        !(self.paused || self.view_paused || self.last_error.is_some())
     }
 
     fn counter_platform(session: &mut MapScriptSession<MapStartupHost>) -> bool {
