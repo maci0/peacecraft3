@@ -5060,6 +5060,7 @@ fn timed_heading_production_fixture(mode1: bool) -> (Vm, HandleId, HandleId) {
     let heading = admitted.heading_rules().unwrap().clone();
     let properties = heading.profile.as_ref().unwrap();
     let fields = vec![
+        column(b"W001", SlkId::UnitWeapons, "weapsOn", FieldKind::Int, "0"),
         profile_field(b"T011", "Researches", "upgradeList", "R001"),
         column(
             b"Shtr",

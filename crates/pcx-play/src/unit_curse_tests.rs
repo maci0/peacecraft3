@@ -54,6 +54,7 @@ struct Config {
     script: &'static str,
     heading: bool,
     acquire: Option<&'static str>,
+    weapons: Option<&'static str>,
     mana_minimum: Option<f32>,
     /// `abilList` of every fixture unit.
     abilities: &'static str,
@@ -78,6 +79,7 @@ impl Default for Config {
             script: "",
             heading: false,
             acquire: None,
+            weapons: None,
             mana_minimum: Some(0.),
             abilities: "Aslo",
             slow: Vec::new(),
@@ -394,6 +396,20 @@ fn host_with(config: &Config) -> ObjectHost {
             }
         }
     }
+    if let Some(enabled) = config.weapons {
+        for (_, field) in &mut fields {
+            if field.metadata.as_ref().is_some_and(|m| matches!(&m.source, FieldSource::Column { slk: SlkId::UnitWeapons, column } if column == "weapsOn")) {
+                field.value = Ok(FieldValue::Cell(enabled.into()));
+            }
+        }
+    }
+    fields.push(column(
+        b"M001",
+        SlkId::UnitData,
+        "movetp",
+        FieldKind::Token,
+        config.movement,
+    ));
     if let Some(profile) = activity.heading.as_ref().and_then(|h| h.profile.as_ref()) {
         fields.push(column(
             b"Shtn",
@@ -744,12 +760,14 @@ fn heading_session_with(
     HandleId,
     HandleId,
 ) {
-    heading_session_with_script(HEADING_CALLBACKS, None, prepare)
+    heading_session_with_script(HEADING_CALLBACKS, None, None, "foot", prepare)
 }
 
 fn heading_session_with_script(
     script: &'static str,
     acquire: Option<&'static str>,
+    weapons: Option<&'static str>,
+    movement: &'static str,
     prepare: impl FnOnce(
         crate::map_startup_host::MapStartupHost,
     ) -> crate::map_startup_host::MapStartupHost,
@@ -766,6 +784,8 @@ fn heading_session_with_script(
     let mut host = host_with(&Config {
         heading: true,
         acquire,
+        weapons,
+        movement,
         script,
         ..Config::default()
     });
@@ -2950,38 +2970,46 @@ fn timed_counter_session() -> (
     HandleId,
     HandleId,
 ) {
-    timed_counter_session_with_acquisition("0")
+    timed_counter_session_with_acquisition("0", "0", "foot")
 }
 
 fn timed_counter_session_with_acquisition(
     acquire: &'static str,
+    weapons: &'static str,
+    movement: &'static str,
 ) -> (
     crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
     HandleId,
     HandleId,
 ) {
-    heading_session_with_script(TIMED_FACING_SCRIPT, Some(acquire), |mut host| {
-        let context = Arc::clone(host.context());
-        let speed = host
-            .objects_mut()
-            .native("ConvertGameSpeed", &[Value::Int(0)])
-            .unwrap();
-        let Value::Handle(speed) = speed else {
-            panic!("speed")
-        };
-        host.objects_mut()
-            .admit_startup_settings(
-                &context,
-                crate::playercolor_host::StartupSettings {
-                    speed,
-                    fog_enabled: false,
-                    fog_mask_enabled: false,
-                },
-            )
-            .unwrap();
-        assert!(host.objects_mut().select_native_counter_platform().unwrap());
-        host
-    })
+    heading_session_with_script(
+        TIMED_FACING_SCRIPT,
+        Some(acquire),
+        Some(weapons),
+        movement,
+        |mut host| {
+            let context = Arc::clone(host.context());
+            let speed = host
+                .objects_mut()
+                .native("ConvertGameSpeed", &[Value::Int(0)])
+                .unwrap();
+            let Value::Handle(speed) = speed else {
+                panic!("speed")
+            };
+            host.objects_mut()
+                .admit_startup_settings(
+                    &context,
+                    crate::playercolor_host::StartupSettings {
+                        speed,
+                        fog_enabled: false,
+                        fog_mask_enabled: false,
+                    },
+                )
+                .unwrap();
+            assert!(host.objects_mut().select_native_counter_platform().unwrap());
+            host
+        },
+    )
 }
 
 #[test]
@@ -3205,11 +3233,14 @@ endfunction
 }
 
 #[test]
-#[ignore = "requires PCX_WAR3_EXE; Counter admission excludes automatic acquisition and paused or moving units"]
+#[ignore = "requires PCX_WAR3_EXE; Counter admission excludes armed, immobile, paused or moving units"]
 fn counter_timed_controller_acquisition_and_activity_admission_preserves_state_on_refusal() {
-    for mode in 0..4 {
-        let (mut session, caster, _) =
-            timed_counter_session_with_acquisition(if mode == 0 { "64" } else { "0" });
+    for mode in 0..6 {
+        let (mut session, caster, _) = timed_counter_session_with_acquisition(
+            if mode == 0 { "64" } else { "0" },
+            if mode == 0 || mode == 4 { "1" } else { "0" },
+            if mode == 5 { "none" } else { "foot" },
+        );
         let function = session
             .context()
             .unwrap()
@@ -3260,13 +3291,18 @@ fn counter_timed_controller_acquisition_and_activity_admission_preserves_state_o
         }
         let objects = session.host().unwrap().objects();
         let before = objects.executed_unit(caster).unwrap().clone();
+        assert_eq!(before.activity.as_ref().unwrap().movable(), mode != 5);
+        assert_eq!(
+            before.combat.as_ref().unwrap().weapon.is_some(),
+            mode == 0 || mode == 4
+        );
         let clock = format!("{:?}", objects.test_native_clock_state());
         let error = session
             .call_function(
                 function,
                 &[Value::Handle(caster), Value::Real(135.), Value::Real(1.)],
             )
-            .unwrap_err()
+            .expect_err(&format!("mode {mode}: timed facing unexpectedly admitted"))
             .to_string();
         assert!(
             error.contains("qualified stationary unit"),

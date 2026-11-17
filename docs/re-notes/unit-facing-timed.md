@@ -3,8 +3,8 @@
 Selected input is Legacy `1.29.2.9231`, executable SHA256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 Normal native-heading dispatch admits the direct-facing branch, including
-negative angles. Long relations admit a bounded stationary class whose actual
-combat weapon cannot automatically acquire a target. Moving, paused, retained
+negative angles. Long relations admit a bounded stationary mobile class with no
+active combat weapon. Moving, paused, retained
 captain/harvest ownership and active work remain excluded. General long-turn
 admission and full native turn parity remain open.
 
@@ -218,8 +218,10 @@ common due loop and complete save/load continuation remain unfinished.
 
 The wrap-up audit also found a remaining automatic-acquisition interaction:
 `advance_combat` may choose a new target and call `clear_combat_target`, whose
-canonical cleanup removes the static relation. The four native controls disabled
-acquisition, so they do not qualify that later automatic cancellation. The frozen
+canonical cleanup removes the static relation. The four native controls requested
+an acquisition-range setter call, but that call does not establish disabled
+acquisition (see the correction below). They do not qualify later automatic
+cancellation. The frozen
 candidate's ten validation groups pass, but this gap prevents general long-turn
 admission. No additional acquisition implementation or native run is claimed.
 
@@ -247,7 +249,11 @@ remain preserved for continuation; no new state or acquisition algorithm was
 added for the safety gate.
 
 
-## Acquisition-disabled stationary admission (2026-11-17)
+## Historical zero-range stationary admission (2026-11-17)
+
+The admission premise in this checkpoint was subsequently invalidated by the
+native acquisition query. The 2026-11-18 safety correction below supersedes its
+armed-zero admission and replaces the managed-unit regression accordingly.
 
 The diagnostic-only gate is replaced by a readonly admission check on the actual
 combat consumer: no weapon, or a resolved weapon acquisition range at or below
@@ -307,8 +313,10 @@ factory. The same chapter index, recipe and bounded importer supply the unchange
 RoC `Maps\Campaign\Human01.w3m` and `Maps\Campaign\Undead02.w3m` members.
 The selected Legacy executable remains the image pinned at the top of this note.
 
-Both exact ignored probes pass after independent private display, null-audio and
-fresh-profile checks:
+Both exact ignored probes reported passes after independent private display,
+null-audio and fresh-profile checks. Their linked core provenance was later
+invalidated; these are historical results, not acceptance for the reviewed core
+(see the 2026-11-18 correction):
 
 - `native_campaign::tests::counter::selected_human01_counter_frontier`
 - `native_campaign::tests::counter::selected_undead02_counter_frontier`
@@ -334,3 +342,63 @@ under `/tmp/pc3-continue-turning-validation/`; the accepted pair is summarized i
 remain separate. No original-client run, retained native control map replay, complete
 mission playthrough, general admission for moving or acquiring units or native timing
 parity is established by these recreation caller horizons.
+
+
+## Acquisition and linked-dependency corrections (2026-11-18)
+
+The selected setter at `0x4aaf50` calls `0x69c940`, whose ordered finite branch
+writes only values strictly above the lower-bound operand. The initializer at
+`0x401640` passes signed integer 50 to the selected integer-to-real routine at
+`0x9a1620`. The component float wrapper receives accepted values unchanged.
+Zero, signed zero, negative finite values and the boundary value leave the
+current acquisition parameter unchanged, including after a prior accepted
+positive assignment. Nonfinite behavior is outside the admitted host contract.
+
+The earlier description of the four retained worker controls as having disabled
+acquisition was incorrect. Those scripts requested `SetUnitAcquireRange(0)`;
+that setter request alone does not disable acquisition in the selected client.
+Their 1,024 facing observations remain independent observations of stationary
+turning without an enemy-interaction control, not evidence for disabled
+acquisition or faithful automatic cancellation. The raw backing map remains
+unavailable for a fresh replay.
+
+A stored zero is also insufficient by itself to qualify an armed stationary
+unit: the native acquisition scan uses a collision-inclusive spatial query, and
+special-anchor state can replace the stored parameter. The bounded source join
+and remaining qualification work are recorded separately; no zero-radius
+no-enemy guarantee follows from the unit's stored field alone.
+
+The later chapter probes did execute and report the input-accounting results
+above. A subsequent static artifact audit found the retained binary contains
+an older core heading diagnostic and lacks the diagnostic introduced by the
+reviewed turning fix. Cross-worktree target reuse therefore leaves their linked
+core revision unqualified, despite the application-source and binary hashes
+matching their receipts. Those horizons are withdrawn as evidence for the
+reviewed core until the dependency closure is independently established or the
+probes rerun against a verified build. Raw logs, source manifests and binaries
+remain preserved; no new application or original-client run is claimed by this
+correction. Private static audit:
+`/tmp/pc3-continue-acquire-validation/prior-chapter-dependency-audit.json`.
+
+
+The immediate safety correction now refuses every active-weapon long relation,
+including an authored acquisition value of zero, before publication. No-weapon
+units with a mobile class that are shown, idle and unpaused retain the existing
+stationary path and all prior
+ownership/work/transition preflights. Synthetic Counter, production and guard
+fixtures explicitly distinguish the unarmed admitted class from armed-zero
+refusal. A managed armed-zero guard test now checks refusal before full-unit,
+clock, guard or captain mutation, followed by ordinary recruitment and release;
+it no longer constructs an admitted armed relation to exercise that overlap.
+The original-client enemy/collision interaction remains unqualified.
+
+Fresh safety validation uses an exclusive per-worktree target with no compiler
+wrapper. Cargo artifact records bind all twelve local dependencies to their
+initial cold build and the final test executable to the frozen current source.
+All 26 exact selected checks pass, including the retained 65/44/169 numeric
+witnesses and public Counter armed-zero/immobile refusal. The ordinary library
+suite passes 3,303 tests with zero failures and 155 explicit ignores. Strict
+native/WASM Clippy and both library builds pass. Private final-v3 source,
+artifact and one-test receipts remain in
+`/tmp/pc3-continue-acquire-validation/`; earlier failed fixture attempts remain
+separate. No application or original-client replay is included in this cohort.
