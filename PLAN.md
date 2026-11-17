@@ -14,8 +14,10 @@ pass all fifteen callback checks and the Human01 Counter horizon, including full
 input consumption. Undead02 fails at frame 45 on the bounded timed-turn
 admission; its earlier shared-target horizon remains withdrawn. GUI startup
 is unchanged. Native regular playback now connects source epochs, ordered commands
-and retained sinks. Its isolated-branch checks pass; combined-main validation is
-pending. Browser regular playback and original audible parity remain open.
+and retained sinks. Combined-main validation at `d97d127e` passes all 26 application
+cases, strict native/WASM checks and actual native/WASM executable builds. The
+unchanged core retains its verified 3,316-pass result with 156 explicit ignores.
+Browser regular playback and original audible parity remain open.
 
 The PeaceCraft configuration panel also offers gameplay-only 1×–4× internal
 resolution. Original menu/HUD targets stay at display resolution; this setting

@@ -7733,3 +7733,22 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   actual WASM application build remain pending. Browser regular playback,
   Windows execution and original audible/seam parity remain unqualified. No
   release, deployment or timed-turn admission change accompanies this intake.
+
+- 2026-11-18: Combined-main regular music validation is complete at `d97d127e`.
+  All 26 application cases pass: ten retained playback/source-epoch cases, the
+  opening probe, fourteen observer bridge cases and the generic caller. Eight
+  current native/WASM strict checks and builds pass with zero compiler or Cargo
+  warnings, including actual WASM application code generation. The unchanged
+  core reuses its verified 3,316 passes, 156 explicit ignores and system Clippy
+  1.100 result under matching source, dependency, tool and artifact provenance.
+  Final post-run checks match all 29,326 frozen inputs and 889 linked artifact
+  files. Six published dependency versions remain unchanged with narrowly scoped
+  compatibility patches; existing upstream Clippy style debt remains separate.
+  Receipts are local under
+  `/tmp/pc3-main-combined-music-20261118/attempt-03/`; the final proof SHA256 is
+  `fa08150ad1f6aa4d0aec24c290ead3b5ac3069f364579a69711eb0abfc777450`.
+  Earlier failed setup, verbose-build and strict-check attempts are preserved
+  separately. No Counter horizon rerun, browser execution, Windows execution or
+  audible/rendered parity is claimed. The native Counter guard still refuses
+  armed timed turns; the four original-client controls and private candidate do not
+  qualify admission. No release, push or deployment accompanies this checkpoint.
