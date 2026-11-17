@@ -231,6 +231,24 @@ struct RecordingHost<H> {
     sequence: u64,
 }
 impl<H> RecordingHost<H> {
+    fn record_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        call: Option<pcx_script::ScriptCall>,
+    ) -> Option<pcx_script::ScriptCall> {
+        if call.is_some() && matches!(name, "SetPlayerState" | "StartCampaignAI") {
+            let sequence = self.next_sequence();
+            self.natives.push(NativeRecord {
+                sequence,
+                tick: self.tick,
+                name: name.into(),
+                args: args.to_vec(),
+                result: Value::Null,
+            });
+        }
+        call
+    }
     fn next_sequence(&mut self) -> u64 {
         let sequence = self.sequence;
         self.sequence += 1;
@@ -273,17 +291,18 @@ impl<H: Host> Host for RecordingHost<H> {
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
         let call = self.inner.begin_script_call(name, args)?;
-        if call.is_some() && name == "SetPlayerState" {
-            let sequence = self.next_sequence();
-            self.natives.push(NativeRecord {
-                sequence,
-                tick: self.tick,
-                name: name.into(),
-                args: args.to_vec(),
-                result: Value::Null,
-            });
-        }
-        Ok(call)
+        Ok(self.record_script_call(name, args, call))
+    }
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        owner: pcx_script::eval::InitializedVmCall<'_>,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        let call = self
+            .inner
+            .begin_initialized_script_call(name, args, owner)?;
+        Ok(self.record_script_call(name, args, call))
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
         self.inner.continue_script_call(value)
@@ -918,5 +937,46 @@ mod native_string_recording_tests {
                 .map(|s| s.as_utf8().unwrap()),
             Some("TRIGSTR_23 ^^x^^")
         );
+    }
+    #[test]
+    fn recording_host_forwards_initialized_owner_and_records_callback_once() {
+        struct Owner;
+        impl Host for Owner {
+            fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+                Err(name.into())
+            }
+            fn begin_script_call(
+                &mut self,
+                _: &str,
+                _: &[Value],
+            ) -> Result<Option<pcx_script::ScriptCall>, String> {
+                Err("initialized owner was dropped".into())
+            }
+            fn begin_initialized_script_call(
+                &mut self,
+                _: &str,
+                _: &[Value],
+                _: pcx_script::eval::InitializedVmCall<'_>,
+            ) -> Result<Option<pcx_script::ScriptCall>, String> {
+                Ok(Some(pcx_script::ScriptCall::Return(Value::Null)))
+            }
+        }
+        let syntax = pcx_script::parse_script("native SetPlayerState takes nothing returns nothing\nnative StartCampaignAI takes nothing returns nothing\nfunction main takes nothing returns nothing\ncall SetPlayerState()\ncall StartCampaignAI()\nendfunction\n").unwrap();
+        let program = pcx_script::resolve(&syntax).unwrap();
+        let host = RecordingHost {
+            inner: Owner,
+            tick: None,
+            natives: Vec::new(),
+            sequence: 0,
+        };
+        let mut vm = pcx_script::Vm::new(&program, host);
+        vm.call("main", &[]).unwrap();
+        let host = vm.host();
+        assert_eq!(host.natives.len(), 2);
+        assert_eq!(host.natives[0].name, "SetPlayerState");
+        assert_eq!(host.natives[0].sequence, 0);
+        assert_eq!(host.natives[1].name, "StartCampaignAI");
+        assert_eq!(host.natives[1].sequence, 1);
+        assert_eq!(host.sequence, 2);
     }
 }

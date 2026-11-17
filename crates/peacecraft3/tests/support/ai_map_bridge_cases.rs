@@ -10,6 +10,15 @@ fn publish(
     ai_body: &str,
     observer: &str,
 ) -> (MapScriptSession<MapStartupHost>, Arc<AtomicUsize>) {
+    publish_with_observers(native, ai_body, observer, true)
+}
+
+fn publish_with_observers(
+    native: bool,
+    ai_body: &str,
+    observer: &str,
+    watch: bool,
+) -> (MapScriptSession<MapStartupHost>, Arc<AtomicUsize>) {
     let source = format!(
         r#"
 globals
@@ -73,20 +82,28 @@ function config takes nothing returns nothing
 call SetPlayers(2)
 endfunction
 function main takes nothing returns nothing
+if {watch} then
 call TriggerRegisterPlayerStateEvent(watched,Player(0),PLAYER_STATE_RESOURCE_GOLD,EQUAL,7.0)
 call TriggerRegisterPlayerStateEvent(watched,Player(0),PLAYER_STATE_RESOURCE_GOLD,EQUAL,9.0)
+endif
 call TriggerAddCondition(watched,Condition(function accepted))
 call TriggerAddCondition(watched,Condition(function secondCondition))
 call TriggerAddAction(watched,function observe)
 call TriggerAddAction(watched,function tail)
 call TriggerAddAction(other,function nested)
+if {watch} then
 call TriggerRegisterPlayerStateEvent(queued,Player(1),PLAYER_STATE_RESOURCE_GOLD,EQUAL,42.0)
+endif
 call TriggerAddAction(queued,function queuedAction)
 call TimerStart(anchor,10.0,false,null)
 endfunction
 function parkOld takes nothing returns nothing
 call TriggerSleepAction(0.5)
 set oldTail=73
+endfunction
+function startAfterPark takes nothing returns nothing
+call TriggerSleepAction(0.0317)
+call StartCampaignAI(Player(0),"observed.ai")
 endfunction
 function startOther takes nothing returns nothing
 call StartCampaignAI(Player(1),"observed.ai")
@@ -108,6 +125,8 @@ endfunction
     let bound = bind_map(&reader, map.input(1), map.limits()).unwrap();
     let mut inputs = host_inputs(Arc::clone(&bound.catalog.0));
     inputs.resources = Some(pcx_play::player_resources::Rules::synthetic_fixture());
+    // The foreign-program case initializes a second global store in the same host.
+    inputs.budgets.triggers.max_triggers *= 2;
     inputs.enumeration.names.push("ConvertGameEvent".into());
     inputs.timer_time = Some(0.);
     inputs.budgets.conditions =
@@ -173,9 +192,8 @@ endfunction
         .replace(
             context,
             move |ctx| {
-                let mut host = pcx_play::map_startup_host::assemble(ctx, inputs)?
-                    .with_ai_map_bridge_fixture()
-                    .with_ai_loader(move |_| {
+                let mut host =
+                    pcx_play::map_startup_host::assemble(ctx, inputs)?.with_ai_loader(move |_| {
                         loaded.fetch_add(1, Ordering::SeqCst);
                         Ok(Arc::clone(&ai))
                     });
@@ -948,5 +966,224 @@ fn ai_map_bridge_capture_error_at_wake_returns_the_retained_fault_arc() {
         );
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         assert_eq!(trigger_after_fault(&mut session), Value::Null);
+    }
+}
+
+struct BorrowedMapHost<'a>(&'a mut MapStartupHost);
+impl Host for BorrowedMapHost<'_> {
+    fn native(&mut self, name: &str, args: &[Value]) -> Result<Value, String> {
+        self.0.native(name, args)
+    }
+    fn begin_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.0.begin_script_call(name, args)
+    }
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        owner: pcx_script::eval::InitializedVmCall<'_>,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.0.begin_initialized_script_call(name, args, owner)
+    }
+}
+
+fn initialize_ai_from_nested_global(host: &mut MapStartupHost) -> Result<Value, pcx_script::Error> {
+    let syntax = pcx_script::parse_script("type player extends handle\nnative Player takes integer p returns player\nnative StartCampaignAI takes player p, string path returns nothing\nglobals\ninteger started=initial()\nendglobals\nfunction launch takes nothing returns nothing\ncall StartCampaignAI(Player(0),\"observed.ai\")\nendfunction\nfunction initial takes nothing returns integer\ncall launch()\nreturn 1\nendfunction\n").unwrap();
+    let program = pcx_script::resolve(&syntax).unwrap();
+    let mut vm = pcx_script::Vm::new(&program, BorrowedMapHost(host));
+    vm.init_globals()?;
+    Ok(vm.global("started"))
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn ai_map_bridge_plain_host_and_nested_map_initializer_cannot_acquire_observer_owner() {
+    for (native, watch) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut session, loads) = publish_with_observers(native, AI, "", watch);
+        let player = session
+            .host()
+            .unwrap()
+            .native("Player", &[Value::Int(0)])
+            .unwrap();
+        let direct = session.host().unwrap().begin_script_call(
+            "StartCampaignAI",
+            &[player, Value::Str("observed.ai".into())],
+        );
+        if watch {
+            assert!(direct.unwrap_err().contains("owning map VM"));
+        } else {
+            assert!(direct.unwrap().is_none());
+        }
+        assert_eq!(loads.load(Ordering::SeqCst), 0);
+        let result = initialize_ai_from_nested_global(session.host().unwrap());
+        if watch {
+            assert!(result.unwrap_err().to_string().contains("owning map VM"));
+        } else {
+            assert_eq!(result.unwrap(), Value::Int(1));
+        }
+        assert_eq!(loads.load(Ordering::SeqCst), usize::from(!watch));
+        assert_eq!(
+            bank(&mut session, 0, "PLAYER_STATE_RESOURCE_GOLD"),
+            Value::Int(if watch { 0 } else { 7 })
+        );
+        assert_eq!(session.global("calls"), Some(Value::Int(0)));
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn ai_map_bridge_later_registration_keeps_initialized_owner_and_refuses_unowned_wakes() {
+    use peacecraft3::map_script_session::TimerSessionError;
+    for native in [false, true] {
+        for origin in 0..3 {
+            let (mut session, loads) = publish_with_observers(
+                native,
+                AI,
+                "call SetPlayerState(Player(0),PLAYER_STATE_RESOURCE_LUMBER,value+1)",
+                false,
+            );
+            match origin {
+                0 => {
+                    start(&mut session).unwrap();
+                }
+                1 => {
+                    let host = session.host().unwrap();
+                    let player = host.native("Player", &[Value::Int(0)]).unwrap();
+                    host.native(
+                        "StartCampaignAI",
+                        &[player, Value::Str("observed.ai".into())],
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    initialize_ai_from_nested_global(session.host().unwrap()).unwrap();
+                }
+            }
+            assert_eq!(loads.load(Ordering::SeqCst), 1);
+            assert_eq!(session.global("calls"), Some(Value::Int(0)));
+            let watched = session.global("watched").unwrap();
+            let state = session.global("PLAYER_STATE_RESOURCE_GOLD").unwrap();
+            let host = session.host().unwrap();
+            let player = host.native("Player", &[Value::Int(0)]).unwrap();
+            let op = host.native("ConvertLimitOp", &[Value::Int(2)]).unwrap();
+            host.native(
+                "TriggerRegisterPlayerStateEvent",
+                &[watched, player, state, op, Value::Real(9.)],
+            )
+            .unwrap();
+            let result = if native {
+                session.advance_native_frame(
+                    Some(pcx_play::native_game_clock::FrameInput {
+                        game_elapsed: Duration::from_millis(125),
+                        real_elapsed_ms: 125,
+                    }),
+                    128,
+                )
+            } else {
+                session.advance_timers(0.125, 128)
+            };
+            if origin == 0 {
+                result.unwrap();
+                assert_eq!(session.global("calls"), Some(Value::Int(1)));
+                assert_eq!(session.global("firstSeen"), Some(Value::Int(31)));
+                assert_eq!(
+                    bank(&mut session, 1, "PLAYER_STATE_RESOURCE_LUMBER"),
+                    Value::Int(32)
+                );
+            } else {
+                let error = result.unwrap_err();
+                assert!(matches!(error, TimerSessionError::Ai(_)), "{error}");
+                assert!(
+                    error.to_string().contains("initializer or direct host"),
+                    "{error}"
+                );
+                assert_eq!(session.global("calls"), Some(Value::Int(0)));
+                assert_eq!(
+                    bank(&mut session, 0, "PLAYER_STATE_RESOURCE_GOLD"),
+                    Value::Int(7)
+                );
+                assert_eq!(
+                    bank(&mut session, 0, "PLAYER_STATE_RESOURCE_LUMBER"),
+                    Value::Int(22)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn ai_map_bridge_ordinary_map_thread_can_start_observers_after_resuming_a_park() {
+    for native in [false, true] {
+        let (mut session, loads) = publish(
+            native,
+            AI,
+            "call SetPlayerState(Player(0),PLAYER_STATE_RESOURCE_LUMBER,value+1)",
+        );
+        let entry = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("startAfterPark")
+            .unwrap();
+        session.run_thread(&[entry]).unwrap();
+        assert_eq!(loads.load(Ordering::SeqCst), 0);
+        assert_eq!(session.host().unwrap().objects().parked_thread_count(), 1);
+        if native {
+            for _ in 0..4 {
+                session
+                    .advance_native_frame(
+                        Some(pcx_play::native_game_clock::FrameInput {
+                            game_elapsed: Duration::from_millis(125),
+                            real_elapsed_ms: 125,
+                        }),
+                        128,
+                    )
+                    .unwrap();
+            }
+        } else {
+            session.advance_timers(0.5, 128).unwrap();
+        }
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(session.global("calls"), Some(Value::Int(2)));
+        assert_eq!(session.global("firstSeen"), Some(Value::Int(11)));
+        assert_eq!(session.global("secondSeen"), Some(Value::Int(31)));
+        assert_eq!(
+            bank(&mut session, 1, "PLAYER_STATE_RESOURCE_LUMBER"),
+            Value::Int(32)
+        );
+        assert_eq!(session.host().unwrap().objects().parked_thread_count(), 0);
+        assert_eq!(trigger_after_fault(&mut session), Value::Null);
+    }
+}
+
+#[test]
+#[ignore = "requires explicit PCX_WAR3_EXE selected executable"]
+fn ai_map_bridge_foreign_initialized_vm_cannot_own_map_callback_ids() {
+    for (native, watch) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (mut session, loads) = publish_with_observers(native, AI, "", watch);
+        let program = session.context().unwrap().scripts.program().clone();
+        assert!(!std::ptr::eq(
+            &program,
+            session.context().unwrap().scripts.program()
+        ));
+        let result = pcx_script::Vm::new(&program, BorrowedMapHost(session.host().unwrap()))
+            .call("start", &[]);
+        if watch {
+            assert!(result.unwrap_err().to_string().contains("owning map VM"));
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(loads.load(Ordering::SeqCst), usize::from(!watch));
+        assert_eq!(session.global("calls"), Some(Value::Int(0)));
+        assert_eq!(
+            bank(&mut session, 0, "PLAYER_STATE_RESOURCE_GOLD"),
+            Value::Int(if watch { 0 } else { 7 })
+        );
     }
 }

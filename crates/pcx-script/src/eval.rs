@@ -102,6 +102,25 @@ pub enum ScriptCall {
     Spawn(Vec<crate::value::FunctionId>),
 }
 
+/// A native callback dispatch owned by a VM whose globals completed.
+/// The VM creates this single-use token at dispatch, never during initializers.
+/// It identifies the program, not a published session or global store; embedders
+/// must keep the host and globals together when transferring execution.
+///
+/// ```compile_fail
+/// let script = pcx_script::parse_script("").unwrap();
+/// let program = pcx_script::resolve(&script).unwrap();
+/// let owner = pcx_script::eval::InitializedVmCall(&program);
+/// ```
+pub struct InitializedVmCall<'a>(&'a Program);
+
+impl InitializedVmCall<'_> {
+    /// Whether this dispatch belongs to the supplied, retained program.
+    pub fn matches_program(&self, program: &Program) -> bool {
+        std::ptr::eq(self.0, program)
+    }
+}
+
 /// Everything the VM cannot decide for itself.
 pub trait Host {
     /// Absent preserves the interpreter's ordinary host-float operations.
@@ -164,6 +183,16 @@ pub trait Host {
         _args: &[Value],
     ) -> Result<Option<ScriptCall>, String> {
         Ok(None)
+    }
+
+    /// Callback dispatch after globals, while the owning VM can consume `ScriptCall`.
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        _owner: InitializedVmCall<'_>,
+    ) -> Result<Option<ScriptCall>, String> {
+        self.begin_script_call(name, args)
     }
 
     fn continue_script_call(&mut self, _value: Value) -> Result<ScriptCall, String> {
@@ -2238,11 +2267,17 @@ impl<H: Host, P: Deref<Target = Program>> Vm<'_, H, P> {
                     self.suspended_span = Some(span);
                     return Ok(ExprOut::Park(park_real_return(outer, &ret, span)));
                 }
-                if let Some(call) = self
-                    .host
-                    .begin_script_call(callee, &argv)
-                    .map_err(|why| crate::Error::run(span, why))?
-                {
+                let call = if self.ready {
+                    self.host.begin_initialized_script_call(
+                        callee,
+                        &argv,
+                        InitializedVmCall(&self.program),
+                    )
+                } else {
+                    self.host.begin_script_call(callee, &argv)
+                }
+                .map_err(|why| crate::Error::run(span, why))?;
+                if let Some(call) = call {
                     return self.dispatch_script_call(
                         call,
                         span,

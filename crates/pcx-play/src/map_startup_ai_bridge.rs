@@ -10,21 +10,6 @@ pub(super) struct Frame {
 }
 
 impl MapStartupHost {
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub fn with_ai_map_bridge_fixture(mut self) -> Self {
-        self.ai_map_bridge_fixture = true;
-        self
-    }
-    pub(super) fn ai_map_bridge_admitted(&self) -> bool {
-        #[cfg(any(test, feature = "test-fixtures"))]
-        {
-            self.ai_map_bridge_fixture
-        }
-        #[cfg(not(any(test, feature = "test-fixtures")))]
-        {
-            false
-        }
-    }
     pub(crate) fn ai_bridge_fault(&self) -> Option<Arc<String>> {
         self.ai_bridge_fault.clone()
     }

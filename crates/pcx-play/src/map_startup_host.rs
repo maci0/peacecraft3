@@ -409,8 +409,6 @@ pub struct MapStartupHost {
     ai: crate::campaign_ai::Runtime<NeutralStack>,
     ai_bridge: Option<ai_bridge::Frame>,
     ai_bridge_fault: Option<Arc<String>>,
-    #[cfg(any(test, feature = "test-fixtures"))]
-    ai_map_bridge_fixture: bool,
     research: Option<CurrentResearchInput>,
     day_night_loader: Option<DayNightLoader>,
     placement_rules: Option<crate::unit_placement::Rules>,
@@ -439,8 +437,6 @@ impl MapStartupHost {
             ai: crate::campaign_ai::Runtime::default(),
             ai_bridge: None,
             ai_bridge_fault: None,
-            #[cfg(any(test, feature = "test-fixtures"))]
-            ai_map_bridge_fixture: false,
             research: None,
             day_night_loader: None,
             placement_rules: None,
@@ -1280,8 +1276,6 @@ fn assemble_inner(
         ai: crate::campaign_ai::Runtime::default(),
         ai_bridge: None,
         ai_bridge_fault: None,
-        #[cfg(any(test, feature = "test-fixtures"))]
-        ai_map_bridge_fixture: false,
         research: current_research,
         day_night_loader: None,
         placement_tables: placement_rules.as_ref().map(|_| tables),
@@ -1338,7 +1332,26 @@ impl Host for MapStartupHost {
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
         self.check_ai_observer_native(name)?;
-        if name == "StartCampaignAI" && self.ai_map_bridge_admitted() {
+        if name == "StartCampaignAI"
+            && crate::campaign_ai::AiWorld::has_map_player_state_callbacks(self.world())
+        {
+            return Err(
+                "StartCampaignAI: requires its owning map VM after global initialization".into(),
+            );
+        }
+        self.world_mut().begin_script_call(name, args)
+    }
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        owner: pcx_script::eval::InitializedVmCall<'_>,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.check_ai_observer_native(name)?;
+        if name == "StartCampaignAI" {
+            if !owner.matches_program(self.context().scripts.program()) {
+                return self.begin_script_call(name, args);
+            }
             let (player, path) = self.campaign_ai_args(args)?;
             self.arm_ai_bridge(player)?;
             let mut captured = false;
@@ -1357,7 +1370,8 @@ impl Host for MapStartupHost {
                 .begin_pending_ai_bridge(player, false)
                 .map(|call| Some(call.unwrap_or(pcx_script::ScriptCall::Return(Value::Null))));
         }
-        self.world_mut().begin_script_call(name, args)
+        self.world_mut()
+            .begin_initialized_script_call(name, args, owner)
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
         let call = self.world_mut().continue_script_call(value)?;

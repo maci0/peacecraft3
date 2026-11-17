@@ -238,6 +238,14 @@ impl<H: Host> Host for LocalizedHost<'_, H> {
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
         self.inner.begin_script_call(name, args)
     }
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        owner: pcx_script::eval::InitializedVmCall<'_>,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.begin_initialized_script_call(name, args, owner)
+    }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
         self.inner.continue_script_call(value)
     }
@@ -324,6 +332,14 @@ impl<H: Host> Host for OwnedLocalizedHost<H> {
         args: &[Value],
     ) -> Result<Option<pcx_script::ScriptCall>, String> {
         self.inner.begin_script_call(name, args)
+    }
+    fn begin_initialized_script_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        owner: pcx_script::eval::InitializedVmCall<'_>,
+    ) -> Result<Option<pcx_script::ScriptCall>, String> {
+        self.inner.begin_initialized_script_call(name, args, owner)
     }
     fn continue_script_call(&mut self, value: Value) -> Result<pcx_script::ScriptCall, String> {
         self.inner.continue_script_call(value)
@@ -535,6 +551,53 @@ mod tests {
             pcx_script::Exec::Finished(Value::Int(7))
         );
         assert!(Arc::ptr_eq(owned.host().context(), &scripts));
+    }
+
+    #[test]
+    fn both_localized_hosts_forward_initialized_owner_only_after_nested_globals() {
+        #[derive(Default)]
+        struct Owner(Vec<bool>);
+        impl Host for Owner {
+            fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+                Err(name.into())
+            }
+            fn begin_script_call(
+                &mut self,
+                _: &str,
+                _: &[Value],
+            ) -> Result<Option<pcx_script::ScriptCall>, String> {
+                self.0.push(false);
+                Ok(Some(pcx_script::ScriptCall::Return(Value::Int(1))))
+            }
+            fn begin_initialized_script_call(
+                &mut self,
+                _: &str,
+                _: &[Value],
+                _: pcx_script::eval::InitializedVmCall<'_>,
+            ) -> Result<Option<pcx_script::ScriptCall>, String> {
+                self.0.push(true);
+                Ok(Some(pcx_script::ScriptCall::Return(Value::Int(2))))
+            }
+        }
+        let scripts = Arc::new(
+            load(
+                b"native Marker takes nothing returns integer\n",
+                b"function nested takes nothing returns integer\nreturn Marker()\nendfunction\n",
+                b"globals\ninteger first=nested()\nendglobals\n",
+                None,
+            )
+            .unwrap(),
+        );
+        let mut borrowed = scripts.vm(Owner::default());
+        borrowed.init_globals().unwrap();
+        assert_eq!(borrowed.global("first"), Value::Int(1));
+        assert_eq!(borrowed.call("nested", &[]).unwrap(), Value::Int(2));
+        assert_eq!(borrowed.host().inner.0, [false, true]);
+        let mut owned = Arc::clone(&scripts).owned_vm(Owner::default());
+        owned.init_globals().unwrap();
+        assert_eq!(owned.global("first"), Value::Int(1));
+        assert_eq!(owned.call("nested", &[]).unwrap(), Value::Int(2));
+        assert_eq!(owned.host().inner.0, [false, true]);
     }
 
     #[test]

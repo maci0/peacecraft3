@@ -1358,3 +1358,43 @@ constant native GetStartLocationY takes integer n returns real
     let world = SelectedMapNeutralHost::try_new(context.clone(), rules(), world).unwrap();
     SelectedMapNeutralHost::try_new(context, rules(), world).unwrap()
 }
+
+#[test]
+fn initialized_owner_preserves_selected_neutral_exclusion_and_forwards_other_callbacks() {
+    struct Owner;
+    impl Host for Owner {
+        fn native(&mut self, name: &str, _: &[Value]) -> Result<Value, String> {
+            Err(name.into())
+        }
+        fn begin_script_call(
+            &mut self,
+            _: &str,
+            _: &[Value],
+        ) -> Result<Option<pcx_script::ScriptCall>, String> {
+            Err("initialized owner was dropped".into())
+        }
+        fn begin_initialized_script_call(
+            &mut self,
+            name: &str,
+            _: &[Value],
+            _: pcx_script::eval::InitializedVmCall<'_>,
+        ) -> Result<Option<pcx_script::ScriptCall>, String> {
+            assert_eq!(
+                name, "Other",
+                "selected native must remain owned by its neutral decorator"
+            );
+            Ok(Some(pcx_script::ScriptCall::Return(Value::Int(17))))
+        }
+    }
+    let ctx = context(
+        257,
+        COMMON,
+        "function main takes nothing returns integer\nreturn GetPlayerNeutralPassive()+Other()\nendfunction\n",
+        "initialized neutral owner",
+    );
+    let scripts = Arc::clone(&ctx.scripts);
+    let host = SelectedMapNeutralHost::try_new(ctx, rules(), Owner).unwrap();
+    let selected = host.selected_result();
+    let mut vm = scripts.owned_vm(host);
+    assert_eq!(vm.call("main", &[]).unwrap(), Value::Int(selected + 17));
+}
