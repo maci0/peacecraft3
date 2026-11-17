@@ -417,3 +417,7 @@ impl ObjectHost {
 #[cfg(test)]
 #[path = "play_music_host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "regular_music_loop.rs"]
+pub(crate) mod loop_rules;
