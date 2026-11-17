@@ -7621,3 +7621,14 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   retained sinks and same-frame thematic/volume/selection ordering remain open.
   Turning transition safety and AI callback fault/cleanup validation are active;
   their candidates are not yet integrated or qualified for production.
+
+  Bounded stationary timed turning (`45b68d50`) is now integrated. Admission
+  excludes actual weapon acquisition, retained captain/harvest ownership,
+  movement, pause and unqualified active work; internal stop preparation and
+  acquisition-range mutations refuse before changing an active static relation.
+  All 26 selected checks and 3,293 normal library tests pass (155 explicit
+  ignores), along with strict native/WASM checks and both library builds.
+  The original 1,024-sample control map is unavailable for a fresh replay.
+  Separate test-only unchanged-chapter Counter probes await app validation;
+  GUI startup and unsupported wider turning classes are unchanged. Combined-main
+  validation remains separate from these component receipts.
