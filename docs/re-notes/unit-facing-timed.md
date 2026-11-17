@@ -3,9 +3,10 @@
 Selected input is Legacy `1.29.2.9231`, executable SHA256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
 Normal native-heading dispatch admits the direct-facing branch, including
-negative angles. Stationary long relations are retained only for tests and the
-`test-fixtures` diagnostic feature. General long-turn admission and full native
-turn parity remain open.
+negative angles. Long relations admit a bounded stationary class whose actual
+combat weapon cannot automatically acquire a target. Moving, paused, retained
+captain/harvest ownership and active work remain excluded. General long-turn
+admission and full native turn parity remain open.
 
 ## Source and actual callers
 
@@ -244,3 +245,55 @@ the later gated tree. Final default/all-feature integration validation belongs t
 the release intake. The typed target/rules state and diagnostic regression suite
 remain preserved for continuation; no new state or acquisition algorithm was
 added for the safety gate.
+
+
+## Acquisition-disabled stationary admission (2026-11-17)
+
+The diagnostic-only gate is replaced by a readonly admission check on the actual
+combat consumer: no weapon, or a resolved weapon acquisition range at or below
+zero. This is an implementation admission boundary, not a new native game rule.
+The public `SetUnitAcquireRange` override is still stored separately and combat
+does not consume it; setting that override to zero does not qualify an otherwise
+acquiring weapon. Neither combat cancellation nor automatic acquisition changes.
+The original shown/idle/unpaused/no-cast/no-form/no-production restrictions stay
+in place. Existing captain membership and harvest ownership also exclude a unit.
+
+The common native preflight refuses changed acquisition-range overrides during a
+static relation before order observation. Internal steering preparation now
+checks both destinations and stop requests; the former destination-only check
+allowed nearby item operations, guard release and autocast toggles to reach
+combat cleanup. Explicit Stop follows its separate admitted order path; direct
+facing, replacement timed requests and death/removal retain their existing
+lifecycle. Projected replacement records conservatively check the live relation.
+
+The caller audit finds Holy Light and Chain Lightning order entry only through
+the two public target-order dispatch forms. Both reach the common static-heading
+preflight before their early combat cleanup. Their retained walking phases are
+excluded by the stationary admission checks. Captain recruitment prepares its
+guard and steering before enrollment; retained members are excluded because
+ClearCaptainTargets can clear state without preparing steering. Harvest roots
+prepare steering before publication; retained harvest owners are excluded.
+No new native cancellation behavior is inferred from these recreation callers.
+
+Public Counter regressions cover acquisition-positive, paused, moving and
+captain-member refusal with unit/clock/event preservation, and acquisition-zero
+relation survival through Counter advancement. The guard fixture exercises actual
+AddDefenders recruitment and RemoveGuardPosition release, checking full units,
+clock, guard state, membership and events on refusal, then explicit Stop recovery.
+The existing direct-facing/replacement/Stop and death/removal regressions remain.
+
+The retained native power/visual/arccosine JSON witnesses survive in the private
+0.18.0 audit. The timed-control JSON also survives, but its original backing map
+and raw captures are unavailable after the temporary-directory reset. The 1,024
+sample replay is therefore not counted as a fresh pass. These changes do not
+establish unchanged Human01/Undead02 Counter completion, default-acquisition
+support, moving/paused long turns or full native timing parity.
+
+The final core cohort passes all 26 exact selected checks (one test executed per
+invocation), including the retained 65/44/169 native numeric witnesses, plus
+3,293 ordinary library tests with zero failures and 155 explicit ignores.
+Strict native and WASM Clippy and both library builds pass. Private receipts
+and frozen source hashes are in `/tmp/pc3-continue-turning-validation/`;
+`run-v1` through `run-v4` retain the failed fixture attempts separately.
+The new application-only Counter chapter probes remain separate from that core
+cohort; no unchanged-map application result is claimed here.

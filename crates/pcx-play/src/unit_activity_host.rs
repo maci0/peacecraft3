@@ -1710,9 +1710,7 @@ impl ObjectHost {
         name: &str,
     ) -> Result<Option<PreparedSteer>, Error> {
         let fail = |detail: &str| self.inner.error(name, Failure::UnitActivity(detail.into()));
-        if destination.is_some() {
-            self.require_no_static_heading(unit, name)?;
-        }
+        self.require_no_static_heading(unit, name)?;
         if destination.is_some() && self.unit_uprooted(unit) {
             return Err(fail(UPROOTED_MOVEMENT));
         }
@@ -2460,12 +2458,6 @@ impl ObjectHost {
                     .and_then(|rules| rules.profile.as_ref())
                     .ok_or_else(|| fail("native timed-facing source profile missing"))?;
                 if duration > profile.timed_instant_limit {
-                    // shortcut: long relations stay diagnostic-only until automatic acquisition cancellation is qualified.
-                    if !cfg!(any(test, feature = "test-fixtures")) {
-                        return Err(fail(
-                            "long timed-facing relations are diagnostic-only: automatic acquisition interaction is not qualified",
-                        ));
-                    }
                     heading = self.prepare_native_timed_facing(unit, target, duration)?;
                 }
             }

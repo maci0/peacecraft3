@@ -252,15 +252,18 @@ impl ObjectHost {
             return Ok(heading);
         };
         let activity = record.activity.as_ref().expect("timed activity");
-        // shortcut: movement and paused relations need qualification before those transitions are admitted.
+        // shortcut: automatic acquisition, movement and paused relations require further native qualification.
         if !record.shown
             || self.current_unit_order(unit)? != 0
+            || self.campaign_ai.captain_member_role(unit).is_some()
+            || self.harvest_owns_unit(unit)
             || self.curse_has_form_relation(unit)
             || record.morph.is_some()
             || record.construction.is_some()
             || record.paused_since.is_some()
             || record.combat.as_ref().is_some_and(|c| {
                 c.dead
+                    || c.weapon.is_some_and(|w| w.acquire > 0.)
                     || c.target.is_some()
                     || c.attack_destination.is_some()
                     || c.ground_target.is_some()
@@ -277,7 +280,7 @@ impl ObjectHost {
             || self.autocast_has_curse_phase(unit)
         {
             return Err(self.heading_error(
-                "timed facing requires a qualified stationary unit without an active order",
+                "timed facing requires a qualified stationary unit without automatic acquisition or an active order",
             ));
         }
         heading.target = Some(Target::Static(target));
@@ -369,6 +372,9 @@ impl ObjectHost {
                 order_shape(args.get(1))
                     && matches!(args,
                 [_, _, Value::Handle(target)] if matches!(self.inner.entry(*target), Ok(Entry::Unit { .. } | Entry::Destructable { .. } | Entry::Item { .. })))
+            }
+            "SetUnitAcquireRange" => {
+                matches!(args, [_, Value::Real(range)] if range.is_finite() && record.acquire_range != Some(*range))
             }
             "PauseUnit" => matches!(args, [_, Value::Bool(true)]),
             "ShowUnit" => record.shown && matches!(args, [_, Value::Bool(false)]),
