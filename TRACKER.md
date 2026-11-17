@@ -7644,3 +7644,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Combined-main core checks are now running. The first unchanged Human01
   Counter probe lacked full input-drain accounting, so its green return is not
   accepted as a campaign horizon; strengthened chapter probes are in progress.
+
+  Corrected combined-main validation passes all 33 steps: 3,308 core tests with
+  155 explicit ignores, 27 exact selected-source/witness checks, formatting,
+  native all-target and WASM library Clippy, and both library builds. The first
+  combined run caught seven feature-enabled music Clippy diagnostics; `081123de`
+  fixes the needless borrows and nested conditional without changing behavior.
+  The failed run remains separate from the corrected acceptance receipt.
+
+  Both strengthened unchanged RoC Human01/Undead02 Counter probes now pass and
+  their test-only callers (`5c73a85a`, `22ef2cad`) are integrated. Each consumes
+  all 299,975,000,000 ns accepted after initial runtime binding, ends with zero
+  pending input, and advances the source Game point after control restoration.
+  The initial weak probes are excluded. This is headless recreation startup
+  and a bounded input horizon, not mission completion, GUI rollout or native,
+  rendered or audible parity. The bounded turning task is delivered; the next
+  acquisition slice must connect the existing stored range override to the
+  actual combat consumer before widening admission.
