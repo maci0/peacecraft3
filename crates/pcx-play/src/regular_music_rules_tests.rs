@@ -37,6 +37,13 @@ fn fixture() -> BTreeMap<u32, u8> {
         (0x4a41a3, 0x5add50),
         (0x4a41b4, 0x469010),
         (0x4a41ba, 0x5d8af0),
+        (0x586292, 0x5c30a0),
+        (0x5862f6, 0x5d8af0),
+        (0x4a41d3, 0x5add50),
+        (0x4a41e8, 0x469010),
+        (0x4a41ee, 0x5d8af0),
+        (0x5d8c14, 0x5d8c30),
+        (0x5d8cf6, 0x5d8d40),
         (0x4a9352, 0x469010),
         (0x4a9358, 0x5da520),
     ] {
@@ -103,6 +110,32 @@ fn fixture() -> BTreeMap<u32, u8> {
         &[0x83, 0x7d, 0x0c, 0, 0x0f, 0x44, 0x45, 0x10, 0x50],
     );
     emit(&mut m, 0x4a9357, &[0x50]);
+    emit(
+        &mut m,
+        0x4a41d8,
+        &[
+            0x85, 0xc0, 0x75, 0x1a, 0xff, 0x75, 0x10, 0x8b, 0x4d, 0x08, 0xff, 0x75, 0x0c,
+        ],
+    );
+    emit(&mut m, 0x4a41e5, &[0x6a, 0xfd]);
+    emit(&mut m, 0x4a41e7, &[0x50]);
+    emit(&mut m, 0x5d8c0e, &[0xff, 0x75, 0x0c]);
+    emit(&mut m, 0x5d8cef, &[0xff, 0x75, 0x0c]);
+    immediate(
+        &mut m,
+        0x5d8bc7,
+        &[0x8b, 0x35],
+        super::super::loop_rules::Predicate::fixture().playlist_count_global,
+    );
+    immediate(&mut m, 0xe84440, &[], 0x2900);
+    emit(&mut m, 0x2900, b"FixtureGlueTune\0");
+    immediate(&mut m, 0x586279, &[0x68], 0x2400);
+    immediate(&mut m, 0x58626c, &[0xff, 0x35], 0x2800);
+    emit(
+        &mut m,
+        0x5862ed,
+        &[0x6a, 0, 0x6a, 0, 0x6a, 0xf7, 0x6a, 7, 0x53],
+    );
     emit(&mut m, 0x4a41b3, &[0x50]);
     emit(&mut m, 0x4a41b9, &[0x50]);
     emit(&mut m, 0x5d6d36, &41u32.to_le_bytes());
@@ -127,6 +160,7 @@ fn decode(map: &BTreeMap<u32, u8>) -> Result<Rules, String> {
         },
         origin(),
         Arc::new(crate::script_random::profile::fixture()),
+        super::super::loop_rules::Predicate::fixture(),
     )
 }
 #[test]
@@ -141,6 +175,7 @@ fn regular_music_rules_derive_nonstock_callback_units_names_fold_and_limits() {
     assert_eq!(rules.random_index, -3);
     assert_eq!(rules.plain_play_ms, 0);
     assert_eq!(rules.map_random_index, -1);
+    assert_eq!(rules.menu_start(), ("FixtureGlueTune", 7, -9, 0, 0));
     assert_eq!(
         rules.edition_key("Tune", 7).unwrap(),
         "prefix-Tune-edition-7.list"
@@ -152,9 +187,11 @@ fn regular_music_rules_derive_nonstock_callback_units_names_fold_and_limits() {
 #[test]
 fn regular_music_rules_refuse_broken_call_stream_fold_and_duration_relationships() {
     for at in [
-        0x4a9348, 0x4a9349, 0x4a934d, 0x4a9352, 0x4a9357, 0x4a9358, 0x4a41a3, 0x4a41aa, 0x4a41af,
-        0x4a41b0, 0x4a41b3, 0x4a41b4, 0x4a41b9, 0x4a41ba, 0x5d700d, 0x5d8bef, 0x845d7c, 0xa99c27,
-        0x5d6d30, 0x5ce482, 0x5d8b2d,
+        0x58626e, 0x58627b, 0x586292, 0x5862ed, 0x5862f3, 0x5862f5, 0x5862f6, 0x4a41d3, 0x4a41db,
+        0x4a41e5, 0x4a41e7, 0x4a41ee, 0x5d8bc9, 0x5d8c0e, 0x5d8c14, 0x5d8cef, 0x5d8cf6, 0x4a9348,
+        0x4a9349, 0x4a934d, 0x4a9352, 0x4a9357, 0x4a9358, 0x4a41a3, 0x4a41aa, 0x4a41af, 0x4a41b0,
+        0x4a41b3, 0x4a41b4, 0x4a41b9, 0x4a41ba, 0x5d700d, 0x5d8bef, 0x845d7c, 0xa99c27, 0x5d6d30,
+        0x5ce482, 0x5d8b2d,
     ] {
         let mut map = fixture();
         *map.get_mut(&at).unwrap() ^= 0x40;

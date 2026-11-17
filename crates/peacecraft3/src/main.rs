@@ -46,6 +46,12 @@ mod campaign_unit_panel;
 mod campaign_unit_shadows;
 mod campaign_visibility;
 mod internal_resolution;
+#[cfg(not(target_arch = "wasm32"))]
+mod music_wall;
+#[cfg(not(target_arch = "wasm32"))]
+mod regular_music_epoch;
+#[cfg(not(target_arch = "wasm32"))]
+mod regular_music_playback;
 mod virtual_keys;
 use peacecraft3::fdf;
 #[cfg(all(test, not(target_arch = "wasm32")))]

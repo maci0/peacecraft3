@@ -646,6 +646,7 @@ pub(crate) fn host_inputs(
     let mut item_visibility = pcx_play::item_visibility::Rules::fixture();
     item_visibility.image_sha256 = rule(RuleKind::Slots).image_sha256();
     MapStartupInputs {
+        regular_music_rules: None,
         thematic_music_rules: None,
         regular_music_volume_rules: None,
         cached_unit_source_maps: Vec::new(),

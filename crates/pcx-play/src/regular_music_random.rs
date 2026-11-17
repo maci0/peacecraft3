@@ -50,6 +50,17 @@ impl AudioRandom {
         self.initialized_at
     }
 
+    pub(super) fn rebind(&self, rules: Arc<Rules>) -> Result<Self, String> {
+        // The profile key binds the complete input image and decoded generator windows.
+        if self.rules.random.key != rules.random.key {
+            return Err("audio random profile change cannot preserve the live stream".into());
+        }
+        Ok(Self {
+            rules,
+            ..self.clone()
+        })
+    }
+
     /// Music and simple labels draw even when the list has only one member.
     pub fn choose(&mut self, members: usize, work: &mut usize) -> Result<usize, String> {
         let members = count(members)?;

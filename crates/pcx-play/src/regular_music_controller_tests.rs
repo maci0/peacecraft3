@@ -2,6 +2,34 @@ use super::*;
 fn controller() -> Controller {
     Controller::new(Arc::new(Rules::fixture()), 0xabcd_0123)
 }
+
+#[test]
+fn regular_controller_source_epoch_rebinds_policy_and_preserves_only_compatible_random() {
+    let mut old = controller();
+    play(&mut old, "old.ogg", 0);
+    old.random.choose_non_repeating("row", 4, &mut 100).unwrap();
+    let mut expected = old.random.clone();
+    let mut rules = Rules::fixture();
+    rules.initial_level = 23;
+    rules.fade_interval_ms = 41;
+    let mut next = old.next_epoch(Arc::new(rules.clone())).unwrap();
+    assert_eq!(next.target_level(), 23);
+    assert!(next.regular().is_none() && next.selection_name().is_none());
+    assert_eq!(
+        next.random.choose(1009, &mut 100).unwrap(),
+        expected.choose(1009, &mut 100).unwrap()
+    );
+    play(&mut next, "new.ogg", 0);
+    next.apply(Operation::Stop { fade: true }, None, 0, &mut 100)
+        .unwrap();
+    assert!(next.pump(40, &mut 100).unwrap().is_empty());
+    let mut work = 100;
+    assert!(next.pump(41, &mut work).unwrap().is_empty());
+    assert_eq!(work, 99);
+    Arc::make_mut(&mut rules.random).key[0] ^= 1;
+    assert!(old.next_epoch(Arc::new(rules)).is_err());
+    assert!(old.regular().is_some());
+}
 fn play(c: &mut Controller, name: &str, fade: u32) -> Vec<Effect> {
     c.apply(
         Operation::Play {
@@ -242,4 +270,46 @@ fn regular_controller_invalid_theme_preserves_existing_voices_and_fade() {
             expected.pump(50, &mut 100).unwrap()
         );
     }
+}
+
+#[test]
+fn regular_controller_resume_after_processed_eof_reopens_member_and_keeps_next_callback() {
+    let mut c = controller();
+    c.apply(
+        Operation::Play {
+            name: "set".into(),
+            position_ms: 12,
+            fade_ms: 0,
+        },
+        Some(vec!["a.ogg".into(), "b.ogg".into()]),
+        0,
+        &mut 100,
+    )
+    .unwrap();
+    let old = c.regular().unwrap().clone();
+    c.finished(Role::Regular, old.serial, 7, &mut 100, None)
+        .unwrap();
+    assert!(c.regular().unwrap().ended);
+    let mut expected_random = c.random.clone();
+    let effects = c.apply(Operation::Resume, None, 8, &mut 100).unwrap();
+    let reopened = c.regular().unwrap().clone();
+    assert_ne!(reopened.serial, old.serial);
+    assert_eq!(reopened.path, old.path);
+    assert_eq!(reopened.start_ms, 0);
+    assert!(reopened.playing && !reopened.ended);
+    assert!(effects.contains(&Effect::Retire(old.serial)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Start(v) if v.serial == reopened.serial))
+    );
+    assert!(!effects.contains(&Effect::Resume(old.serial)));
+    assert_eq!(
+        c.random.choose(31, &mut 100).unwrap(),
+        expected_random.choose(31, &mut 100).unwrap()
+    );
+    assert!(c.pump(25, &mut 100).unwrap().is_empty());
+    c.pump(26, &mut 100).unwrap();
+    assert_ne!(c.regular().unwrap().path, reopened.path);
+    assert_ne!(c.regular().unwrap().serial, reopened.serial);
 }

@@ -93,8 +93,52 @@ pub(crate) struct Chapters {
     /// Configuration request in flight and the binding revision it carries.
     pending: Option<(u32, u64)>,
     revision: u64,
+    audio_revision: u64,
+    audio_reader: Option<Arc<pcx_assets::Resolver>>,
     /// The loading screen of the mission just launched, handed to [`begin_loading`].
     loading: Option<peacecraft3::campaign_loading::LoadingRequest>,
+}
+
+impl Chapters {
+    pub(crate) fn audio_sources(
+        &self,
+        launcher: &crate::launch_gui::Launcher,
+    ) -> Option<
+        Result<
+            (
+                crate::regular_music_epoch::SourceFrame,
+                Arc<pcx_assets::Resolver>,
+            ),
+            String,
+        >,
+    > {
+        let dir = crate::launch_gui::selected_install(launcher)?;
+        if self.key.as_ref() != Some(&(dir, launcher.mode())) {
+            return None;
+        }
+        Some((|| {
+            let recipe = self.recipe.as_ref().ok_or_else(|| {
+                self.error
+                    .clone()
+                    .unwrap_or_else(|| "menu client source is unavailable".into())
+            })?;
+            let bundle = recipe
+                .client_sources()
+                .ok_or("menu client module generation is absent")?;
+            let reader = self
+                .audio_reader
+                .clone()
+                .ok_or("menu source reader is absent")?;
+            Ok((
+                crate::regular_music_epoch::SourceFrame {
+                    revision: self.audio_revision,
+                    bundle,
+                    edition: recipe.edition(),
+                },
+                reader,
+            ))
+        })())
+    }
 }
 
 /// Selection state for the real `CampaignMenu` screen.
@@ -157,7 +201,7 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(
             Update,
             (
-                refresh,
+                refresh.before(crate::regular_music_epoch::MusicSourceUpdate),
                 populate,
                 launch,
                 render_campaign_panel,
@@ -292,7 +336,7 @@ fn parse_campaigns(member: &str, text: &str) -> Result<(Vec<Campaign>, Vec<Chapt
 
 fn read_campaigns(dir: &Path, mode: &GameMode) -> Result<Chapters, String> {
     let recipe = campaign_recipe(dir, *mode)?;
-    let reader = recipe.base_resolver().map_err(|error| error.to_string())?;
+    let reader = Arc::new(recipe.base_resolver().map_err(|error| error.to_string())?);
     let member = index_member(mode);
     let content = reader
         .resolve_bounded(member, INDEX_LIMITS.max_bytes as u64)
@@ -301,6 +345,7 @@ fn read_campaigns(dir: &Path, mode: &GameMode) -> Result<Chapters, String> {
     let (campaigns, chapters) = parse_campaigns(member, text)?;
     Ok(Chapters {
         recipe: Some(recipe),
+        audio_reader: Some(reader),
         campaigns,
         entries: chapters,
         ..default()
@@ -311,6 +356,7 @@ fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chap
     let Some(dir) = crate::launch_gui::selected_install(&launcher) else {
         chapters.key = None;
         chapters.recipe = None;
+        chapters.audio_reader = None;
         chapters.campaigns.clear();
         chapters.entries.clear();
         chapters.error = None;
@@ -320,15 +366,24 @@ fn refresh(launcher: Res<crate::launch_gui::Launcher>, mut chapters: ResMut<Chap
     if chapters.key.as_ref() == Some(&key) {
         return;
     }
+    let Some(revision) = chapters.audio_revision.checked_add(1) else {
+        chapters.recipe = None;
+        chapters.audio_reader = None;
+        chapters.error = Some("menu audio source publication counter exhausted".into());
+        return;
+    };
+    chapters.audio_revision = revision;
     match read_campaigns(&key.0, &key.1) {
         Ok(index) => {
             chapters.recipe = index.recipe;
+            chapters.audio_reader = index.audio_reader;
             chapters.campaigns = index.campaigns;
             chapters.entries = index.entries;
             chapters.error = None;
         }
         Err(error) => {
             chapters.recipe = None;
+            chapters.audio_reader = None;
             chapters.campaigns.clear();
             chapters.entries.clear();
             chapters.error = Some(error);
@@ -2424,7 +2479,11 @@ pub(crate) mod tests {
         map: &str,
         expansion: bool,
     ) -> (App, Arc<CampaignRecipe>) {
-        let mut app = chapter_app(install_dir, expansion);
+        let app = chapter_app(install_dir, expansion);
+        enqueue_in_app(app, map)
+    }
+
+    fn enqueue_in_app(mut app: App, map: &str) -> (App, Arc<CampaignRecipe>) {
         let (campaign, mission, indexed_recipe) = locate_chapter(&app, map);
         app.world_mut()
             .run_system_once(
@@ -2456,6 +2515,29 @@ pub(crate) mod tests {
         }
         assert_published_chapter(&mut app, map, Arc::clone(&indexed_recipe), true);
         (app, indexed_recipe)
+    }
+
+    pub(crate) fn audio_fixture_app() -> App {
+        crate::campaign_audio_probe::assert_null_audio_environment();
+        let (install, _, expansion) = selected_chapter_env();
+        let mut app = chapter_app(install, expansion);
+        app.add_plugins((
+            bevy::asset::AssetPlugin::default(),
+            bevy::audio::AudioPlugin::default(),
+        ));
+        app.init_resource::<crate::intro::Intro>();
+        app.init_resource::<crate::menu_settings::Backend>();
+        crate::menu_audio::install(&mut app);
+        crate::campaign_audio::install(&mut app);
+        crate::campaign_ack::install(&mut app);
+        app.update();
+        app
+    }
+
+    pub(crate) fn started_audio_app() -> App {
+        let app = audio_fixture_app();
+        let (_, map, _) = selected_chapter_env();
+        enqueue_in_app(app, &map).0
     }
 
     pub(crate) fn started_app() -> App {

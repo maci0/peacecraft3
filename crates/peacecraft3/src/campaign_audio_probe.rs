@@ -32,7 +32,7 @@ const SINK_BATCHES: u32 = 8;
 /// Distance of the probe's move order from the hero, in map units.
 const MOVE_OFFSET: f32 = 256.0;
 
-fn begin(app: &mut App) -> CampaignRuntime {
+pub(crate) fn begin(app: &mut App) -> CampaignRuntime {
     let identity = {
         let session = app.world().resource::<MapScriptSession<MapStartupHost>>();
         StartIdentity::from_context(
@@ -117,11 +117,9 @@ fn skin_playlist(app: &App, section: &str, key: &str) -> Vec<String> {
 #[test]
 #[ignore = "requires unchanged Human01 via PCX_NATIVE_CHAPTER_* selecting roc and a private XDG_DATA_HOME under .scratch"]
 fn human01_opening_audio_reaches_entities() {
-    let mut app = crate::native_campaign::tests::started_app();
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = crate::native_campaign::tests::started_audio_app();
     peacecraft3::script_audio::install(&mut app);
-    crate::campaign_audio::install(&mut app);
-    crate::campaign_ack::install(&mut app);
-    app.init_resource::<crate::menu_settings::Backend>();
     let mut runtime = begin(&mut app);
     let mut last_refusal = None;
     let mut voices_seen = BTreeSet::new();
@@ -183,10 +181,15 @@ fn human01_opening_audio_reaches_entities() {
         "map playlist resumes after the thematic file: {music_seen:?} vs {playlist:?}"
     );
     let hero = select_hero(&mut app);
-    app.update();
+    // Observe actual producer publication before null-device EOF/cleanup, not audible lifetime.
+    app.world_mut()
+        .run_system_once(crate::campaign_ack::unit_voices)
+        .unwrap();
     assert_eq!(playing_sounds(&mut app), ["ArthasWhat"]);
     move_hero_near(&mut app, hero);
-    app.update();
+    app.world_mut()
+        .run_system_once(crate::campaign_ack::unit_voices)
+        .unwrap();
     assert_eq!(
         playing_sounds(&mut app),
         ["ArthasWhat", "ArthasYes"],
@@ -203,7 +206,7 @@ fn human01_opening_audio_reaches_entities() {
 }
 
 /// Selects Arthas through the same command log the pointer path writes.
-fn select_hero(app: &mut App) -> HandleId {
+pub(crate) fn select_hero(app: &mut App) -> HandleId {
     app.world_mut().resource_scope(
         |world, mut input: Mut<crate::campaign_input::CampaignInput>| {
             let mut session = world.resource_mut::<MapScriptSession<MapStartupHost>>();
@@ -257,7 +260,7 @@ fn playing_sounds(app: &mut App) -> Vec<String> {
 /// Refuses to open an audio device unless the process cannot reach the desktop: no
 /// display, a PulseAudio address that does not exist and an ALSA configuration that
 /// routes the default device to the null plugin. Everything stays under `.scratch`.
-fn assert_null_audio_environment() {
+pub(crate) fn assert_null_audio_environment() {
     for name in ["DISPLAY", "WAYLAND_DISPLAY"] {
         assert!(std::env::var_os(name).is_none(), "{name} must be unset");
     }

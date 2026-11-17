@@ -40,6 +40,8 @@ const MAX_REPORTS: usize = 256;
 pub(crate) struct CampaignAudioSet;
 
 pub(crate) fn install(app: &mut App) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::regular_music_epoch::install(app);
     app.init_resource::<CampaignAudio>()
         .init_resource::<Assets<AudioSource>>()
         .add_systems(
@@ -79,7 +81,7 @@ impl Rng {
 }
 
 /// Source reader and race context for one published session.
-struct Bank {
+pub(crate) struct Bank {
     reader: Arc<Resolver>,
     skin: SkinTable,
     sections: Vec<String>,
@@ -95,15 +97,16 @@ struct Bank {
 /// One `UI\SoundInfo` row: the columns every sound table shares.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SoundRow {
-    name: String,
+    pub(crate) name: String,
+    pub(crate) record: String,
     /// Archive paths of the alternatives; one is drawn per start.
-    members: Vec<String>,
+    pub(crate) members: Vec<String>,
     /// `Volume` as a fraction of the script's range.
     volume: f32,
-    pitch: f32,
-    pitch_variance: f32,
+    pub(crate) pitch: f32,
+    pub(crate) pitch_variance: f32,
     channel: i32,
-    flags: Vec<String>,
+    pub(crate) flags: Vec<String>,
 }
 
 /// Plays one sound row; the entity ends with its sound.
@@ -111,6 +114,13 @@ pub(crate) struct SoundRow {
 pub(crate) struct GameSound {
     pub name: String,
     channel: i32,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SoundOutput<'w, 's> {
+    pub commands: Commands<'w, 's>,
+    pub assets: ResMut<'w, Assets<AudioSource>>,
+    pub live: Query<'w, 's, (Entity, &'static GameSound)>,
 }
 
 impl Bank {
@@ -140,7 +150,7 @@ impl Bank {
     }
 
     /// The unique row of a sound table named `name` (ASCII case-insensitive).
-    fn row(&mut self, table: &'static str, name: &str) -> Result<SoundRow, String> {
+    pub(crate) fn row(&mut self, table: &'static str, name: &str) -> Result<SoundRow, String> {
         if !self.tables.contains_key(table) {
             let bytes = self.read(table, MAX_TABLE_BYTES)?;
             let parsed = pcx_slq::Table::parse_bounded(&bytes, TABLE_COORDINATES)
@@ -199,6 +209,10 @@ impl Bank {
             .collect();
         Ok(SoundRow {
             name: name.to_owned(),
+            record: row
+                .by_name("SoundName")
+                .ok_or_else(|| fail("SoundName is absent"))?
+                .to_owned(),
             members,
             volume: volume / maximum,
             pitch,
@@ -206,6 +220,51 @@ impl Bank {
             channel,
             flags,
         })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn music_source(
+        &self,
+        member: &str,
+        limit: u64,
+        edition: i32,
+    ) -> Result<(Vec<u8>, pcx_play::scripts::AssetIdentity), String> {
+        let asset = self
+            .reader
+            .resolve_bounded(member, limit)
+            .map_err(|error| error.to_string())?;
+        let (_, origin) = pcx_play::campaign_assets::identity(
+            &asset,
+            &format!("version enumerand {edition}"),
+            16 << 10,
+        )?;
+        Ok((asset.bytes, origin))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn regular_playlist(
+        &self,
+        rules: &pcx_play::playercolor_host::RegularMusicRules,
+        edition: i32,
+        name: &str,
+    ) -> Result<Vec<String>, String> {
+        let key = rules.edition_key(name, edition)?;
+        for wanted in &self.sections {
+            let Some(section) = self.skin.sections().iter().find(|s| &s.name == wanted) else {
+                continue;
+            };
+            let mut hits = section
+                .entries
+                .iter()
+                .filter(|(entry, _)| entry.eq_ignore_ascii_case(&key));
+            if let Some((_, value)) = hits.next() {
+                if hits.next().is_some() {
+                    return Err(format!("{SKIN} [{wanted}] defines {key} more than once"));
+                }
+                return rules.tracks(value);
+            }
+        }
+        rules.tracks(name)
     }
 
     /// The playlist for a map-music name: first race section defining the key.
@@ -286,7 +345,7 @@ impl Playlist {
 #[derive(Resource, Default)]
 pub(crate) struct CampaignAudio {
     session: Option<Weak<()>>,
-    bank: Option<Bank>,
+    pub(crate) bank: Option<Bank>,
     /// Source preparation failed for this session; it is reported once, not retried.
     prepare_failed: bool,
     /// The request whose track was last started; `None` after a stop or a clear.
@@ -456,10 +515,14 @@ impl CampaignAudio {
         table: &'static str,
         name: &str,
         effects: f32,
-        commands: &mut Commands,
-        assets: &mut Assets<AudioSource>,
-        live: &Query<(Entity, &GameSound)>,
+        output: &mut SoundOutput,
+        random: Option<&mut pcx_play::playercolor_host::AudioRandom>,
     ) -> Result<(), String> {
+        let SoundOutput {
+            commands,
+            assets,
+            live,
+        } = output;
         let bank = self
             .bank
             .as_mut()
@@ -475,18 +538,38 @@ impl CampaignAudio {
         if flagged(FLAG_NO_DUPLICATES) && live.iter().any(|(_, sound)| sound.name == row.name) {
             return Ok(());
         }
-        let member = &row.members[bank.rng.below(row.members.len())];
-        let bytes = bank.sound_bytes(member)?;
-        let mut speed = row.pitch;
-        if flagged(FLAG_RANDOM_PITCH) {
-            if row.pitch_variance >= row.pitch {
-                return Err(format!(
-                    "{table} row {name:?}: PitchVariance must stay below Pitch for RANDOMPITCH"
-                ));
+        let (bytes, speed) = if let Some(random) = random {
+            let mut next = random.clone();
+            let index = next.choose_non_repeating(&row.record, row.members.len(), &mut 1024)?;
+            let speed = if flagged(FLAG_RANDOM_PITCH) {
+                next.pitch(row.pitch, row.pitch_variance, true, &mut 1024)?
+            } else {
+                row.pitch
+            };
+            let bytes = bank.sound_bytes(&row.members[index])?;
+            crate::menu_audio::seekable(
+                &AudioSource {
+                    bytes: Arc::clone(&bytes),
+                },
+                0,
+            )?;
+            *random = next;
+            (bytes, speed)
+        } else {
+            let member = &row.members[bank.rng.below(row.members.len())];
+            let bytes = bank.sound_bytes(member)?;
+            let mut speed = row.pitch;
+            if flagged(FLAG_RANDOM_PITCH) {
+                if row.pitch_variance >= row.pitch {
+                    return Err(format!(
+                        "{table} row {name:?}: PitchVariance must stay below Pitch for RANDOMPITCH"
+                    ));
+                }
+                let draw = bank.rng.below(PITCH_STEPS) as f32 / PITCH_STEPS as f32;
+                speed += row.pitch_variance * (2.0 * draw - 1.0);
             }
-            let draw = bank.rng.below(PITCH_STEPS) as f32 / PITCH_STEPS as f32;
-            speed += row.pitch_variance * (2.0 * draw - 1.0);
-        }
+            (bytes, speed)
+        };
         if flagged(FLAG_CHANNEL_PREEMPT) {
             for (entity, sound) in live {
                 if sound.channel == row.channel {
@@ -510,7 +593,7 @@ impl CampaignAudio {
 }
 
 /// Source reader of the published session, under the same publication checks as the HUD.
-fn published_reader(
+pub(crate) fn published_reader(
     requests: &MapRequests,
     sources: &SelectedMapSources,
     session: &MapScriptSession<MapStartupHost>,
@@ -529,7 +612,7 @@ fn published_reader(
     sources.for_receipts(&bindings.receipts)
 }
 
-fn prepare_bank(
+pub(crate) fn prepare_bank(
     reader: Arc<Resolver>,
     race: Result<Option<String>, String>,
     seed: i32,
@@ -555,7 +638,7 @@ fn prepare_bank(
 }
 
 /// The script's sound-volume range, read from the retained `SetSoundVolumeBJ` source.
-fn volume_maximum(session: &MapScriptSession<MapStartupHost>) -> Result<f32, String> {
+pub(crate) fn volume_maximum(session: &MapScriptSession<MapStartupHost>) -> Result<f32, String> {
     let context = session
         .context()
         .ok_or("published script context missing")?;
@@ -583,6 +666,14 @@ pub(crate) struct Sources<'w> {
     pub(crate) settings: Res<'w, crate::menu_settings::Backend>,
 }
 
+impl Sources<'_> {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn client_sources(&self) -> Option<Arc<pcx_play::client_module::ClientSources>> {
+        let receipts = self.requests.published_receipts.as_ref()?;
+        self.sources.client_sources_for_receipts(receipts)
+    }
+}
+
 type CampaignMusicQuery<'w, 's> = Query<
     'w,
     's,
@@ -595,7 +686,7 @@ type CampaignMusicQuery<'w, 's> = Query<
     ),
 >;
 
-fn drive_music(
+pub(crate) fn drive_music(
     mut commands: Commands,
     mut audio: ResMut<CampaignAudio>,
     mut session: ResMut<MapScriptSession<MapStartupHost>>,
@@ -619,6 +710,12 @@ fn drive_music(
         }
     }
     if witness.is_none() {
+        return;
+    }
+    if session
+        .host()
+        .is_some_and(|host| host.objects().regular_music_commands().is_some())
+    {
         return;
     }
     let (thematic, map, regular) = match session.host() {
@@ -1245,11 +1342,8 @@ mod tests {
         let name = name.to_owned();
         world
             .run_system_once(
-                move |mut audio: ResMut<CampaignAudio>,
-                      mut commands: Commands,
-                      mut assets: ResMut<Assets<AudioSource>>,
-                      live: Query<(Entity, &GameSound)>| {
-                    audio.play(TABLE, &name, 0.5, &mut commands, &mut assets, &live)
+                move |mut audio: ResMut<CampaignAudio>, mut output: SoundOutput| {
+                    audio.play(TABLE, &name, 0.5, &mut output, None)
                 },
             )
             .unwrap()

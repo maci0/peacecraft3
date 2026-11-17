@@ -21,17 +21,23 @@ struct Prepared {
     revision: u64,
 }
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CampaignPrepareSet;
+
 #[derive(SystemParam)]
 struct PrepareSources<'w> {
     requests: Res<'w, MapRequests>,
     sources: Res<'w, SelectedMapSources>,
     launch: Option<Res<'w, CampaignLaunch>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    epoch: Option<Res<'w, crate::regular_music_epoch::Epoch>>,
 }
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<Prepared>().add_systems(
         Update,
         prepare
+            .in_set(CampaignPrepareSet)
             .after(MapRequestSet::Deliver)
             .before(CampaignStartupSet),
     );
@@ -49,6 +55,8 @@ fn prepare(
         requests,
         sources,
         launch,
+        #[cfg(not(target_arch = "wasm32"))]
+        epoch,
     } = selected;
     let route = launch.and_then(|launch| launch.route);
     let (Some(bindings), Some(outcome), Some(context)) = (
@@ -111,6 +119,14 @@ fn prepare(
             let install = std::path::Path::new(&bindings.receipts.common.provenance.source.origin);
             crate::menu_lighting::with_client_image(Some(install), prepare)
         }?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            inputs.regular_music_rules = epoch.as_deref().and_then(|epoch| {
+                client_sources
+                    .as_ref()
+                    .and_then(|bundle| epoch.rules_for(bundle))
+            });
+        }
         inputs.regular_music_volume_rules = Some(match client_sources {
             Some(bundle) => {
                 let (_, main) = bundle.main();
