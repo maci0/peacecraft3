@@ -7661,3 +7661,20 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   rendered or audible parity. The bounded turning task is delivered; the next
   acquisition slice must connect the existing stored range override to the
   actual combat consumer before widening admission.
+
+- 2026-11-18: Ordinary initialized-map observer delivery (`af36ab5c`) is
+  integrated. A VM-issued, non-copyable token borrows its issuing program;
+  the startup host requires pointer identity with its retained map program.
+  Required decorators forward the token. Observer-present initializer/direct
+  calls and foreign programs refuse before AI writes, while prior no-observer
+  behavior remains available. Existing scope/fault, sleep/reentry and active
+  checkpoint barriers remain. The token does not claim published-session or
+  global-store identity; the normal session retains host and globals together.
+
+  Component validation passes 3,637 package tests (193 explicit ignores),
+  fourteen ordinary app cases and the prior generic caller, strict native/WASM
+  checks and both library builds. Focused foreign-program reruns overlap the
+  fourteen-case matrix. Ready-only and fixture-capacity failures are excluded.
+  Unchanged Human02 extraction establishes actual callback registrations and
+  StartCampaignAI caller placement, not a runtime playthrough. Combined-main
+  validation of the new dispatch interface is running separately.
