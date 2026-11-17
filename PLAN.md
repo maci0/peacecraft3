@@ -9,9 +9,10 @@ See [release status](docs/releases/0.18.0.md) and TRACKER.md.
 Development continuation (2026-11-18): bounded AI-to-map observer delivery is now
 admitted from the initialized VM for the retained map program. Initializers and
 direct hosts with observers, sleeping/reentrant observers and full save restore
-remain unsupported. Explicit Counter Human01/Undead02 input horizons pass with
-complete input accounting; this does not change GUI startup or establish full
-mission/native parity. Regular playback still awaits connected source/epoch
+remain unsupported. Counter Human01/Undead02 observations have complete input
+accounting, but attribution to the reviewed core is held after a shared-target
+dependency mismatch. Fresh linked-closure verification is required. GUI startup
+is unchanged. Regular playback still awaits connected source/epoch
 integration beyond its tested retained-sink component.
 
 The PeaceCraft configuration panel also offers gameplay-only 1×–4× internal

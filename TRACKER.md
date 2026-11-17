@@ -7678,3 +7678,18 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   Unchanged Human02 extraction establishes actual callback registrations and
   StartCampaignAI caller placement, not a runtime playthrough. Combined-main
   validation of the new dispatch interface is running separately.
+
+  Acceptance correction: a static audit of the retained chapter executable found
+  the old `pcx-play` heading diagnostic and not the reviewed core's replacement.
+  Root-test source hashes and binary hashes alone did not establish the linked
+  dependency closure after cross-worktree warm-target reuse. Prior horizon
+  attribution to `45b68d50` is withdrawn pending a verified rebuild; observations
+  and receipts remain intact. Broad app attribution for shared-target runs is
+  held, including the retained-sink and callback matrices, rather than inferred
+  from new root-test symbols. Private core checks remain separately scoped.
+
+  Further native-code evidence shows the acquisition setter ignores requests at
+  or below a source-derived threshold, so issuing zero did not itself prove the
+  old controls disabled acquisition. Native zero-radius scans include collision
+  bounds as well. The bounded turning task is reopened for no-active-weapon
+  admission and source-note correction before further production widening.
