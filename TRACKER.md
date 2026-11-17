@@ -7611,3 +7611,13 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   remain untouched. Audit receipts are retained outside the tracked tree.
   Windows/macOS desktop CI runs independently; local Linux validation does not
   claim those executable builds or complete fidelity.
+
+- 2026-11-17: Continued the bounded music controller with an ordered diagnostic
+  journal and source-derived plain `PlayMusic` argument flow (`69f3ba1f`).
+  Core checks pass 29 music-family tests with four explicit input-dependent
+  skips, the exact selected-image rules gate, strict native/WASM fixture checks
+  and both library builds. The immutable ten-file source freeze passed review.
+  No application playback capability is enabled by this checkpoint. Actual
+  retained sinks and same-frame thematic/volume/selection ordering remain open.
+  Turning transition safety and AI callback fault/cleanup validation are active;
+  their candidates are not yet integrated or qualified for production.
