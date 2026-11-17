@@ -71,6 +71,12 @@ implode = "0.1"
 sha2 = { version = "0.11.1", default-features = false }
 
 [patch.crates-io]
+num-traits = { path = "vendor/num-traits" }
+rayon = { path = "vendor/rayon" }
+bytemuck = { path = "vendor/bytemuck" }
+ttf-parser = { path = "vendor/ttf-parser" }
+simd-adler32 = { path = "vendor/simd-adler32" }
+symphonia-bundle-mp3 = { path = "vendor/symphonia-bundle-mp3" }
 parley = { path = "vendor/parley" }
 jpeg-decoder = { path = "vendor/jpeg-decoder" }
 skrifa = { path = "vendor/skrifa" }
