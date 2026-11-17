@@ -1687,8 +1687,8 @@ fn remove_all_guard_positions_releases_only_that_players_guards() {
 mod campaign_captain_recruitment;
 
 #[test]
-#[ignore = "requires PCX_WAR3_EXE; source heading with actual captain recruitment and guard release"]
-fn timed_controller_captain_recruitment_and_guard_release_refuse_before_ownership_mutation() {
+#[ignore = "requires PCX_WAR3_EXE; source heading refusal on an armed managed unit before guard/captain effects"]
+fn timed_controller_armed_zero_refuses_before_guard_or_captain_mutation() {
     let (image, origin, numeric, budget) =
         crate::unit_activity::heading::tests::selected_numeric_image();
     let registry = crate::campaign_client::order_registry(&image, origin.clone()).unwrap();
@@ -1755,60 +1755,54 @@ fn timed_controller_captain_recruitment_and_guard_release_refuse_before_ownershi
             .unwrap()
     );
     let kind = i32::from_be_bytes(h.executed_unit(unit).unwrap().definition.rawcode);
-    h.native(
-        "SetUnitFacingTimed",
-        &[Value::Handle(unit), Value::Real(135.), Value::Real(1.)],
-    )
-    .unwrap();
-    for recruit in [true, false] {
-        let units = h
-            .executed_units()
-            .map(|(id, r)| (id, r.clone()))
-            .collect::<Vec<_>>();
-        let clock = format!("{:?}", h.test_native_clock_state());
-        let guard = format!("{:?}", h.guard_state().unwrap().get(unit));
-        let members = h.fixture_captain_members(4, false).to_vec();
-        let error = if recruit {
-            h.add_ai_defenders(4, 1, kind).unwrap_err().to_string()
-        } else {
-            h.native("RemoveGuardPosition", &[Value::Handle(unit)])
-                .unwrap_err()
-        };
-        assert!(error.contains("static timed-facing relation"), "{error}");
-        assert_eq!(
-            h.executed_units()
-                .map(|(id, r)| (id, r.clone()))
-                .collect::<Vec<_>>(),
-            units
-        );
-        assert_eq!(format!("{:?}", h.test_native_clock_state()), clock);
-        assert_eq!(format!("{:?}", h.guard_state().unwrap().get(unit)), guard);
-        assert_eq!(h.fixture_captain_members(4, false), members);
-        assert!(h.take_fired_event().is_none());
-    }
-    let stop = h
-        .standard_command_order(unit, crate::standard_command::Kind::Stop)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        h.native(
-            "IssueImmediateOrderById",
-            &[Value::Handle(unit), Value::Int(stop)]
-        )
-        .unwrap(),
-        Value::Bool(true)
+    assert!(h.guard_state().unwrap().get(unit).is_some());
+    assert!(
+        h.executed_unit(unit)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .weapon
+            .is_some()
     );
+    assert_eq!(
+        h.executed_unit(unit)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .weapon
+            .unwrap()
+            .acquire,
+        0.
+    );
+    let units = h
+        .executed_units()
+        .map(|(id, r)| (id, r.clone()))
+        .collect::<Vec<_>>();
+    let clock = format!("{:?}", h.test_native_clock_state());
+    let guard = format!("{:?}", h.guard_state().unwrap().get(unit));
+    let members = h.fixture_captain_members(4, false).to_vec();
+    let error = h
+        .native(
+            "SetUnitFacingTimed",
+            &[Value::Handle(unit), Value::Real(135.), Value::Real(1.)],
+        )
+        .unwrap_err();
+    assert!(error.contains("without an active weapon"), "{error}");
+    assert_eq!(
+        h.executed_units()
+            .map(|(id, r)| (id, r.clone()))
+            .collect::<Vec<_>>(),
+        units
+    );
+    assert_eq!(format!("{:?}", h.test_native_clock_state()), clock);
+    assert_eq!(format!("{:?}", h.guard_state().unwrap().get(unit)), guard);
+    assert_eq!(h.fixture_captain_members(4, false), members);
+    assert!(h.require_no_static_heading(unit, "probe").is_ok());
+    assert!(h.take_fired_event().is_none());
     assert!(h.add_ai_defenders(4, 1, kind).unwrap());
     assert_eq!(h.fixture_captain_members(4, false), &[unit]);
-    let before = h.executed_unit(unit).unwrap().clone();
-    assert!(
-        h.native(
-            "SetUnitFacingTimed",
-            &[Value::Handle(unit), Value::Real(135.), Value::Real(1.)]
-        )
-        .is_err()
-    );
-    assert_eq!(h.executed_unit(unit).unwrap(), &before);
     h.native("RemoveGuardPosition", &[Value::Handle(unit)])
         .unwrap();
 }
