@@ -4,8 +4,7 @@ Demo: <https://maci0.github.io/peacecraft3-demo/>
 
 The separate public `maci0/peacecraft3-demo` repository contains only the static
 page, CSS, browser modules, generated WASM and the installer's GPL decoder
-component with its corresponding source. The application source repository stays
-private. No game art, fonts, sound, movies, MPQs, ISOs or extracted fixtures are
+component with its corresponding source. The application source is published separately in `maci0/peacecraft3`. No game art, fonts, sound, movies, MPQs, ISOs or extracted fixtures are
 published. There is no upload endpoint: selected files are read locally by the
 browser and the resulting asset store lasts only for that page session.
 
@@ -174,3 +173,15 @@ and made 33 local code/Blob GETs, with zero uploads, sockets or page errors.
 This proves the bounded stored-base import, not language-patched install,
 every retail disc, native archive priority or complete menu fidelity. Its private
 proof is retained in `.scratch/freearc-browser-root/browser-4-stable-wasm/`.
+
+## 0.19.0 publication
+
+The 18 November 2026 deployment contains 27 allowlisted code, WASM and
+license/source-offer files. The default-feature production module builds with
+Rust 1.100.0, matching wasm-bindgen bindings and size optimization. Both the
+local packaged page and the hosted page pass the existing headless demo gate,
+including base-only TFT refusal and competing import/clear ownership. Each run
+makes 20 code/WASM or local Blob GET requests with zero page errors, uploads or
+sockets. All 27 hosted files match the checked package byte for byte. This run
+uses synthetic content. The earlier original-menu and installer observations
+above retain their original scope.

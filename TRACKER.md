@@ -7773,3 +7773,23 @@ Both narrow captures complete, but their first attacked event occurs at
 0.7000008 and 0.7299995 seconds. Combat readiness, callback phase and the timed
 attack difference remain open fidelity work. These results do not establish
 complete mission, rendered or audible parity.
+
+- 2026-11-18: Release 0.19.0 consolidates the current observer, native music and
+  bounded replay integration. Fresh main-only validation passes 6,118 native
+  tests with 485 explicit/local-input ignores across 183 test executables,
+  excluding doctests. Native workspace all-target and WASM workspace library
+  Clippy, default native executable and optimized production WASM builds pass
+  on Rust 1.100.0 with warnings denied. The JavaScript suite passes 100 tests
+  with two skips, six map-controller checks and 17 decoder checks pass, and
+  packaging helper self-tests pass. A test-only map dependency moved to
+  dev-dependencies and repeated-value parser fixtures now use arrays.
+
+  The fresh five-state renderer capture passes with 13 acquisition clock
+  receipts held, repeated selected-unit PNGs identical and all five published
+  images visually inspected. Actual capture revision and hashes are recorded
+  in docs/screenshots/provenance.json. The 27-file asset-free Pages package
+  passes local and hosted browser gates with 20 GET requests each, zero page
+  errors/uploads/sockets and exact hosted file hashes. Private build, capture
+  and deployment evidence is retained under .git/release-audit/0.19.0/.
+  Armed-turn timing, the full IsUnitInRange protocol, original-client parity
+  and complete gameplay/Save-Load fidelity remain open.

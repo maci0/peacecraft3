@@ -21,7 +21,7 @@ No Blizzard assets are committed. The game reads them from your own install at r
 
 ## Screenshots
 
-Captured from PeaceCraft III 0.16.0's Bevy renderer on 12 November 2026 using
+Captured from PeaceCraft III 0.19.0's Bevy renderer on 18 November 2026 using
 locally supplied Legacy 1.29.2.9231 game assets. Rendering and gameplay remain
 in progress. The minimap now uses source-derived live sight, occlusion heights, corrected JPEG precision and native outline coverage;
 [full-screen comparison results](docs/screenshots/README.md) track remaining differences.
@@ -50,11 +50,11 @@ in progress. The minimap now uses source-derived live sight, occlusion heights, 
 
 ## Status
 
-Current release: [0.18.0](docs/releases/0.18.0.md).
+Current release: [0.19.0](docs/releases/0.19.0.md).
 
 Previous local scripted runs reached authored Victory in Human01 and Human02,
 and a prior startup sweep covered all 97 shipped campaign, credits and sub-maps
-against Legacy 1.29.2.9231. That is not a complete 0.18.0 campaign replay.
+against Legacy 1.29.2.9231. The 0.19.0 release validates bounded startup and diagnostic replays.
 Play beyond startup, continuation, full Save/Load and rendering fidelity remain
 in progress. See [TRACKER.md](TRACKER.md) for current validation and limits.
 

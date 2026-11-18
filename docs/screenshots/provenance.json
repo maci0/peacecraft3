@@ -1,6 +1,6 @@
 {
-  "version": "0.16.0",
-  "captured": "2026-11-12",
+  "version": "0.19.0",
+  "captured": "2026-11-18",
   "renderer": "PeaceCraft III production Bevy renderer, offscreen Vulkan software adapter (lavapipe)",
   "extent": [
     1280,
@@ -8,8 +8,8 @@
   ],
   "map": "Maps\\Campaign\\Prologue02.w3m",
   "scope": "Locally supplied Legacy 1.29.2.9231 install in Reign of Chaos mode; rendered screenshots only. No pixel-parity claim.",
-  "source_revision": "ecb3acc7",
-  "capture_test": "campaign_entry_gpu_tests::mounted_campaign_hud_and_research_states (headless private Xvfb, null audio)",
+  "source_revision": "46f9ad9dc14d493abea86297579c2b68d0b8d871",
+  "capture_test": "campaign_entry_gpu_tests::mounted_campaign_hud_and_research_states (--features test-fixtures, headless private Xvfb, null audio)",
   "capture_files": {
     "main-menu.png": "main-menu.png",
     "chapter-selection.png": "chapter-selection.png",
@@ -18,12 +18,18 @@
     "quest-log.png": "quest-done-hover.png"
   },
   "images": {
-    "main-menu.png": "62ff3a2e592ebba9c2a14951b179b3bb8d6f26dd854e1da043e76dad26d7458a",
+    "main-menu.png": "1bc47643c6939a3542bef44d7128b518c20a10ad66a5f057f9d29578eadff2ab",
     "chapter-selection.png": "d53c03db80badd5876ad312d5448ff1d9cf2d62976f9a26021bb20465266be6c",
-    "campaign.png": "ab0a7723000bd61bc97daecd36ecb6ec7da0f2bba046cd34e1b3bc7f8afdd634",
-    "research-menu.png": "86aaa78a5360e81f1d950e413bacf9b15a38317841d4a0f719945b2314ca574b",
-    "quest-log.png": "d3d05767859198c13e06587ac2e11ba1b5424261460e37b938bded7945e47d04"
+    "campaign.png": "6fbf7258e7c00d5b27dac943913dfe7a0b9f0e36654b3e1f901790ac72c8c806",
+    "research-menu.png": "38352a354424b726d0436eb63e0b600ed73c0fc8734b77ab020f02fe42e439c9",
+    "quest-log.png": "4821bc49db536e14af284fc417f40e94efcd3a60e1dae9333c0dad75df850793"
   },
-  "validation": "The capture test passed (1 passed, 0 failed, 85.27 s). All five images were visually inspected. The workspace gate at ecb3acc7 passed: 6,030 tests, 0 failed, 373 ignored; fmt and clippy with warnings denied.",
-  "comparison": "No original-client comparison was run for these captures. The full-screen comparison figures in README.md were measured on the 0.13.0 captures and do not describe these images."
+  "validation": "One exact capture test passed with zero failed or ignored. All 13 acquisition clock receipts held. Repeated selected-unit PNGs match byte for byte. All five published images were visually inspected.",
+  "comparison": "No original-client comparison was run for these captures. Historical full-frame comparisons in README.md describe earlier captures.",
+  "capture_executable_sha256": "c5352cb3de1577fac8f222154dbbfa0a09c8c55dad4b530d703040a40c53a002",
+  "toolchain": "rustc/cargo 1.100.0, Rust 2024, -D warnings",
+  "features": [
+    "test-fixtures"
+  ],
+  "capture_revision_note": "Subsequent release changes replace allocations in an unrelated test fixture and update documentation. Renderer and gameplay sources match the capture revision."
 }
