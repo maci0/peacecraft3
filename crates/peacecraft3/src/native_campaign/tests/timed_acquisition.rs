@@ -816,8 +816,8 @@ fn narrow_capture_rejects_invalid_and_preserves_zero_acquisition() {
     let prefix = format!("{PREFIX} nonce reach-baseline ");
     let mut rows = vec![
         "begin 257".to_owned(),
-        format!("metadata {}", vec!["0"; 11].join(" ")),
-        format!("placement {}", vec!["0"; 13].join(" ")),
+        format!("metadata {}", ["0"; 11].join(" ")),
+        format!("placement {}", ["0"; 13].join(" ")),
     ];
     for i in 0..257 {
         let values = [
