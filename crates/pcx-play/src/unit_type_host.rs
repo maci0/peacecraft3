@@ -291,6 +291,7 @@ impl ObjectHost {
             }
             if !self.harvest_runs(id)
                 && self.current_unit_order(id).map_err(|e| e.to_string())? == 0
+                && self.combat_attack_order(id).is_none()
             {
                 idle.push(id);
             }

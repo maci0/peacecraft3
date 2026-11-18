@@ -143,6 +143,8 @@ pub struct Combat {
     pub armor: f32,
     pub defense: usize,
     pub target: Option<HandleId>,
+    /// Whether the retained target came from an accepted script attack order.
+    pub(crate) target_order_issued: bool,
     pub dead: bool,
     pub(super) ready_at: f64,
     pub(crate) swing: Option<(HandleId, f64)>,
@@ -461,6 +463,7 @@ fn read_combat(d: &Definition) -> Result<Combat, String> {
         armor,
         defense,
         target: None,
+        target_order_issued: false,
         dead: false,
         ready_at: f64::NEG_INFINITY,
         swing: None,
@@ -1170,6 +1173,22 @@ impl ObjectHost {
             .then_some(rules.attack_order)
     }
 
+    pub(super) fn combat_script_order(&self, unit: HandleId) -> Option<i32> {
+        let order = self.combat_attack_order(unit)?;
+        let combat = self.executed_unit(unit).ok()?.combat.as_ref()?;
+        if self.native_counter_platform()
+            && combat.target.is_some()
+            && !combat.target_order_issued
+            && combat.attack_destination.is_none()
+            && combat.ground_target.is_none()
+        {
+            // An implicit chase owns motion without publishing a script order.
+            Some(0)
+        } else {
+            Some(order)
+        }
+    }
+
     pub(super) fn standard_attack_order(&self, unit: HandleId) -> Option<i32> {
         self.live(unit)?.combat.as_ref()?.weapon?;
         Some(self.combat.as_ref()?.attack_order)
@@ -1193,6 +1212,7 @@ impl ObjectHost {
             && let Some(combat) = &mut record.combat
         {
             combat.target = None;
+            combat.target_order_issued = false;
             combat.swing = None;
             combat.chase = None;
             combat.attack_destination = None;
@@ -1574,7 +1594,9 @@ impl ObjectHost {
             self.cancel_inventory_order(unit);
             self.clear_combat_target(unit);
             if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
-                record.combat.as_mut().expect("live combat").target = Some(target);
+                let combat = record.combat.as_mut().expect("live combat");
+                combat.target = Some(target);
+                combat.target_order_issued = true;
                 if let Some(activity) = &mut record.activity {
                     activity.release_hold();
                 }
@@ -1697,6 +1719,7 @@ impl ObjectHost {
             record.decay = decay;
             combat.attack_destination = None;
             combat.target = None;
+            combat.target_order_issued = false;
             combat.swing = None;
             if let Some(vitals) = &mut record.vitals {
                 vitals.life = 0.0;
@@ -2264,6 +2287,7 @@ impl ObjectHost {
                 if let Entry::Unit { record } = self.inner.entry_mut(unit)? {
                     let combat = record.combat.as_mut().expect("combat");
                     combat.target = target;
+                    combat.target_order_issued = false;
                     combat.attack_destination = destination;
                 }
                 if let Some(acquired) = target {

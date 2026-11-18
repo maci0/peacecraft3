@@ -219,6 +219,7 @@ impl ObjectHost {
             record.activity = None;
             if let Some(combat) = record.combat.as_mut() {
                 combat.target = None;
+                combat.target_order_issued = false;
                 combat.attack_destination = None;
             }
         }

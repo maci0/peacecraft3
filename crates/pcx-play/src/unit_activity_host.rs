@@ -499,7 +499,7 @@ impl ObjectHost {
                 .or_else(|| self.inventory_order(unit))
                 .or_else(|| activity.patrol.map(|_| state.rules.patrol))
                 .or_else(|| activity.follow.map(|_| state.rules.movement))
-                .or_else(|| self.combat_attack_order(unit)))
+                .or_else(|| self.combat_script_order(unit)))
             .unwrap_or(if activity.moving() {
                 state.rules.movement
             } else {

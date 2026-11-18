@@ -533,7 +533,7 @@ impl ObjectHost {
             let current_order = self
                 .current_unit_order(unit)
                 .map_err(|e| self.inner.error(name, e.failure))?;
-            if current_order != 0 {
+            if current_order != 0 || self.combat_attack_order(unit).is_some() {
                 continue;
             }
             let record = self.executed_unit(unit)?;

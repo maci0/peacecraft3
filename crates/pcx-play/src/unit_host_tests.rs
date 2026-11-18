@@ -3599,13 +3599,21 @@ fn position_host_with_placement_rules(
             conversions.push(name);
         }
     }
+    let program = ctx.scripts.shared_program();
+    let admission_steps = conversions
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        .checked_mul(program.globals().len())
+        .and_then(|scans| scans.checked_add(conversions.len()))
+        .expect("synthetic enum admission work fits usize");
     let inner = EnumHost::checked_selected(
-        ctx.scripts.shared_program(),
+        program,
         &ctx.map_digest.label,
         &conversions,
         Limits {
             max_handles: 256,
-            admission_steps: 1000,
+            admission_steps,
             expression_depth: 64,
             expression_work: 4096,
         },

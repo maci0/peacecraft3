@@ -182,6 +182,7 @@ impl ObjectHost {
         if let Some(combat) = record.combat.as_mut() {
             combat.dead = false;
             combat.target = None;
+            combat.target_order_issued = false;
             combat.swing = None;
             combat.chase = None;
             combat.attack_destination = None;

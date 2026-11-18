@@ -1,4 +1,5 @@
 //! Canonical logical/visual heading state on the source physics request.
+use super::super::combat::{MissileSpeed, attack_class, weapon_slot};
 use super::*;
 use crate::{native_game_clock::Point, script_random::real, unit_activity::heading};
 
@@ -252,7 +253,26 @@ impl ObjectHost {
             return Ok(heading);
         };
         let activity = record.activity.as_ref().expect("timed activity");
-        // shortcut: armed zero-radius scans, movement and paused relations require further native qualification.
+        let unsupported_weapon = if let Some(weapon) = record.combat.as_ref().and_then(|c| c.weapon)
+        {
+            let slot = weapon_slot(&record.definition, &weapon)
+                .ok_or_else(|| self.heading_error("timed facing weapon slot is unresolved"))?;
+            let class = attack_class(&record.definition, slot, &weapon)
+                .map_err(|reason| self.heading_error(reason))?;
+            record.acquire_range.is_some()
+                || !class.melee
+                || !weapon.acquire.is_finite()
+                || weapon.acquire <= 0.0
+                || !weapon.range.is_finite()
+                || weapon.range <= 0.0
+                || weapon.missile_speed != MissileSpeed::Instant
+                || weapon.damage_point.is_none()
+                || weapon.min_range != 0.0
+                || weapon.splash.is_some()
+        } else {
+            false
+        };
+        // shortcut: nondefault weapons, moving requests and paused relations require further qualification.
         if !record.shown
             || !activity.movable()
             || self.current_unit_order(unit)? != 0
@@ -264,7 +284,7 @@ impl ObjectHost {
             || record.paused_since.is_some()
             || record.combat.as_ref().is_some_and(|c| {
                 c.dead
-                    || c.weapon.is_some()
+                    || unsupported_weapon
                     || c.target.is_some()
                     || c.attack_destination.is_some()
                     || c.ground_target.is_some()
@@ -281,7 +301,7 @@ impl ObjectHost {
             || self.autocast_has_curse_phase(unit)
         {
             return Err(self.heading_error(
-                "timed facing requires a qualified stationary unit without an active weapon or an active order",
+                "timed facing requires a qualified stationary unit with a supported default melee weapon or no weapon and no active order",
             ));
         }
         heading.target = Some(Target::Static(target));
