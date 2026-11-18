@@ -1735,3 +1735,24 @@ on the same ordered request queue as `EndGame`. Each request owns its target;
 argument/NUL/oversize/queue, source and selected-`common.j` gates pass. The
 application consumer that opens `Human02.w3m`, saves and score presentation remain
 open; see [game exit](docs/re-notes/script-game-exit.md).
+
+## 2026-11-18 — turning checkpoint and replay capabilities integrated
+
+Merged the turning checkpoint and bounded getter/terrain follow-up into main.
+Ordinary default melee units can enter the guarded stationary timed-turn path.
+Automatic target acquisition retires the static turn, and explicit attack intent
+remains distinct from automatic acquisition in public order reporting. Current
+acquire-range reads refuse recorded overrides and unqualified unit histories.
+Unit widget-life reads use admitted finite vitals. Normal Legacy startup now
+admits the source-decoded static terrain query policy.
+
+Validation on the integrated source tree passed 27 focused checks, the selected
+image decoder probe, 3,318 ordinary core tests (163 explicit ignores), strict
+native/WASM library and test Clippy checks, both library builds and all three
+isolated application probes. The merge retained the tested code exactly.
+The full V9 scripts reach their expected unsupported `IsUnitInRange` frontier.
+Both narrow captures complete, but their first attacked event occurs at
+0.5250015 seconds in both arms, versus retained native observations of
+0.7000008 and 0.7299995 seconds. Combat readiness, callback phase and the timed
+attack difference remain open fidelity work. These results do not establish
+complete mission, rendered or audible parity.
