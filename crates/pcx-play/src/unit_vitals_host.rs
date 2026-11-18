@@ -19,6 +19,7 @@ use pcx_script::{HandleId, Value};
 use pcx_sim::world::{Definition, FieldValue};
 
 const GET: &str = "GetUnitState";
+const WIDGET_LIFE: &str = "GetWidgetLife";
 const REGEN: &str = "unit regeneration";
 type RegenMotion<'a> = (
     &'a [super::unit_activity::AcceptedSpan],
@@ -1049,6 +1050,9 @@ impl ObjectHost {
         name: &str,
         args: &[Value],
     ) -> Option<Result<Value, Error>> {
+        if name == WIDGET_LIFE {
+            return Some(self.widget_life(args));
+        }
         if name != GET {
             return None;
         }
@@ -1075,6 +1079,37 @@ impl ObjectHost {
                 _ => Err(self.inner.error(GET, Failure::WrongFamily)),
             }
         })())
+    }
+
+    fn widget_life(&self, args: &[Value]) -> Result<Value, Error> {
+        let fail = |failure| self.inner.error(WIDGET_LIFE, failure);
+        Self::contract(
+            &self.inner,
+            WIDGET_LIFE,
+            &["widget"],
+            "real",
+            false,
+            Some("widget"),
+        )?;
+        let natives = self.inner.program.natives();
+        if natives.get(WIDGET_LIFE).map(|n| &n.source) != natives.get(GET).map(|n| &n.source) {
+            return Err(fail(Failure::Source));
+        }
+        if self.unit_vitals.is_none() {
+            return Err(fail(Failure::UnitState("vitals not admitted")));
+        }
+        let [Value::Handle(id)] = args else {
+            return Err(fail(Failure::WrongFamily));
+        };
+        let Entry::Unit { record } = self.inner.entry(*id).map_err(|e| fail(e.failure))? else {
+            return Err(fail(Failure::WrongFamily));
+        };
+        let life = record
+            .vitals
+            .map(|vitals| vitals.life)
+            .filter(|life| life.is_finite())
+            .ok_or_else(|| fail(Failure::UnitState("missing or nonfinite unit life")))?;
+        Ok(Value::Real(life))
     }
 
     /// Live value of an admitted unit state on `unit`. `None` for a removed unit.

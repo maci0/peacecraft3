@@ -805,7 +805,18 @@ pub fn prepare(
                 modifications_per_ability: 4096,
             },
         }),
-        terrain_pathing: None,
+        terrain_pathing: Some(
+            crate::terrain_pathing::TerrainPathing::read_legacy(
+                image,
+                client,
+                crate::neutral_player::RuleInputBudget {
+                    image_bytes: 32 << 20,
+                    profile_bytes: 64 << 10,
+                    sections: 96,
+                },
+            )
+            .map_err(|e| e.to_string())?,
+        ),
         catalog: Arc::clone(&map_sources.catalog),
         defend: DefendSelection {
             tables: Arc::new(tables),

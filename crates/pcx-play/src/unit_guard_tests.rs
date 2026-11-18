@@ -1789,7 +1789,7 @@ fn timed_controller_armed_zero_refuses_before_guard_or_captain_mutation() {
             &[Value::Handle(unit), Value::Real(135.), Value::Real(1.)],
         )
         .unwrap_err();
-    assert!(error.contains("without an active weapon"), "{error}");
+    assert!(error.contains("qualified stationary unit"), "{error}");
     assert_eq!(
         h.executed_units()
             .map(|(id, r)| (id, r.clone()))
@@ -1805,4 +1805,146 @@ fn timed_controller_armed_zero_refuses_before_guard_or_captain_mutation() {
     assert_eq!(h.fixture_captain_members(4, false), &[unit]);
     h.native("RemoveGuardPosition", &[Value::Handle(unit)])
         .unwrap();
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; source Counter order projection with synthetic guard, worker and captain consumers"]
+fn counter_automatic_combat_preserves_guard_worker_and_captain_busy_checks() {
+    use crate::standard_command::Kind;
+    for counter in [false, true] {
+        let (_, _, numeric, _) = crate::unit_activity::heading::tests::selected_numeric_image();
+        let mut fields = super::super::activity::gathering::source_fields(false);
+        fields
+            .iter_mut()
+            .find(|(id, _)| id == b"F002")
+            .unwrap()
+            .1
+            .value = Ok(FieldValue::Cell("peon".into()));
+        fields.extend([
+            column(b"W004", SlkId::UnitWeapons, "rangeN1", FieldKind::Int, "64"),
+            column(
+                b"W005",
+                SlkId::UnitWeapons,
+                "acquire",
+                FieldKind::Real,
+                "128",
+            ),
+        ]);
+        let (mut vm, unit, target) = guarded_configured(
+            128.,
+            256.,
+            1.,
+            None,
+            (
+                &fields,
+                "native SetUnitPosition takes unit u, real x, real y returns nothing\n",
+            ),
+            |host| {
+                let mut host = host.with_script_numeric(numeric);
+                host.admit_native_game_clock().unwrap();
+                if counter {
+                    assert!(host.select_native_counter_platform().unwrap());
+                }
+                host
+            },
+        );
+        let h = &mut vm.host().inner;
+        let context = Arc::clone(h.player_context().unwrap());
+        let image = h.guard_state().unwrap().native_rules().image_sha256;
+        let mut gathering = crate::campaign_gathering_policy::GatheringPolicy::fixture();
+        gathering.image_sha256 = image;
+        h.admit_campaign_gathering(&context, gathering).unwrap();
+        let mut captains = crate::campaign_captain_policy::CaptainPolicy::fixture();
+        captains.image_sha256 = image;
+        captains.defenders.excluded_orders[0] = h
+            .standard_command_order(unit, Kind::Attack)
+            .unwrap()
+            .unwrap();
+        h.admit_campaign_captains(&context, captains).unwrap();
+        let mut mode = crate::campaign_mode_policy::CampaignModePolicy::fixture();
+        mode.image_sha256 = image;
+        h.admit_campaign_mode(&context, mode).unwrap();
+        let mut targeting = crate::campaign_targeting_policy::TargetingPolicy::fixture();
+        targeting.image_sha256 = image;
+        h.test_set_game_difficulty(1);
+        h.admit_campaign_targeting(&context, targeting).unwrap();
+        h.activate_campaign_ai_player(4).unwrap();
+        h.create_ai_captains(4).unwrap();
+        h.native(
+            "SetUnitPosition",
+            &[Value::Handle(unit), Value::Real(32.), Value::Real(16.)],
+        )
+        .unwrap();
+        assert_eq!(h.idle_workers(4).unwrap(), [unit]);
+        h.test_advance_combat().unwrap();
+        let combat = h.executed_unit(unit).unwrap().combat.as_ref().unwrap();
+        assert_eq!(combat.target, Some(target));
+        assert!(!combat.target_order_issued);
+        let attack = h
+            .standard_command_order(unit, Kind::Attack)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            h.native("GetUnitCurrentOrder", &[Value::Handle(unit)])
+                .unwrap(),
+            Value::Int(if counter { 0 } else { attack })
+        );
+        assert!(h.idle_workers(4).unwrap().is_empty());
+        let before = h.executed_unit(unit).unwrap().clone();
+        let guard = format!("{:?}", h.guard_state().unwrap().get(unit));
+        let clock = format!("{:?}", h.test_native_clock_state());
+        h.return_ai_guard_posts(4).unwrap();
+        assert!(h.executed_unit(unit).unwrap() == &before);
+        assert_eq!(format!("{:?}", h.guard_state().unwrap().get(unit)), guard);
+        assert_eq!(format!("{:?}", h.test_native_clock_state()), clock);
+        let kind = i32::from_be_bytes(h.executed_unit(unit).unwrap().definition.rawcode);
+        assert!(!h.add_ai_defenders(4, 1, kind).unwrap());
+        assert!(h.fixture_captain_members(4, false).is_empty());
+        assert!(h.executed_unit(unit).unwrap() == &before);
+        assert_eq!(
+            h.native(
+                "IssueTargetOrder",
+                &[
+                    Value::Handle(unit),
+                    Value::Str("alpha".into()),
+                    Value::Handle(target)
+                ],
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            h.native("GetUnitCurrentOrder", &[Value::Handle(unit)])
+                .unwrap(),
+            Value::Int(attack)
+        );
+        assert!(
+            h.executed_unit(unit)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target_order_issued
+        );
+        let stop = h.standard_command_order(unit, Kind::Stop).unwrap().unwrap();
+        assert_eq!(
+            h.native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(unit), Value::Int(stop)]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert!(
+            !h.executed_unit(unit)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target_order_issued
+        );
+        assert_eq!(h.idle_workers(4).unwrap(), [unit]);
+        assert!(h.add_ai_defenders(4, 1, kind).unwrap());
+        assert_eq!(h.fixture_captain_members(4, false), [unit]);
+    }
 }

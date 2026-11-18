@@ -40,6 +40,41 @@ pub struct TerrainPathing {
 }
 
 impl TerrainPathing {
+    /// Bind the registered static query and its selector in Legacy 1.29.2.9231.
+    pub(crate) fn read_legacy(
+        image: &[u8],
+        origin: AssetIdentity,
+        budget: RuleInputBudget,
+    ) -> Result<Self, Error> {
+        let fail = |problem| Error {
+            source_context: origin.source.clone(),
+            problem,
+        };
+        if image.len() > budget.image_bytes {
+            return Err(fail(Problem::Budget));
+        }
+        let image_sha256 = sha256(image);
+        if image_sha256 != crate::menu_lighting::REVIEWED_IMAGE
+            || [&origin.source, &origin.edition, &origin.version]
+                .iter()
+                .any(|s| s.trim().is_empty())
+        {
+            return Err(fail(Problem::Identity));
+        }
+        let pe = Pe::parse(image, budget).map_err(|e| fail(Problem::Image(e)))?;
+        let [normalization, type_switch] =
+            legacy_windows(&pe, budget.profile_bytes).map_err(fail)?;
+        Self::decode(
+            &pe,
+            Binding {
+                origin,
+                image_sha256,
+                normalization,
+                type_switch,
+            },
+        )
+    }
+
     /// Reads an x86 real-exponent normalization and bounded byte-result switch.
     /// Addresses and all masks must resolve inside the fingerprinted windows.
     pub fn read(image: &[u8], binding: Binding, budget: RuleInputBudget) -> Result<Self, Error> {
@@ -65,6 +100,14 @@ impl TerrainPathing {
             return Err(fail(Problem::Identity));
         }
         let pe = Pe::parse(image, budget).map_err(|e| fail(Problem::Image(e)))?;
+        Self::decode(&pe, binding)
+    }
+
+    fn decode(pe: &Pe<'_>, binding: Binding) -> Result<Self, Error> {
+        let fail = |problem| Error {
+            source_context: binding.origin.source.clone(),
+            problem,
+        };
         let scale = pe
             .window(&binding.normalization, true)
             .map_err(|e| fail(Problem::Image(e)))?;
@@ -152,6 +195,65 @@ impl TerrainPathing {
             .copied()
             .unwrap_or(0)
     }
+}
+
+fn legacy_windows(pe: &Pe<'_>, byte_budget: usize) -> Result<[SourceWindow; 2], Problem> {
+    const SIGNATURE: &[u8] = b"(RRHpathingtype;)B\0";
+    const NAME: &[u8] = b"IsTerrainPathable\0";
+    const REGISTRATION: u32 = 0x4a0d73;
+    const ENTRY: u32 = 0x4998a0;
+    const WRAPPER: u32 = 0x7f6a00;
+    const QUERY: u32 = 0x7f6890;
+    const NORMALIZATION: u32 = 0x8002d1;
+    const SELECTOR: u32 = 0x494460;
+    if byte_budget < 20 + 36 + 36 + 199 + 5 + 88 + SIGNATURE.len() + NAME.len() {
+        return Err(Problem::Budget);
+    }
+    let read = |va, len, code| {
+        pe.read_from(va, code)
+            .map_err(Problem::Image)?
+            .get(..len)
+            .ok_or(Problem::Shape)
+    };
+    let registration = read(REGISTRATION, 20, true)?;
+    let pushed = |offset| match registration.get(offset..offset + 5) {
+        Some([0x68, operand @ ..]) => Ok(u32::from_le_bytes(operand.try_into().unwrap())),
+        _ => Err(Problem::Shape),
+    };
+    let calls = |code: &[u8], base, offset, target| match code.get(offset..offset + 5) {
+        Some([0xe8, rel @ ..]) => {
+            i64::from(base)
+                + offset as i64
+                + 5
+                + i64::from(i32::from_le_bytes(rel.try_into().unwrap()))
+                == i64::from(target)
+        }
+        _ => false,
+    };
+    let entry = read(ENTRY, 36, true)?;
+    let wrapper = read(WRAPPER, 36, true)?;
+    let query = read(QUERY, 199, true)?;
+    let scale = read(NORMALIZATION, 5, true)?;
+    let switch = read(SELECTOR, 88, true)?;
+    if read(pushed(0)?, SIGNATURE.len(), false)? != SIGNATURE
+        || read(pushed(5)?, NAME.len(), false)? != NAME
+        || pushed(10)? != ENTRY
+        || !calls(registration, REGISTRATION, 15, 0x8ccc80)
+        || !calls(entry, ENTRY, 8, SELECTOR)
+        || !calls(entry, ENTRY, 26, WRAPPER)
+        || !calls(wrapper, WRAPPER, 26, QUERY)
+        || query[0x7b..0x81] != [0x8d, 0x90, scale[1], scale[2], scale[3], scale[4]]
+        || query[0xb1..0xb7] != [0x8d, 0x88, scale[1], scale[2], scale[3], scale[4]]
+    {
+        return Err(Problem::Shape);
+    }
+    Ok(
+        [(NORMALIZATION, scale), (SELECTOR, switch)].map(|(va, bytes)| SourceWindow {
+            va,
+            len: bytes.len() as u32,
+            digest: sha256(bytes),
+        }),
+    )
 }
 
 /// One authored cliff tile: tile-grid position and the maximum W3E elevation

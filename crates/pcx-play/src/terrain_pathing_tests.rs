@@ -133,3 +133,59 @@ fn changed_fingerprints_budgets_targets_and_instruction_shapes_refuse() {
         );
     }
 }
+
+#[test]
+fn legacy_terrain_binding_rejects_an_unreviewed_image_and_enforces_budget() {
+    let (image, binding, mut budget) = fixture(4, &[0x12, 0x84]);
+    let error = TerrainPathing::read_legacy(&image, binding.origin.clone(), budget).unwrap_err();
+    assert!(matches!(error.problem, Problem::Identity));
+    budget.image_bytes = image.len() - 1;
+    let error = TerrainPathing::read_legacy(&image, binding.origin, budget).unwrap_err();
+    assert!(matches!(error.problem, Problem::Budget));
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE pointing to the reviewed Legacy image"]
+fn selected_legacy_terrain_wrapper_reads_pinned_image() {
+    use std::io::Read;
+    let budget = RuleInputBudget {
+        image_bytes: 32 << 20,
+        profile_bytes: 64 << 10,
+        sections: 96,
+    };
+    let path = std::env::var("PCX_WAR3_EXE").unwrap();
+    let mut image = Vec::new();
+    std::fs::File::open(&path)
+        .unwrap()
+        .take(budget.image_bytes as u64 + 1)
+        .read_to_end(&mut image)
+        .unwrap();
+    let origin = crate::campaign_inputs::client_identity(&image, &path);
+    let policy = TerrainPathing::read_legacy(&image, origin.clone(), budget).unwrap();
+    let binding = policy.binding();
+    assert_eq!(binding.origin, origin);
+    assert_eq!(binding.image_sha256, crate::menu_lighting::REVIEWED_IMAGE);
+    let decoded = TerrainPathing::read(&image, binding.clone(), budget).unwrap();
+    assert_eq!(policy.cell_size(), decoded.cell_size());
+    let pe = Pe::parse(&image, budget).unwrap();
+    let switch = pe.window(&binding.type_switch, true).unwrap();
+    assert_eq!(policy.masks.len(), usize::from(switch[8]) + 1);
+    assert_eq!(policy.masks, decoded.masks);
+    assert_eq!(policy.mask(-1), decoded.mask(-1));
+    assert!(matches!(legacy_windows(&pe, 0), Err(Problem::Budget)));
+
+    for address in [0x4a0d73, 0x4998a8, 0x4998ba, 0x7f6a1a, 0x7f690b, 0x7f6941] {
+        let bytes = pe.read_from(address, true).unwrap();
+        let offset = bytes.as_ptr() as usize - image.as_ptr() as usize;
+        let mut changed = image.clone();
+        changed[offset] ^= 1;
+        let pe = Pe::parse(&changed, budget).unwrap();
+        assert!(
+            matches!(
+                legacy_windows(&pe, budget.profile_bytes),
+                Err(Problem::Shape)
+            ),
+            "{address:#x}"
+        );
+    }
+}

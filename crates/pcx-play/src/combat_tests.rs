@@ -147,6 +147,8 @@ constant native GetUnitState takes unit u, unitstate s returns real
 native SetUnitState takes unit u, unitstate s, real v returns nothing
 native IssueTargetOrder takes unit u, string o, widget t returns boolean
 native GetUnitDefaultAcquireRange takes unit u returns real
+native GetUnitAcquireRange takes unit u returns real
+native GetWidgetLife takes widget w returns real
 constant native IsUnitEnemy takes unit u, player p returns boolean
 constant native IsUnitAlly takes unit u, player p returns boolean
 native KillUnit takes unit u returns nothing

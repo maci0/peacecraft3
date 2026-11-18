@@ -1,28 +1,29 @@
-//! `GetUnitDefaultAcquireRange`: the unit type's acquisition range.
-//!
-//! The value is the unit's resolved `UnitWeapons` `acquire` column (the table the combat step
-//! also reads for target acquisition), so map object edits apply. A unit whose `acquire` cell
-//! is empty has no established default and refuses. `SetUnitAcquireRange` stores its value on
-//! the unit but the combat step does not consume it yet, so no current-range getter exists.
+//! Source default acquisition range and the qualified ordinary-unit current getter.
 use super::combat::{column, number};
 use super::{Error, Failure, ObjectHost};
 use pcx_objects::editor::SlkId;
 use pcx_script::Value;
 
-const NAME: &str = "GetUnitDefaultAcquireRange";
-
 impl ObjectHost {
-    pub(super) fn default_acquire_range(&self, args: &[Value]) -> Result<Value, Error> {
-        Self::contract(&self.inner, NAME, &["unit"], "real", false, Some("unit"))?;
+    pub(super) fn acquire_range(&self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        Self::contract(&self.inner, name, &["unit"], "real", false, Some("unit"))?;
         let natives = self.inner.program.natives();
-        if natives.get(NAME).map(|n| &n.source) != natives.get("CreateUnit").map(|n| &n.source) {
-            return Err(self.inner.error(NAME, Failure::Source));
+        if natives.get(name).map(|n| &n.source) != natives.get("CreateUnit").map(|n| &n.source) {
+            return Err(self.inner.error(name, Failure::Source));
         }
-        let fail = |reason: String| self.inner.error(NAME, Failure::UnitActivity(reason));
+        let fail = |reason: String| self.inner.error(name, Failure::UnitActivity(reason));
         let [Value::Handle(unit)] = args else {
-            return Err(self.inner.error(NAME, Failure::Signature));
+            return Err(self.inner.error(name, Failure::Signature));
         };
-        let record = self.executed_unit(*unit)?;
+        let record = self
+            .executed_unit(*unit)
+            .map_err(|error| self.inner.error(name, error.failure))?;
+        let current = name == "GetUnitAcquireRange";
+        if current && record.acquire_range.is_some() {
+            return Err(fail(
+                "current range after a raw acquire override is unsupported".into(),
+            ));
+        }
         let cell = column(&record.definition, SlkId::UnitWeapons, "acquire").map_err(fail)?;
         let range = cell
             .map(|value| number(value, "acquire"))
@@ -30,6 +31,24 @@ impl ObjectHost {
             .map_err(fail)?
             .flatten()
             .ok_or_else(|| fail("the unit type has no acquire range cell".into()))?;
+        // The native's current component has a distinct storage path from the type default.
+        if current
+            && (record.definition_revision != 0
+                || record.cached
+                || record.summoned
+                || record.morph.is_some()
+                || record.illusion.is_some()
+                || record.construction.is_some()
+                || !record.combat.as_ref().is_some_and(|combat| {
+                    !combat.dead
+                        && combat
+                            .weapon
+                            .as_ref()
+                            .is_some_and(|weapon| weapon.acquire == range)
+                }))
+        {
+            return Err(fail("current range is unqualified for this unit".into()));
+        }
         Ok(Value::Real(range))
     }
 }

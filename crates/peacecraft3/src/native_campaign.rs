@@ -1778,6 +1778,7 @@ fn render_campaign_panel(
 #[cfg(test)]
 pub(crate) mod tests {
     mod counter;
+    mod timed_acquisition;
 
     use super::*;
     use bevy::ecs::system::RunSystemOnce;

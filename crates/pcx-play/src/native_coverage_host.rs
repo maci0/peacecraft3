@@ -170,6 +170,7 @@ impl ObjectHost {
             "DestroyGroup",
             "DestroyTimer",
             "FirstOfGroup",
+            "GetUnitAcquireRange",
             "GetUnitDefaultAcquireRange",
             "GroupAddUnit",
             "GroupClear",
@@ -366,6 +367,7 @@ impl ObjectHost {
             // unit_summon_host.rs
             "UnitApplyTimedLife",
             // unit_vitals_host.rs
+            "GetWidgetLife",
             "IsPointBlighted",
             "SetBlight",
             "SetBlightLoc",

@@ -389,6 +389,12 @@ fn host_with(config: &Config) -> ObjectHost {
         }),
     }));
     let mut fields = hero_fields("STR");
+    if config.heading {
+        fields.extend([
+            column(b"V001", SlkId::UnitBalance, "sight", FieldKind::Real, "10"),
+            column(b"V002", SlkId::UnitBalance, "nsight", FieldKind::Real, "10"),
+        ]);
+    }
     if let Some(range) = config.acquire {
         for (_, field) in &mut fields {
             if field.metadata.as_ref().is_some_and(|m| matches!(&m.source, FieldSource::Column { slk: SlkId::UnitWeapons, column } if column == "acquire")) {
@@ -540,7 +546,15 @@ fn host_with(config: &Config) -> ObjectHost {
         enumeration::TRIGGERS,
         super::activity::ORDERS
     );
-    let extra = format!("{extra}\n{}", config.script);
+    let extra = format!(
+        "{extra}\n{}\n{}",
+        if config.heading {
+            CLOCK_DECLARATIONS
+        } else {
+            ""
+        },
+        config.script
+    );
     let overlay = config.overlay.clone();
     let hero_budget = crate::playercolor_host::HeroBudget {
         abilities_per_unit: 8,
@@ -577,6 +591,28 @@ fn host_with(config: &Config) -> ObjectHost {
     if let Some(numeric) = heading_numeric {
         h = h.with_script_numeric(numeric);
         h.admit_native_game_clock().unwrap();
+        let max_globals = h
+            .player_context()
+            .unwrap()
+            .scripts
+            .program()
+            .globals()
+            .len();
+        h = h
+            .with_startup_clock(
+                crate::startup_clock::tests::input(9),
+                "CLOCK",
+                max_globals,
+                16,
+                1000,
+            )
+            .unwrap();
+        h.admit_time_of_day(&pcx_objects::editor::misc::DayCycle {
+            day_length: 480.,
+            day_hours: 24.,
+            sources: vec!["synthetic".into()],
+        })
+        .unwrap();
     }
     h.native("SetRandomSeed", &[Value::Int(7)]).unwrap();
     h.admit_unit_vitals(HeroVitals {
@@ -2934,8 +2970,19 @@ native FogMaskEnable takes boolean b returns nothing
 globals
 constant gamespeed TimedSpeed=ConvertGameSpeed(0)
 integer HeadingEvents=0
+integer ArmedAttacks=0
 endglobals
 function HeadingWatch takes nothing returns nothing
+endfunction
+function ArmedAttacked takes nothing returns nothing
+if GetAttacker()==H then
+set ArmedAttacks=ArmedAttacks+1
+endif
+endfunction
+function ArmedWatch takes nothing returns nothing
+local trigger t=CreateTrigger()
+call TriggerRegisterUnitEvent(t,E,EVENT_UNIT_ATTACKED)
+call TriggerAddAction(t,function ArmedAttacked)
 endfunction
 function TimedTransition takes unit u, integer mode, unit target, player owner, integer hold returns nothing
 if mode==0 then
@@ -3233,7 +3280,7 @@ endfunction
 }
 
 #[test]
-#[ignore = "requires PCX_WAR3_EXE; Counter admission excludes armed, immobile, paused or moving units"]
+#[ignore = "requires PCX_WAR3_EXE; Counter admission excludes nondefault armed, immobile, paused or moving units"]
 fn counter_timed_controller_acquisition_and_activity_admission_preserves_state_on_refusal() {
     for mode in 0..6 {
         let (mut session, caster, _) = timed_counter_session_with_acquisition(
@@ -3248,6 +3295,17 @@ fn counter_timed_controller_acquisition_and_activity_admission_preserves_state_o
             .program()
             .function_id("TimedFacing")
             .unwrap();
+        if mode == 0 {
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native(
+                    "SetUnitAcquireRange",
+                    &[Value::Handle(caster), Value::Real(96.)],
+                )
+                .unwrap();
+        }
         if mode == 1 {
             session
                 .host()
@@ -3817,6 +3875,495 @@ fn counter_timed_controller_death_and_removal_retire_static_targets_before_later
                     100,
                 )
                 .unwrap();
+        }
+    }
+}
+
+fn armed_timed_counter_session() -> (
+    crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost>,
+    HandleId,
+    HandleId,
+) {
+    let (mut session, caster, target) = timed_counter_session_with_acquisition("256", "1", "foot");
+    assert!(matches!(
+        session.host().unwrap().objects().vision_capability(),
+        crate::playercolor_host::VisionCapability::Ready {
+            fog: false,
+            mask: false
+        }
+    ));
+    for name in ["F", "G", "E"] {
+        let Value::Handle(unit) = session.global(name).unwrap() else {
+            panic!("fixture unit {name}")
+        };
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("ShowUnit", &[Value::Handle(unit), Value::Bool(false)])
+            .unwrap();
+    }
+    session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .native("PauseUnit", &[Value::Handle(target), Value::Bool(true)])
+        .unwrap();
+    let watch = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("ArmedWatch")
+        .unwrap();
+    session.call_function(watch, &[]).unwrap();
+    (session, caster, target)
+}
+
+fn advance_timed_counter(
+    session: &mut crate::map_script_session::MapScriptSession<
+        crate::map_startup_host::MapStartupHost,
+    >,
+    frames: usize,
+) {
+    let quantum = session
+        .host()
+        .unwrap()
+        .objects()
+        .test_native_clock_state()
+        .unwrap()
+        .rules()
+        .turn
+        .quantum_ms;
+    for _ in 0..frames {
+        session
+            .advance_native_counter_frame(
+                Some(std::time::Duration::from_millis(u64::from(quantum))),
+                1_000,
+            )
+            .unwrap();
+        session
+            .advance_unit_ranges(65536)
+            .and_then(|_| session.sample_admitted_vision())
+            .unwrap();
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; private armed admission candidate and synthetic Counter cadence"]
+fn counter_armed_timed_idle_preserves_relation_and_stop_keeps_visual_settling() {
+    let (mut session, caster, _) = armed_timed_counter_session();
+    let timed = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("TimedFacing")
+        .unwrap();
+    session
+        .call_function(
+            timed,
+            &[Value::Handle(caster), Value::Real(135.), Value::Real(3.)],
+        )
+        .unwrap();
+    advance_timed_counter(&mut session, 16);
+    let objects = session.host().unwrap().objects();
+    let before = objects.executed_unit(caster).unwrap().clone();
+    assert!(objects.require_no_static_heading(caster, "probe").is_err());
+    assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+    assert!(before.combat.as_ref().unwrap().target.is_none());
+    let face = objects.native_unit_facing(caster).unwrap().unwrap();
+    assert_ne!(face, 0.);
+    let stop = objects
+        .standard_command_order(caster, crate::standard_command::Kind::Stop)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native(
+                "IssueImmediateOrderById",
+                &[Value::Handle(caster), Value::Int(stop)]
+            )
+            .unwrap(),
+        Value::Bool(true)
+    );
+    let objects = session.host().unwrap().objects();
+    assert!(objects.require_no_static_heading(caster, "probe").is_ok());
+    assert_eq!(objects.native_unit_facing(caster).unwrap(), Some(face));
+    advance_timed_counter(&mut session, 16);
+    let objects = session.host().unwrap().objects();
+    let after = objects.executed_unit(caster).unwrap();
+    assert_ne!(objects.native_unit_facing(caster).unwrap(), Some(face));
+    assert_eq!(after.position, before.position);
+    assert!(objects.require_no_static_heading(caster, "probe").is_ok());
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; actual Counter armed acquisition cleanup before look-at or chase"]
+fn counter_armed_timed_acquisition_retires_static_before_combat_and_never_resumes_after_loss() {
+    for chase in [false, true] {
+        let (mut session, caster, target) = armed_timed_counter_session();
+        if chase {
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native(
+                    "SetUnitPosition",
+                    &[Value::Handle(target), Value::Real(112.), Value::Real(112.)],
+                )
+                .unwrap();
+        }
+        let timed = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("TimedFacing")
+            .unwrap();
+        session
+            .call_function(
+                timed,
+                &[Value::Handle(caster), Value::Real(135.), Value::Real(3.)],
+            )
+            .unwrap();
+        advance_timed_counter(&mut session, 16);
+        assert!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .require_no_static_heading(caster, "probe")
+                .is_err()
+        );
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("ShowUnit", &[Value::Handle(target), Value::Bool(true)])
+            .unwrap();
+        let mut acquired = false;
+        for _ in 0..32 {
+            advance_timed_counter(&mut session, 1);
+            let objects = session.host().unwrap().objects();
+            if objects
+                .executed_unit(caster)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target
+                == Some(target)
+            {
+                acquired = true;
+                assert!(objects.require_no_static_heading(caster, "probe").is_ok());
+                assert!(
+                    !objects
+                        .executed_unit(caster)
+                        .unwrap()
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .target_order_issued
+                );
+                assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+                assert_eq!(
+                    objects
+                        .executed_unit(caster)
+                        .unwrap()
+                        .activity
+                        .as_ref()
+                        .unwrap()
+                        .moving(),
+                    chase
+                );
+                break;
+            }
+        }
+        assert!(
+            acquired,
+            "synthetic exposed target was not acquired: chase={chase}"
+        );
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("RemoveUnit", &[Value::Handle(target)])
+            .unwrap();
+        advance_timed_counter(&mut session, 32);
+        let objects = session.host().unwrap().objects();
+        assert!(
+            objects
+                .executed_unit(caster)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target
+                .is_none()
+        );
+        assert!(objects.require_no_static_heading(caster, "probe").is_ok());
+        assert!(
+            !objects
+                .executed_unit(caster)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap()
+                .target_order_issued
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; private armed candidate preserves override refusal atomically"]
+fn counter_armed_timed_preexisting_range_override_refuses_without_mutation() {
+    let (mut session, caster, _) = armed_timed_counter_session();
+    session
+        .host()
+        .unwrap()
+        .objects_mut()
+        .native(
+            "SetUnitAcquireRange",
+            &[Value::Handle(caster), Value::Real(0.)],
+        )
+        .unwrap();
+    let function = session
+        .context()
+        .unwrap()
+        .scripts
+        .program()
+        .function_id("TimedFacing")
+        .unwrap();
+    let objects = session.host().unwrap().objects();
+    let before = objects.executed_unit(caster).unwrap().clone();
+    let clock = format!("{:?}", objects.test_native_clock_state());
+    assert!(
+        session
+            .call_function(
+                function,
+                &[Value::Handle(caster), Value::Real(135.), Value::Real(3.)]
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("qualified stationary unit")
+    );
+    let objects = session.host().unwrap().objects();
+    assert_eq!(objects.executed_unit(caster).unwrap(), &before);
+    assert_eq!(format!("{:?}", objects.test_native_clock_state()), clock);
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE and PCX_HEADING_ACQUISITION_WITNESS; diagnostic Counter/native readiness comparison, may fail while candidate remains unqualified"]
+fn counter_armed_timed_readiness_comparison_retains_native_attack_event_difference() {
+    let witness =
+        std::env::var("PCX_HEADING_ACQUISITION_WITNESS").expect("explicit V9 analysis receipt");
+    let witness: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(witness).unwrap()).unwrap();
+    let (_, _, numeric, _) = crate::unit_activity::heading::tests::selected_numeric_image();
+    let image_hash = numeric
+        .image_sha256()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        witness["canonical_sources_current_and_each_before_after_match"]["Warcraft III.exe"]
+            .as_str()
+            .unwrap(),
+        image_hash
+    );
+    let mut native = Vec::new();
+    for name in ["reach-baseline", "reach-timed"] {
+        let arm = witness["arms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|arm| arm["arm"] == name)
+            .unwrap();
+        let capture = std::fs::read(arm["capture"].as_str().unwrap()).unwrap();
+        let digest = crate::neutral_player::sha256(&capture)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(arm["capture_sha256"].as_str().unwrap(), digest);
+        let event = arm["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == 3)
+            .unwrap();
+        native.push(f32::from_bits(event["time"].as_i64().unwrap() as i32 as u32));
+    }
+    assert!(
+        native[1] > native[0],
+        "native witness does not establish the paired event ordering"
+    );
+    let mut counter = Vec::new();
+    for timed in [false, true] {
+        let (mut session, caster, target) = armed_timed_counter_session();
+        if timed {
+            let function = session
+                .context()
+                .unwrap()
+                .scripts
+                .program()
+                .function_id("TimedFacing")
+                .unwrap();
+            session
+                .call_function(
+                    function,
+                    &[Value::Handle(caster), Value::Real(135.), Value::Real(3.)],
+                )
+                .unwrap();
+        }
+        advance_timed_counter(&mut session, 20);
+        session
+            .host()
+            .unwrap()
+            .objects_mut()
+            .native("ShowUnit", &[Value::Handle(target), Value::Bool(true)])
+            .unwrap();
+        let mut at = None;
+        let mut maximum_count = 0;
+        for _ in 0..80 {
+            advance_timed_counter(&mut session, 1);
+            let Some(Value::Int(count)) = session.global("ArmedAttacks") else {
+                panic!("ArmedAttacks is not an integer")
+            };
+            maximum_count = maximum_count.max(count);
+            if count > 0 {
+                at = session.host().unwrap().objects().timer_game_time();
+                break;
+            }
+        }
+        let Some(at) = at else {
+            let count = session.global("ArmedAttacks");
+            let objects = session.host().unwrap().objects();
+            let state = |unit| {
+                objects.executed_unit(unit).ok().map(|record| {
+                    (
+                        record.position,
+                        record.shown,
+                        record.paused_since.is_some(),
+                        record.vitals.map(|vitals| vitals.life),
+                        record.combat.as_ref().map(|combat| {
+                            (
+                                combat.dead,
+                                combat.target,
+                                combat.target_order_issued,
+                                combat.swing,
+                                combat.weapon.map(|weapon| {
+                                    (
+                                        weapon.range,
+                                        weapon.acquire,
+                                        weapon.damage_point,
+                                        weapon.cooldown,
+                                    )
+                                }),
+                            )
+                        }),
+                    )
+                })
+            };
+            panic!(
+                "actual Counter did not publish its attacked callback: timed={timed} count={:?} maximum={maximum_count} game={:?} timer={:?} caster={:?} target={:?} order={:?}",
+                count,
+                objects.native_game_point(),
+                objects.timer_game_time(),
+                state(caster),
+                state(target),
+                objects.current_unit_order(caster)
+            );
+        };
+        counter.push(at);
+    }
+    assert!(
+        counter[1] > counter[0],
+        "readiness frontier: synthetic Counter baseline/timed attacked={counter:?}; retained native baseline/timed={native:?}. Native event latency is an observation, not a fitted delay; this synthetic cadence does not establish native phase parity"
+    );
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; explicit target provenance and cleanup on the public Counter host"]
+fn counter_explicit_target_orders_keep_registered_ids_and_retire_on_stop_death_or_target_removal() {
+    use crate::standard_command::Kind;
+    for by_id in [false, true] {
+        for loss in ["stop", "death", "target removal"] {
+            let (mut session, caster, target) = armed_timed_counter_session();
+            let objects = session.host().unwrap().objects_mut();
+            objects
+                .native("ShowUnit", &[Value::Handle(target), Value::Bool(true)])
+                .unwrap();
+            let attack = objects
+                .standard_command_order(caster, Kind::Attack)
+                .unwrap()
+                .unwrap();
+            let (name, order) = if by_id {
+                ("IssueTargetOrderById", Value::Int(attack))
+            } else {
+                ("IssueTargetOrder", Value::Str("beta".into()))
+            };
+            assert_eq!(
+                objects
+                    .native(name, &[Value::Handle(caster), order, Value::Handle(target)])
+                    .unwrap(),
+                Value::Bool(true)
+            );
+            assert!(
+                objects
+                    .executed_unit(caster)
+                    .unwrap()
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .target_order_issued
+            );
+            assert_eq!(objects.current_unit_order(caster).unwrap(), attack);
+            match loss {
+                "stop" => {
+                    let stop = objects
+                        .standard_command_order(caster, Kind::Stop)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(
+                        objects
+                            .native(
+                                "IssueImmediateOrderById",
+                                &[Value::Handle(caster), Value::Int(stop)]
+                            )
+                            .unwrap(),
+                        Value::Bool(true)
+                    );
+                }
+                "death" => {
+                    objects
+                        .native("KillUnit", &[Value::Handle(caster)])
+                        .unwrap();
+                }
+                _ => {
+                    objects
+                        .native("RemoveUnit", &[Value::Handle(target)])
+                        .unwrap();
+                }
+            }
+            if loss == "target removal" {
+                advance_timed_counter(&mut session, 1);
+            }
+            let objects = session.host().unwrap().objects();
+            let combat = objects
+                .executed_unit(caster)
+                .unwrap()
+                .combat
+                .as_ref()
+                .unwrap();
+            assert_eq!(combat.target, None, "{loss} by_id={by_id}");
+            assert!(!combat.target_order_issued, "{loss} by_id={by_id}");
+            if loss != "death" {
+                assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
+            }
         }
     }
 }
