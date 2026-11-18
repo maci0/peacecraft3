@@ -1096,8 +1096,12 @@ impl ObjectHost {
             }
             .map_err(|e| e.to_string());
         }
-        if name == "GetUnitDefaultAcquireRange" && self.units.is_some() {
-            return self.default_acquire_range(args).map_err(|e| e.to_string());
+        if self.units.is_some()
+            && (name == "GetUnitDefaultAcquireRange"
+                || (name == "GetUnitAcquireRange"
+                    && self.inner.program.natives().get(name).is_some()))
+        {
+            return self.acquire_range(name, args).map_err(|e| e.to_string());
         }
         if name == "CreateBlightedGoldmine" && self.units.is_some() {
             return self

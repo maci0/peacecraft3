@@ -216,6 +216,36 @@ reported as successful startup. Receipts and local factory inputs remain in
 `.scratch/terrain-pathing-root-20261018/`. No fresh browser rendering or full
 campaign parity is claimed.
 
+## Normal Legacy campaign admission and replay getters (2026-11-18)
+
+The normal campaign factory binds `IsTerrainPathable` to the selected
+1.29.2.9231 image. It checks the named registration, selector and point-query
+call chain and matches both coordinate normalization operands before decoding
+the scale and masks. The host reads the existing map's authored WPM raster.
+Live occupancy, dynamic overlays and out-of-raster behavior remain
+unqualified. The older 114-observation receipt was unavailable for this run.
+
+The selected native image reads current and default acquire range from
+distinct storage. The default getter reads the resolved `UnitWeapons.acquire`
+cell. The current getter shares that resolution for ordinary armed units with
+a matching active weapon default and qualified unit history. It refuses every
+recorded raw setter request. Selected native code also
+joins `GetWidgetLife` and the life branch of `GetUnitState` at the same virtual
+call. The recreation reads finite canonical unit life, including zero on a
+killed unit still in the arena. Null, removed units, other widget families and
+missing vitals refuse.
+
+On the timed-turn checkpoint, 27 focused checks, the pinned-image decoder
+probe, 3,318 ordinary core tests and strict native/WASM checks and library
+builds passed. The ordinary suite had 163 explicit ignores. Three isolated
+application cases passed. Both full V9 arms still stop at the expected
+`IsUnitInRange` refusal. Both narrow arms completed at frame 181 with zero
+pending Counter input. The first role-2 attacked event occurred at 0.525 s in
+both recreation arms. The retained original baseline and timed observations
+were 0.700 s and 0.730 s respectively. Armed-turn timing and broader
+event-response behavior remain unqualified. Build and replay receipts are
+local under `/tmp/pc3-replay-capabilities-validation/`.
+
 ## Automatic placed objects and the map's unit stream (2026-10-18)
 
 Selected MSVC class metadata links the placed-object reader's virtual predicate
