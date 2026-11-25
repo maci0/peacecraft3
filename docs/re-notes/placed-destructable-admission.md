@@ -141,5 +141,6 @@ script SHA-256 is
 `6638c9bd027cf56228bda14726e3491961f4b762e6107aa8dd2a8f8433498832`.
 Receipts, collector tests and raw markers remain local under
 `.scratch/destructable-death-context-probe/` in the main checkout. The owned
-reference run is stopped. The current host still has registration-only
-widget-death support; this native result does not claim that producer exists.
+reference run stopped. The host had registration-only widget-death support
+at this checkpoint. Later [death delivery](destructable-death-delivery.md)
+checks the implemented producer and its callback scope.

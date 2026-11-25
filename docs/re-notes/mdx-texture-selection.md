@@ -96,13 +96,12 @@ build/source/package hashes in `.scratch/original-options-browser/texture-1/`
 and its build receipt. Key selection and clock boundaries are established by
 the separate public-API/ECS gates, not inferred from screenshot timing.
 
-The same 23 code/WASM/GPL corresponding-source files are published at demo
-commit `6e2c4de`; every live file matches the checked package and asset-free
-startup passes. No original textures, models, fonts, archives or screenshots
-are hosted. The browser evidence is for this local repack, not retail installer
-or native rendering parity. Sky projection, the uncovered black region,
-TXAN translation, particles, broader material fidelity and panel screen
-transition timelines remain open.
+Demo commit `6e2c4de` published the 23 checked code, WASM and corresponding
+source files. All hosted hashes matched and asset-free startup passed. The
+package contained no original assets or screenshots. That browser run used a
+local repack. It left retail installer coverage and native rendering parity
+open, including sky projection, the uncovered black region, TXAN translation,
+particles, material fidelity and panel transition timing.
 
 
 ## Panel mip retention (2026-11-04)

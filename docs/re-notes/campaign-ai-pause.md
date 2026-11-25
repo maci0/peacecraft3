@@ -42,9 +42,8 @@ by this observation.
 
 ## Connected cinematic frontier
 
-The reachable scene audit covers its normal and cancel paths, authored mirror
-caster setup, summon callback and animation callback. It additionally requires
-real `AOmi` Mirror Image mechanics, `SetUnitAnimationWithRarity`, and conditional
-`ReviveHeroLoc` when Uther is dead. The existing Water Elemental implementation
-does not implement Mirror Image. These remain explicit capabilities; pause tests
-or parser success do not establish a complete cinematic or mission victory.
+The scene audit covers its normal and cancel paths, authored mirror caster,
+summon callback and animation callback. The scene depends on `AOmi` Mirror
+Image, `SetUnitAnimationWithRarity`, and `ReviveHeroLoc` if Uther is dead.
+The pause tests verify script continuation. Full cinematic playback and
+mission victory require separate validation.

@@ -1,6 +1,6 @@
-//! Which shipped JPEG BLPs carry a non-zero fourth component although
-//! `alpha_bits` is 0. Needs a local original install; see the
-//! `#[ignore]` reason.
+//! Report which shipped JPEG BLPs with `alpha_bits == 0` have a nonzero
+//! fourth component. The ignored test requires a local install and checks
+//! that the sampled JPEG mips decode successfully.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use pcx_blp::{Header, MAX_MIPS, jpeg_header, mip_bytes};
 
 /// Per-file result for a four-component, `alpha_bits == 0` JPEG BLP.
 struct Cmyk {
-    /// Mips whose decoded fourth component has at least one non-zero value.
+    /// Mips with a nonzero fourth component in the raw JPEG decoder output.
     nonzero_mips: Vec<usize>,
     mips: usize,
     /// Smallest and largest fourth-component value over all mips.

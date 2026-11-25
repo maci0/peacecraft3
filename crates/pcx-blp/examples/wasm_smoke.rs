@@ -1,17 +1,16 @@
-//! A wasm smoke test for the decoders.
+//! In-memory decoder and simulation smoke checks using `local-fixtures`.
+//! The BLP, MDX and TGA fixture inputs are embedded at compile time.
 //!
-//! Bare `wasm32-unknown-unknown` has no stdout — Rust's `println!` compiles to
-//! nothing — so the result is reported through the exit code, which is the one
-//! channel that survives. A browser build reads these crates from bytes that
-//! arrive over HTTP, so the paths under test are the in-memory ones.
-//!
-//! Exit codes: 0 = all good, 1 = BLP, 2 = MDX, 3 = TGA, 4 = sim.
+//! Run on a target that reports `process::exit`, such as `wasm32-wasip1`.
+//! The program ORs the check results to produce the exit code.
+//! Zero means all checks passed. Failure values are 1 (BLP), 2 (MDX), 3 (TGA)
+//! and 4 (simulation). A combined nonzero result can be ambiguous.
 
 use pcx_blp::Header;
 use pcx_mdl::Mdlx;
 use pcx_sim::{Command, FX_ONE, Input, Rng, World, step};
 
-/// Exit 1: a BLP decodes from memory and produces the right shape.
+/// Return 1 if the embedded BLP fails to decode to the expected shape.
 fn check_blp() -> i32 {
     let blp: &[u8] = include_bytes!("../tests/fixtures/SelectionCircleLarge.blp");
     let ok = match pcx_blp::decode(blp) {
@@ -21,7 +20,7 @@ fn check_blp() -> i32 {
     if ok { 0 } else { 1 }
 }
 
-/// Exit 2: an MDX model parses and decodes from memory.
+/// Return 2 if the embedded MDX fails to parse or lacks the expected records.
 fn check_mdx() -> i32 {
     let mdx: &[u8] = include_bytes!("../tests/fixtures/Footman.mdx");
     let ok = match Mdlx::parse(mdx) {
@@ -36,7 +35,7 @@ fn check_mdx() -> i32 {
     if ok { 0 } else { 2 }
 }
 
-/// Exit 3: a TGA decodes from memory.
+/// Return 3 if the embedded TGA fails the decode check.
 fn check_tga() -> i32 {
     let tga: &[u8] = include_bytes!("../tests/fixtures/misc.tga");
     let ok = pcx_tga::decode(tga)
@@ -45,7 +44,7 @@ fn check_tga() -> i32 {
     if ok { 0 } else { 3 }
 }
 
-/// Exit 4: the deterministic sim produces the same world twice.
+/// Return 4 if the two simulation runs produce different results.
 fn check_sim() -> i32 {
     let run = || {
         let mut w = World::empty();

@@ -1,35 +1,15 @@
-//! BLP0/BLP1/BLP2 texture decoder.
+//! BLP1 direct and JPEG texture decoding.
 //!
-//! # What actually ships
+//! The parser recognizes BLP0 magic and refuses its external mip layout.
+//! It parses BLP2 headers, but `decode_mip` refuses BLP2 payloads.
 //!
-//! Vanilla 1.28c (6,273 `.blp` entries) and vanilla 1.29b (6,696) were
-//! enumerated twice: once through the union of every archive's `(listfile)`, and
-//! once by walking **every** block of every archive, so the result does not
-//! depend on a name list existing. Both agree:
+//! # Measured formats
 //!
-//! | build | BLP0 | BLP1 content 0 | BLP1 content 1 | BLP2 | any other content |
-//! |-------|------|----------------|----------------|------|-------------------|
-//! | 1.28c | 0    | 4,924          | 1,349          | 0    | 0                 |
-//! | 1.29b | 0    | 5,318          | 1,378          | 0    | 0                 |
-//!
-//! The block walk also reaches files no `(listfile)` entry names: 356 blocks on
-//! 1.28c and 10 on 1.29b. Of those, 349 on 1.28c read without a key (114 are
-//! superseded `BLP1` revisions the patch archives overwrote, 235 are other
-//! formats); the remaining 17 are encrypted, so no install records the basename
-//! their key is derived from. They are read anyway: `crypt::decrypt`'s
-//! first-dword mask is `key + 0xEEEEEEEE + TABLE[key & 0xFF]` and the first
-//! sector-offset word is always `(sectors + 1) * 4`, so the key falls out in 256
-//! guesses. Every one of the 17 is a stale `local.txt` / `war3x.txt` /
-//! `Detector.js` / `(attributes)` blob, not a texture. Between the two walks,
-//! every existing block in every archive of both builds has been read.
-//!
-//! In that census, no shipped byte is BLP0, none is BLP2, and no
-//! `content` byte outside `{0, 1}` exists. So [`Header::parse`] refuses BLP0
-//! outright and [`decode_mip`] refuses BLP2 payloads: both layouts are described
-//! by the public format notes but confirmed by no byte we are allowed to trust,
-//! and this decoder refuses to guess at an encoding it cannot check. [`Census`]
-//! reports that refusal rather than hiding it, and `blpx info <install_dir>`
-//! prints the table above for any install.
+//! The historical compatibility-tree and Legacy 1.29b sweeps found only BLP1.
+//! The compatibility sweep counted 4,924 JPEG and 1,349 direct textures. The
+//! Legacy sweep counted 5,318 JPEG and 1,378 direct textures. See the BLP format
+//! note (`docs/re-notes/003-blp.md`) for provenance and block-walk results.
+//! `blpx info <install_dir>` classifies readable texture members from listfiles.
 //!
 //! # Header layout (BLP1, verified against both shipped builds)
 //!
@@ -44,43 +24,39 @@
 //! 0x18 has mipmaps                  0x54 mip sizes   [16]
 //! 0x1C mip offsets [16]             0x94 palette (variable)
 //! 0x5C mip sizes   [16]
-//! 0x9C palette (variable — runs to mip_offsets[0])
+//! 0x9C palette for direct content (runs to mip_offsets[0])
+//!      or shared JPEG header size, with header bytes at 0xA0
 //! ```
 //!
-//! `0x04` and `0x08` are **not** the same field across the two magics. On BLP1
-//! `0x08` is an alpha bit depth. The public format notes put BLP2's encoding
-//! selector at `0x08` and its alpha depth at `0x09` — unmeasured, since no BLP2
-//! ships, but cheap to keep apart: [`Header`] stores them as
-//! [`Header::alpha_bits`] and [`Header::format`] rather than sharing one byte
-//! between two meanings, which is how a BLP2 with encoding `3` and alpha depth
-//! `1` would otherwise be classified as palettised.
+//! Both parsed headers read `content` as a 32-bit field at `0x04`. BLP1
+//! stores the alpha depth at `0x08`. BLP2 uses separate bytes for encoding
+//! (`0x08`) and alpha depth (`0x09`), stored as [`Header::format`] and
+//! [`Header::alpha_bits`]. The sweeps contained no BLP2 examples.
 //!
 //! # Framing
 //!
 //! Mip `n` occupies `[offset[n], offset[n] + size[n])` and each mip halves both
-//! dimensions. [`Framing`] turns that into assertions rather than assumptions;
-//! they hold on all 12,969 shipped textures:
+//! dimensions. The sweeps recorded the following observations across 12,969
+//! textures. [`Framing::violations`] checks related layout invariants.
 //!
-//! 1. **`file_len == mip_offsets[0] + Σ mip_sizes[0..n)`** — the BLP analogue of
-//!    `RIBB`'s `node_size == 96 + Σ tracks`. The palette gap plus every mip is
-//!    the whole file, with nothing appended and nothing interleaved.
+//! 1. **`file_len == mip_offsets[0] + Σ mip_sizes[0..n)`**. The measured mips
+//!    were contiguous and filled the file after the first mip offset.
 //! 2. **`mip_offsets[0] % 4 == 0` and `mip_offsets[0] >= palette_base`**, so the
-//!    palette is a whole number of BGRA entries: `palette_entry_count ==
+//!    direct-content palette has whole BGRX entries: `palette_entry_count ==
 //!    (mip_offsets[0] - palette_base) / 4`. This is what makes a *short* palette
-//!    (10 entries in `Editor-Toolbar-MapValidation.blp`, 1.29b only) legible
+//!    (10 entries in `Editor-Toolbar-MapValidation.blp`, Legacy sweep) legible
 //!    instead of looking like a transparent tail.
 //! 3. **`content == 1`: `size[n] == mip_size(n).0 * mip_size(n).1 * bpp`** with a
 //!    single `bpp` for the whole chain, and `bpp ∈ {1, 2}`. One plane, or an
 //!    index plane followed by a separate alpha plane. `picture_type` does *not*
-//!    predict `bpp`: type 5 ships both (297 files at 1, 17 at 2 on 1.28c),
-//!    which is why the payload size decides. All 102 odd-sized textures carry a
+//!    predict `bpp`. The compatibility sweep found 297 type-5 files at 1 BPP
+//!    and 17 at 2 BPP, so the payload size decides. All 102 odd-sized textures carry a
 //!    single mip, so the halving rule is never contradicted for them.
 //! 4. **`content == 0`: `[0xA0 + jpeg_header_size, mip_offsets[0])` is either
 //!    zeros or `FF D9` followed by zeros**, and `0xA0` starts with the SOI. The
-//!    two builds differ here, which is what makes it worth asserting: 1.28c
-//!    ships a header truncated mid-`SOF0` (`FF C0` at `0x30E`, two bytes of it
-//!    inside the declared length) with 396 zero bytes of padding, while 1.29b
-//!    ships a *complete* header ending at the EOI with `FF D9` plus 448 bytes of
+//!    measured JPEG headers differ. The compatibility sweep found a header truncated mid-`SOF0` (`FF C0` at `0x30E`, two bytes of it
+//!    inside the declared length) with 396 zero bytes of padding, while Legacy
+//!    used a *complete* header ending at the EOI with `FF D9` plus 448 bytes of
 //!    padding. Ten thousand JPEG textures satisfy both forms.
 
 use std::collections::BTreeMap;
@@ -186,9 +162,9 @@ impl Error {
 pub enum Variant {
     /// `BLP0`: mips in sibling `.b00`-`.b15` files. Refused; see module docs.
     Blp0,
-    /// `BLP1`: the only variant either shipped build contains.
+    /// `BLP1`: the only variant found in the two measured installs.
     Blp1,
-    /// `BLP2`: encoding byte at `0x08`, palette at `0x94`. Refused; see module docs.
+    /// `BLP2`: headers are parsed. [`decode_mip`] rejects this variant.
     Blp2,
 }
 
@@ -386,8 +362,7 @@ impl Header {
                 2 => Encoding::Dxt,
                 _ => Encoding::Bgra,
             },
-            // Unreachable: `parse` refuses BLP0. `Jpeg` is the one answer that
-            // routes the caller to the path which refuses a BLP0 outright.
+            // Header::parse refuses BLP0. This arm only classifies a manually built header.
             Variant::Blp0 => Encoding::Jpeg,
         }
     }
@@ -413,17 +388,16 @@ impl Header {
 /// The palette is **variable length in the file**: it occupies the space between
 /// [`Header::palette_base`] and `mip_offsets[0]`, not a fixed 1024 bytes.
 ///
-/// That was found by sweeping 1.29b rather than 1.28c. Every 1.28c texture
-/// carries a full 256-entry palette, so a fixed-size assumption held there and
+/// The Legacy sweep found a shorter palette. Every direct texture in the
+/// compatibility sweep had 256 entries, so a fixed-size assumption held there and
 /// was never contradicted. `ReplaceableTextures\WorldEditUI\Editor-Toolbar-
 /// MapValidation.blp` in the legacy build is 878 bytes with a 16x16 image and a
 /// ten-entry palette, and its mip indices reach only 8 — the palette genuinely
 /// ends there and the mip data starts immediately after. Reading a fixed 1024
 /// bytes fails that file as "truncated".
 ///
-/// Absent entries come back zero, so a short palette is indistinguishable from a
-/// palette whose tail is transparent black. Use [`palette_entry_count`] to tell
-/// the difference.
+/// Absent entries are zero-filled BGRX values. Use [`palette_entry_count`] to
+/// distinguish padding from stored entries. Pixel alpha is handled separately.
 pub fn palette(d: &[u8], h: &Header) -> Result<[[u8; 4]; PALETTE_ENTRIES], Error> {
     let base = h.palette_base();
     let end = h.mip_offsets[0] as usize;
@@ -447,10 +421,10 @@ pub fn palette(d: &[u8], h: &Header) -> Result<[[u8; 4]; PALETTE_ENTRIES], Error
     Ok(p)
 }
 
-/// Palette entries actually present in the file.
+/// Count entries in a direct-content palette span.
 ///
-/// Zero means the file carries no palette at all, which is legal for a
-/// JPEG-content BLP where the palette area holds the JPEG header instead.
+/// On a JPEG-content header this calculation can count header bytes, so it
+/// cannot establish whether a palette exists.
 pub fn palette_entry_count(h: &Header) -> usize {
     (h.mip_offsets[0] as usize).saturating_sub(h.palette_base()) / 4
 }
@@ -608,9 +582,8 @@ pub fn jpeg_header<'a>(d: &'a [u8], h: &Header) -> Result<&'a [u8], Error> {
 
 /// Decode a JPEG-content mip by prepending [`jpeg_header`] to the mip bytes.
 ///
-/// `jpeg-decoder` picks its output layout from the stream, so the format is
-/// read back from the decoder rather than assumed: every shipped texture
-/// decodes to a 4-channel layout, which is why this cannot just ask for RGB24.
+/// Read the pixel format from the JPEG decoder. The measured JPEG textures
+/// use four components, while the converter also accepts grayscale and RGB.
 pub fn decode_jpeg(d: &[u8], h: &Header, index: usize) -> Result<Vec<u8>, Error> {
     decode_jpeg_with_limit(d, h, index, usize::MAX)
 }
@@ -721,9 +694,8 @@ fn fill_rgba<const N: usize>(out: &mut [u8], source: &[u8], convert: impl Fn(&[u
 /// inverted BGRA whatever the header's `alpha_bits` says; materials decide
 /// whether alpha is used. With `alpha_bits 0`, the original client blends
 /// `HumanSymbol.blp` (filter mode 2) with its fourth component as alpha on the
-/// Lordaeron loading screen. `Textures\Base.blp` stores `255` there at every
-/// mip below 0, which an opaque material ignores, so the fourth component is
-/// not black ink either.
+/// Lordaeron loading screen. `Textures\Base.blp` stores `255` there in every
+/// lower-resolution mip. An opaque material ignores it.
 /// Grayscale has no channel order to change. This is a format conversion, not
 /// an artwork-specific tint or correction in the renderer.
 fn rgba_from_jpeg(format: jpeg_decoder::PixelFormat, p: &[u8]) -> [u8; 4] {
@@ -763,11 +735,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Header, Vec<u8>), Error> {
     decode(&std::fs::read(path)?)
 }
 
-/// The measured framing of one texture, as facts rather than assertions.
-///
-/// Every field is read straight out of the bytes, so [`Framing::violations`] can
-/// name the relation that failed instead of a bare `false`. The relations and
-/// the files they hold on are listed in the module documentation.
+/// Framing measurements derived from a parsed header and its file bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Framing {
     pub file_len: usize,
@@ -807,14 +775,13 @@ impl Framing {
         }
     }
 
-    /// `file_len == payload_start + mip_bytes`: palette gap plus every mip is
-    /// the whole file.
+    /// Check that the file length equals the first mip offset plus all mip sizes.
     pub fn sums(&self) -> bool {
         self.file_len == self.payload_start + self.mip_bytes
     }
 
-    /// The palette is a whole number of 4-byte entries and does not run past
-    /// the payload.
+    /// Check that the payload begins at or after the palette base and on a
+    /// four-byte boundary.
     pub fn palette_is_whole_entries(&self) -> bool {
         self.payload_start >= self.palette_base && self.payload_start.is_multiple_of(4)
     }
@@ -843,8 +810,8 @@ impl Framing {
         bpp.is_some()
     }
 
-    /// The bytes between the declared JPEG header and the payload are an
-    /// optional EOI marker and zeros — never image data.
+    /// Check the JPEG gap. If it starts with `FF`, require `D9` next.
+    /// Require all bytes after the first two to be zero.
     pub fn jpeg_gap_is_padding(&self, d: &[u8]) -> bool {
         let (Some(len), Some(gap)) = (self.jpeg_header_len, self.jpeg_gap_len) else {
             return true;
@@ -853,9 +820,6 @@ impl Framing {
         let Some(tail) = d.get(start..start + gap) else {
             return false;
         };
-        // 1.28c ships zeros here; 1.29b ships the header's own `FF D9` EOI
-        // followed by zeros. Anything else means mip data leaked into the gap
-        // and the header length or the mip base is wrong.
         let has_eoi = match tail.first() {
             Some(0xFF) => tail.get(1) == Some(&0xD9),
             _ => true,
@@ -863,8 +827,8 @@ impl Framing {
         has_eoi && tail.iter().skip(2).all(|b| *b == 0x00)
     }
 
-    /// Every framing relation this decoder relies on, as human-readable
-    /// failures. Empty means the layout adds up.
+    /// Report failed diagnostic checks for coverage, alignment, plane width
+    /// and JPEG framing. An empty result means those checks passed.
     pub fn violations(&self, d: &[u8], h: &Header) -> Vec<String> {
         let mut out = Vec::new();
         if !self.sums() {
@@ -930,7 +894,7 @@ impl Census {
         Self::default()
     }
 
-    /// File size in bytes.
+    /// Number of files recorded in the census.
     pub fn len(&self) -> usize {
         self.total
     }
@@ -944,7 +908,7 @@ impl Census {
         self.buckets.values().collect()
     }
 
-    /// Files in rows this crate handles.
+    /// Files whose parsed headers specify a supported encoding.
     pub fn handled(&self) -> usize {
         self.buckets.values().map(|b| b.handled).sum()
     }
@@ -974,9 +938,7 @@ impl Census {
             });
         bucket.files += 1;
 
-        // A file is handled only if the decoder will turn it into pixels. The
-        // refusals are the same errors `decode` would raise, so the census can
-        // never report a row as handled that the decode path would reject.
+        // Classify supported headers even when payload inspection finds no plane width.
         let verdict = match Header::parse(d) {
             Ok(h) => match h.variant() {
                 Variant::Blp1 if h.content <= 1 => {
@@ -1004,12 +966,8 @@ impl Census {
 mod tests {
     use super::*;
 
-    /// Where to find a WC3 install.
-    ///
-    /// `PEACECRAFT3_INSTALL` overrides it so the same sweeps can be pointed
-    /// at any build; otherwise the 1.28c tree this project was extracted
-    /// from. `PEACECRAFT3_LEGACY_DIR` is accepted as an alias because that is
-    /// where the 1.29b Battle.net install lives by default.
+    /// Return the first existing directory from `PEACECRAFT3_INSTALL`,
+    /// `PEACECRAFT3_LEGACY_DIR`, and the checkout's `wc3/game/app`.
     fn install_dir() -> Option<std::path::PathBuf> {
         for key in ["PEACECRAFT3_INSTALL", "PEACECRAFT3_LEGACY_DIR"] {
             if let Ok(v) = std::env::var(key) {
@@ -1028,11 +986,7 @@ mod tests {
         p.is_dir().then_some(p)
     }
 
-    /// Extracts one file out of the shipped archives, so the tests run against
-    /// real bytes rather than fixtures we control.
-    ///
-    /// Searches every archive, not just `war3.mpq`: most textures do not live
-    /// there, which is the coverage bug `file_list_unions_every_archive` pins.
+    /// Search the mounted archive set for one shipped file.
     fn shipped(rel: &str) -> Option<Vec<u8>> {
         let dir = install_dir()?;
         pcx_mpq::MpqSet::open_wc3(dir).ok()?.extract(rel).ok()
@@ -1135,7 +1089,7 @@ mod tests {
         assert_eq!((h.width, h.height), (16, 16));
         assert_eq!(h.mip_count(), 5);
         assert_eq!(h.mip_offsets[0], 196);
-        // 196 == 0x9C + 10 * 4: ten BGRA entries, then the pixels, immediately.
+        // 196 == 0x9C + 10 * 4: ten BGRX entries, then the pixels, immediately.
         assert_eq!(h.palette_base(), 0x9C);
         assert_eq!(palette_entry_count(&h), 10);
         assert_eq!(h.mip_offsets[0] as usize - h.palette_base(), 10 * 4);
@@ -1185,7 +1139,7 @@ mod tests {
     /// The whole framing relation, on real assets.
     ///
     /// Relation 1 is `file_len == payload_start + Σ mip_sizes`; relation 2 is
-    /// that the palette span is a whole number of BGRA entries; relation 3 is
+    /// that alignment and extent allow whole BGRX entries; relation 3 is
     /// that each mip is exactly `width x height x bpp` with one `bpp` per file.
     /// A header read at the wrong base, a mip count that includes an empty
     /// entry, or an off-by-one palette base all break at least one.
@@ -1411,8 +1365,7 @@ mod tests {
         }
     }
 
-    /// A `content` byte outside the measured set is refused, and the message
-    /// says which byte rather than blaming JPEG.
+    /// Refuse unsupported `content` values and include the value in the error.
     #[test]
     fn refuses_a_content_byte_outside_the_measured_set() {
         for content in [2u32, 7, 0xFFFF_FFFF] {
@@ -1484,7 +1437,7 @@ mod tests {
         assert_eq!(rows[2].refused["bad-magic"], 1);
     }
 
-    /// An unmeasured `content` byte lands in the BLP1 row and is reported as
+    /// An unmeasured `content` value lands in the BLP1 row and is reported as
     /// such, rather than being counted as handled or blamed on BLP0.
     #[test]
     fn census_refuses_an_unmeasured_content_byte() {
@@ -1516,12 +1469,9 @@ mod tests {
         assert_eq!(rows[0].bytes_per_pixel.get(&BPP_INDEX), None);
     }
 
-    /// **The enumeration that closes the variant question.**
-    ///
-    /// Every `.blp` either shipped build contains is bucketed by magic and
-    /// `content` byte, and the answer is asserted rather than printed: two rows,
-    /// `BLP1`/`0` and `BLP1`/`1`, and nothing refused. A single `BLP0`, `BLP2` or
-    /// out-of-range content byte would add a third row and fail here.
+    /// Classify readable listfile entries from the selected install. Expect
+    /// `BLP1`/`0` and `BLP1`/`1` only, with no refused headers. Skip when no
+    /// install is available.
     #[test]
     fn shipped_textures_occupy_exactly_two_buckets_and_nothing_is_refused() {
         let Some(dir) = install_dir() else {
@@ -1831,8 +1781,8 @@ mod logo_alpha_tests {
         roots
     }
 
-    /// The shipped `WarcraftIII-logo-alpha.blp`, or `None` when no install is
-    /// present. The caller turns that into a skip, so the reason is explicit.
+    /// Locate a readable logo in the candidate installs. The test fails if
+    /// none of the candidates supplies it.
     fn logo() -> Option<(Vec<u8>, String)> {
         for root in install_roots() {
             if !root.is_dir() {
@@ -1884,7 +1834,8 @@ mod loading_screen_alpha_tests {
 
     /// `HumanSymbol.blp` declares no alpha (`alpha_bits` 0) but its fourth JPEG component
     /// is the emblem's coverage, which the Lordaeron loading screen blends with. Dropping it
-    /// drew the emblem on an opaque black rectangle. Same input rules as the logo test.
+    /// drew the emblem on an opaque black rectangle. This test requires
+    /// `PEACECRAFT3_LEGACY_DIR`.
     #[test]
     #[ignore = "needs a local Warcraft III install; set PEACECRAFT3_LEGACY_DIR"]
     fn an_alpha_less_header_still_decodes_its_fourth_component_as_alpha() {

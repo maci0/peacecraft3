@@ -11,12 +11,11 @@ unchanged.
 Both manifests declare the local Rust 1.43 floor required by the integer
 associated constants. The preserved upstream README and crate documentation
 advertise Rust 1.34; that promise does not apply to this local patch.
-The workspace floor is 1.99 and validation uses 1.100.
+The workspace floor is 1.99 and the November 18, 2026 validation used Rust 1.100.
 
 Published license notices and other source files are retained. Package lockfiles
 and Cargo cache/package stamps are omitted; the workspace lockfile owns product
-resolution. The only manifest changes are the explicit local Rust floors noted
-above, where applicable.
+resolution. The Rust-version declaration is the only manifest change.
 
 See [the workspace compatibility note](../../docs/re-notes/rust-dependency-warnings.md)
 for provenance, validation scope and remaining upstream Clippy style debt.

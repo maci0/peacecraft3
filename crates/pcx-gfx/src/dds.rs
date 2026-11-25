@@ -266,7 +266,8 @@ pub(crate) fn mip_chain(
     Ok(mips)
 }
 
-/// Validate all authored mip spans and BC1 alpha cases before decoding/allocation.
+/// Validate authored mip spans and BC1 alpha before allocating pixel buffers
+/// or decoding pixels.
 /// This is an explicit local import policy, not native malformed-file parity.
 pub fn inspect(bytes: &[u8], source: &str, limits: Limits) -> Result<Profile, Error> {
     limit(

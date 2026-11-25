@@ -132,4 +132,6 @@ later mips. Compilation and
 Clippy deny warnings. A separate 32-bit WebAssembly source-leaf run exercises the
 same `src/dds.rs` implementation with oversized vector-layout, BC1 three-colour
 and BC3 fractional-alpha fixtures; all three pass. It does not run the application
-or render textures. Application browser execution and rendering remain untested.
+or render textures. This CPU gate does not exercise browser rendering. See the separate
+[compressed ATI2 tests](DDS_GPU.md) for device import, readback and synthetic
+drawing checks.

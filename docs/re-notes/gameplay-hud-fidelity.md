@@ -1,8 +1,12 @@
 # Gameplay HUD viewport and stat repairs
 
-The selected-unit capture exposed three independent defects: terrain behind
-empty console areas, an entirely missing stat panel, and Armor drawn over the
-hero attributes. The command icons themselves already used the source grid.
+The initial selected-unit capture exposed three defects: terrain behind empty
+console areas, a missing stat panel, and Armor drawn over hero attributes.
+Command icons already followed the source grid. This note records the fixes and
+later [working-channel](#gameplay-working-channels-and-portrait-correction),
+[quest-panel](#quest-backdrop-frame-fitting) and
+[numeric HUD](#numeric-hud-inputs-and-exact-capture-checkpoints-2026-11-03)
+comparisons in capture order.
 
 ## World frame
 

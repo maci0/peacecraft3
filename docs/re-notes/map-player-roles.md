@@ -26,7 +26,8 @@ a neutral controller in slot 1, so confusing a controller with a player number
 fails. They also check all four word meanings, unknown flag retention and exact
 canonical bytes. Existing framing tests continue to cover truncated records.
 
-Normal campaign Host preparation remains incomplete. These roles must not be
-turned into inferred local-client, lobby, difficulty or colour defaults. The
+[Campaign source preparation](campaign-source-preparation.md) documents the
+separate startup path. The player-role words do not specify local-client,
+lobby, difficulty or colour defaults. The
 legacy `mapx w3i info` diagnostic still uses historical raw-field labels; its
 existing output contract was not changed by this reader correction.

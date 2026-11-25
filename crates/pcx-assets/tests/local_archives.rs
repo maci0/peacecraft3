@@ -1,4 +1,8 @@
-//! Explicit local original input; contents remain in memory and are not saved.
+//! Ignored tests for locally supplied archives. The MPQ test takes an archive
+//! path in `PEACECRAFT3_ASSET_MPQ` and a member name in `PEACECRAFT3_ASSET_MEMBER`.
+//! The CASC test takes an install directory in `PEACECRAFT3_REFORGED_DIR` and
+//! an authored TVFS path in `PEACECRAFT3_REFORGED_ASSET`. Extracted bytes stay
+//! in memory.
 use pcx_assets::{
     ArchiveLayer, CascSource, ContentSource, GameMode, MpqSource, NamedMember, Resolver,
 };

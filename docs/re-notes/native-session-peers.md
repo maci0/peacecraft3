@@ -222,9 +222,11 @@ Observations, from `production_authority` and `pcx-play` probes run during this 
   north-west detour is script-authored in this map. The authority's batches in those probes
   were refused by the control gate at tick 0, which is why the ordered and control runs
   matched. Direct natives bypass that gate.
-- **Human03** stops at startup on `SetPlayerAbilityAvailable`, which is not implemented.
+- **Human03** stopped at the then-unsupported `SetPlayerAbilityAvailable`.
+  The [player ability handler](../../crates/pcx-play/src/player_ability.rs) now
+  records admitted requests. This run did not reach later Human03 behavior.
 
 Gaps, in order of effect: the end-cinematic input is not on the wire, so Human01 cannot
 reach an accepted order; the roster policy refuses maps with more than one human slot
 (`campaign_inputs::prepare_new_game`), so a two-human source-map session needs a policy
-decision; and `SetPlayerAbilityAvailable` is missing.
+decision.

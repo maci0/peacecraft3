@@ -65,7 +65,7 @@ Native FaceFX behavior, text encoding, actor-path resolution, animation and
 render fidelity are unproved and not implemented. No source game bytes are
 embedded in the tests or this note.
 
-## Validation
+## Recorded validation
 
 All commands used the private target directory and the unchanged lockfile:
 
@@ -82,8 +82,7 @@ SD/HD paths and the compatibility install; a second run passed all eight with
 the legacy install. Classic corpus lines were `mdx=3234 parsed=3234 failed=0`
 and `mdx=3249 parsed=3249 failed=0` respectively. The keyed HD gate printed
 `FAFX_records=1 payload=[0x4367ca,0x43691e) bytes=340 name_bytes=80 path_bytes=260`.
-Clippy exited 0: `Finished dev profile [optimized + debuginfo] target(s) in 3.50s`.
-Formatting and `git diff --check` were clean.
+Clippy, formatting and whitespace checks passed.
 
 Full logs are local at `/tmp/pcx-mdl-fafx-target/{tests,originals,originals-legacy,clippy}.log`.
 The ignored runs explicitly set `PEACECRAFT3_INSTALL` and

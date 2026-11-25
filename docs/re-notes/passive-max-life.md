@@ -16,8 +16,8 @@ selector equals `Ilif`'s metadata `data` ordinal (the `Data` letter); the
 metadata `index` column is unrelated. A mismatched pointer, including selector
 0 against data ordinal 1, refuses instead of applying the entry. General native
 ignore semantics for arbitrary mismatched pointers are not yet qualified.
-Intelligence bonuses remain a separate unsupported class of effect within the
-otherwise admitted `AIab` attribute ability.
+This checkpoint covered life. The separate [held-intelligence](passive-intelligence.md)
+work qualifies the admitted mana changes for the `AIab` class.
 
 ## Original-runtime observation
 
@@ -60,8 +60,8 @@ the retained ratio by the new maximum, then calls `0x9a1d70`. That helper adds t
 float at `0x10db0a8` (`00 00 00 3f`, one half) through `0x9a01c0`, then calls the
 floor helper `0x9a1520`. For positive values this supports nearest rounding with
 half upward, consistent with the runtime samples. It also rounds the input pool
-change before selecting the mode. The current strength recreation's unrounded
-ratio therefore needs attention when sharing pool adjustment with this effect.
+change before selecting the mode. The strength path was unrounded at this checkpoint. The shared rounded
+implementation is described in the follow-up below.
 
 ## Near-zero and death follow-up
 

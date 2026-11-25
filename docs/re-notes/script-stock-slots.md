@@ -114,15 +114,15 @@ still stores stock.
 
 Still unsupported on the purchase path: `ChooseRandomItemEx`, `IsItemIdSellable`,
 `GetRandomInt`-driven `PerformStockUpdates` through `StartStockUpdates` (the
-timer callback needs `TimerStart` expiry delivery), `GroupEnumUnitsOfType` over
+stock update path was unconnected in this slice), `GroupEnumUnitsOfType` over
 `"marketplace"`, `EVENT_PLAYER_UNIT_SELL_ITEM` with `GetSellingUnit`/`GetSoldItem`,
 and the `RemovePurchasedItem` action. Purchase gold transfer and item transfer
 are native behavior with no evidence in this slice, so no sale is simulated.
 Sources: `common.j` 1683-1691, 1231-1236, 1443, 1990; `blizzard.j` 9944-10079.
 
-The same source-qualified Human01 Program/localization gate now retains both
-executed global integers, checks them against the observed call arguments,
-and refuses `TimerStart` in Blizzard.j at `447183..447286` (common.j declaration
+At this checkpoint the source-qualified Human01 gate retained both global
+integers and checked the observed call arguments. It stopped at `TimerStart`
+in Blizzard.j at `447183..447286` (common.j declaration
 `61987..62103`). The stock timer is the next identity on the existing arena;
 repeated initialization preserves the post-main timer and group values and
 makes no new native calls. The input uses the previously qualified explicit

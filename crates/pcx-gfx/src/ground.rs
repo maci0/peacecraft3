@@ -54,16 +54,16 @@ pub const GROUND_SELECTORS: MeshVertexAttribute = MeshVertexAttribute::new(
     VertexFormat::Uint32x4,
 );
 
-/// One catalog-resolved ground BLP. This function does not open files.
+/// Source label and bytes for one ground texture resolved by the caller.
 pub struct SelectedGroundBlp<'a> {
     pub fourcc: [u8; 4],
     pub source: &'a str,
     pub bytes: &'a [u8],
 }
 
-/// One mesh and one material. Both handles are absent when the terrain has
-/// nothing to rasterize. A terrain that declares slots and receives no
-/// textures is [`GroundError::MissingSlots`], not an empty draw.
+/// Mesh and material handles for a ground draw. Zero-width or zero-height
+/// terrain returns no handles. Nonempty terrain with declared slots but no
+/// textures returns [`GroundError::MissingSlots`].
 #[derive(Debug, Clone)]
 pub struct GroundDraw {
     pub mesh: Option<Handle<Mesh>>,
@@ -377,9 +377,10 @@ pub fn decode_ground_slots(
     })
 }
 
-/// Build the admitted ground draw. Assets are inserted only after every slot,
-/// selector, and mesh check has succeeded. A render caller supplies its active
-/// device limits; `None` is for CPU-only asset preparation.
+/// Prepare image, material and mesh assets for a ground draw. The caller
+/// spawns the entity using the returned handles. Assets are inserted only after
+/// every slot, selector and mesh check succeeds. Pass the active render device
+/// limits, or `None` when preparing assets on the CPU only.
 pub fn spawn_admitted_ground(
     terrain: &Terrain,
     slots: &[SelectedGroundBlp<'_>],

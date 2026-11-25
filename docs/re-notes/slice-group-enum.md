@@ -26,10 +26,10 @@ Per-unit delivery uses the existing target-order consumers in the same order as
 null unit is only the support probe. If none of those consumers answers, the
 group order refuses and leaves membership unchanged.
 
-## Not in this slice
+## Initial slice limits
 
-`GroupEnumUnitsOfType` and the counted enum variants have no host.
-The later range-enumeration section supersedes the former range-native refusal.
+The first slice left type, counted and range enumeration unbound. The later
+sections cover their qualified paths.
 `ForGroup` and `GetEnumUnit` are unchanged. A group native that the loaded
 program does not declare stays unsupported.
 

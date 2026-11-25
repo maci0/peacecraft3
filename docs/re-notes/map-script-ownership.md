@@ -23,9 +23,8 @@ initialization, owner release and independent VM state. The same five groups
 execute in 32-bit WASM. These tests establish ownership and the project's
 interpreter behavior, not native event ordering or handle allocation.
 
-This API does not install an application session or implement a gameplay
-Host. Callback identity across replacement needs a session association check;
-a function ordinal alone must not identify a queued callback's map. The
-original campaign and community-map execution gates remain open. Total
-session memory, initialization cost and native scheduling are not bounded
-or inferred by this change.
+This ownership API leaves installation and gameplay to the caller.
+[Map script sessions](map-script-session.md) use tickets to associate callbacks
+with the correct map across replacement. The tests here cover VM ownership.
+They leave total session memory, initialization cost and native scheduling
+unmeasured.

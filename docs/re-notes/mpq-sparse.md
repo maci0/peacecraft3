@@ -4,8 +4,8 @@ StormLib implements sparse compression (`MPQ_COMPRESSION_SPARSE`) as run-length
 encoding specialised for zero-heavy data. This note captures the decoder framing:
 
 - The stream begins with the original data length as a big-endian `u32`.
-- Marker high bit set (`0x80..=0xff`): a non-zero run of `(marker & 0x7f) + 1`
-  bytes, followed by that many literal bytes.
+- Marker high bit set (`0x80..=0xff`): a literal run of `(marker & 0x7f) + 1`
+  bytes, followed by the literal bytes.
 - Marker high bit clear (`0x00..=0x7f`): a zero run of `(marker & 0x7f) + 3`
   bytes (`0x7f` therefore means 130 bytes, the format's largest zero run).
 - The final zero run is capped to the remaining declared output. The primary
@@ -59,9 +59,10 @@ budget refusals, the tight intermediate ceiling, unchanged unsupported masks,
 and raw bytes that resemble compression masks. All six execute on actual
 wasm32 against Cargo-built libraries. A separate exact-source helper gate checks
 32-bit arithmetic/layout failures without allocating giant buffers. An isolated
-native probe observes one 132-byte stage allocation and no reallocation for
-both 132-byte valid and 133-byte refused inflated streams with final capacity
-64; separate ZLIB workspace allocation remains visible.
+native probe observed one 132-byte stage allocation and no reallocation.
+The valid ZLIB output filled 132 bytes. The 133-byte output exceeded stage
+capacity and was refused. The final output capacity was 64 bytes in both
+cases. ZLIB used separate workspace.
 
 A fresh selected-source differential compiles the pinned dispatcher, ZLIB and
 sparse bodies with a table restricted to the tested methods. Across 31 synthetic

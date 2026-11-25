@@ -1,9 +1,11 @@
-//! Scripted aiming on the existing source X-facing, Z-up skeleton.
+//! Scripted aiming on the X-facing, Z-up skeleton.
 use crate::Skeleton;
 use bevy::prelude::*;
 
 /// Correct one posed bone and its descendants, preserving its pivot and scale.
-/// `target` is already in model space. A coincident target has no direction.
+/// `bones` must match the order of the pose matrices. The bone name must match
+/// exactly one entry, ignoring case. `target` is in model space. A target at
+/// the pivot leaves the pose unchanged.
 pub fn apply(
     skeleton: &mut Skeleton,
     bones: &[pcx_mdl::Bone],

@@ -96,13 +96,11 @@ The local helper gate used these supplied script identities:
 The AI regression suite passes 54 tests with two explicit original-input ignores;
 the two new original-input gates above were run separately and passed. Strict
 native and WASM Clippy with all targets and warnings denied, both library builds,
-formatting and diff checks pass. The isolated target is
-`/tmp/pc3-fidelity-sol61-07-target`; exact commands, worktree path and exit codes
-are local under `/tmp/pc3-lane07-melee-validation/3/`. Tests used a verified private
-offscreen display and null audio. Test-only debug symbols were disabled for this
-crate, with assertions enabled. Bounded disassembly and source inputs remain
-local under `/tmp/pc3-lane07-melee/`; no original assets are committed.
+formatting and diff checks pass. Tests used an isolated build directory, a
+verified private offscreen display and null audio. Test-only debug symbols were
+disabled for this crate, with assertions enabled. Exact commands, exit codes,
+bounded disassembly and source inputs were kept locally.
 
-The actual unchanged Undead06/Undead08 continuations still require a post-merge
-replay. No original-client or browser runtime comparison, complete campaign, or
-tick-identical gameplay claim is made by these parser/script/build checks.
+Later [startup replays](chapter-startup-refusals.md#source-policy-and-slow-lifecycle-integration-replay)
+for unchanged Undead06 and Undead08 stopped at automatic acquisition before
+reaching the documented AI difficulty call.

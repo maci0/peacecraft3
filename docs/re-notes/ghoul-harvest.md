@@ -5,7 +5,7 @@ Image: Legacy `Warcraft III.exe`, SHA-256
 only. Peasant harvesting is in [worker-harvest-orders.md](worker-harvest-orders.md), wisps in
 [wisp-harvest.md](wisp-harvest.md).
 
-## Which unit and ability (observed)
+## Shipped unit and ability records
 
 RoC `Undead05` orders `autoharvestlumber` (`Blizzard.j` `IssueImmediateOrderBJ`) on a `ugho`
 (Ghoul). Shipped `Units\UnitAbilities.slk` lists `Acan,Ahrl,Aiun` for `ugho`. `Units\AbilityData.slk`
@@ -14,7 +14,7 @@ row `Ahrl` (code `Ahrl`, "Harvest Lumber", race undead): `Dur1` 1.35, `Area1` 90
 `Units\AbilityMetaData.slk`: `Har1` (`DataA`) and `Har2` (`DataB`) apply to `Ahar,Ahrl,Ahr2,Ahr3`;
 `Har3` (`DataC`) applies to `Ahar` only.
 
-## Classes (observed)
+## Static class evidence
 
 Class vtables located through RTTI complete-object locators (type descriptors `0x110fc58`
 Harvest, `0x110fc78` Lumber, `0x110fc9c` Return, `0x110fcc0` Base):
@@ -30,16 +30,16 @@ Harvest, `0x110fc78` Lumber, `0x110fc9c` Return, `0x110fcc0` Base):
   `[+0x19c]` (lumber capacity). `DataC` is not read. The field-name pointers are `0x10dce00`
   (`Area`), `0x10dce1c` (`DataA`), `0x10dce20` (`DataB`), `0x10dce24` (`DataC`).
 - `Ahar` loader `0xb77c40` calls the Lumber loader `0xb771a0` and then reads `DataC` into `[+0x198]`
-  (gold capacity). So the peasant class is the lumber class plus gold; Lumber carries no gold.
+  (gold capacity).
 - Virtual `+0x310` (`0xb76640`, "carries gold") is `[+0x198] > 0`; virtual `+0x314` (`0xb76650`,
-  "carries lumber") is `[+0x19c] > 0`. Lumber and Harvest share both; for `Ahrl` `[+0x198]` is never
-  written, so it is not a gold worker.
+  "carries lumber") is `[+0x19c] > 0`. Lumber and Harvest share both predicates.
+  The inspected `Ahrl` loader leaves the gold-capacity field unset.
 - Immediate validator: the Lumber class slot `0xb76a00` handles `0xd0031`, `0xd02b3`, `0xd0034`,
   `0xd02b4` itself and forwards every other order to the base `0xb75d00`. There `0xd0036`
   (`autoharvestlumber`) is accepted when `+0x314` is true and `0xd0035` (`autoharvestgold`) when
   `+0x310` is true; all other values give `0xdd`. A ghoul therefore accepts `autoharvestlumber` and
   refuses `autoharvestgold`. The start routine `0xb7a3f0` is the shared one in
-  worker-harvest-orders.md.
+  [worker harvest notes](worker-harvest-orders.md).
 
 ## Recreation
 
@@ -49,10 +49,11 @@ capacity 0 and no `DataC` read. A unit with both classes is refused as ambiguous
 path (`autoharvestlumber`, explicit `harvest` on a tree, depot return, upgrades) runs on the same
 `HarvestRules`; the gold paths already return false at gold capacity 0.
 
-Inferred or open:
+### Open verification
 
-- Ghoul-specific values beyond the data rows (carry animation tags, `Dur` use) are the same as
-  for the peasant path; only the class codes and loaders above were read.
+- The shared host path uses the peasant convention for carry animation and
+  duration. The static class and loader evidence above does not establish that
+  equivalence in the original client.
 - The second function returning `Ahrl` at `0xb79da0` is not referenced by a vtable and was not
   decoded.
 - Selection of the upgrade list applied to ghouls (`upgradeList`) is generic and was not checked

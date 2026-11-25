@@ -1,6 +1,7 @@
-//! Authored CAMS poses using the existing MDX curve interpolator and clip clocks.
+//! MDX camera poses sampled from authored camera records and animation tracks.
 use pcx_mdl::{AnimTrack, Camera, NO_ID};
 
+/// Base eye and target plus sampled offsets, with roll defaulting to zero.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
     pub eye: [f32; 3],
@@ -17,6 +18,8 @@ pub struct CameraPlan {
     curves: Vec<Curve>,
 }
 impl CameraPlan {
+    /// Validate the camera and clip, then prepare position, target and roll
+    /// tracks. Field of view and clipping planes are checked during preparation.
     pub fn checked(
         camera: &Camera,
         interval: [u32; 2],
@@ -116,6 +119,8 @@ impl CameraPlan {
             curves,
         })
     }
+    /// Clamp local tracks to the clip. Global tracks wrap elapsed time at
+    /// their sequence duration.
     pub fn sample(&self, frame: u32, elapsed_ms: u64) -> Result<Pose, &'static str> {
         let mut pose = self.base;
         for curve in &self.curves {

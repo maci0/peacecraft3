@@ -1,4 +1,6 @@
-//! Explicit local fixture. No successful skips, CDN requests or asset writes.
+//! Ignored tests for a local install. Set `PEACECRAFT3_REFORGED_DIR` for both
+//! tests and `PEACECRAFT3_REFORGED_ASSET` for the named-asset test. Missing
+//! required variables fail a requested test. All reads are local.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 

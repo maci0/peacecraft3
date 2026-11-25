@@ -45,7 +45,7 @@ missing. Continuous integration
 and its existing f32 pool rounding do not establish native regeneration tick or
 delay parity.
 
-## Runtime script changes remain open
+## Runtime additions and unqualified changes
 
 Selected source: Legacy 1.29.2.9231, SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.

@@ -29,8 +29,8 @@ interleaved threads, native identities, bounded output and malformed/truncated
 input. It refuses async and complete-event formats rather than assigning them
 incorrect exclusive times. It reports monotonic wall time, not thread CPU time.
 
-On the current host unprivileged counters work but stack sampling returns
-`EACCES`. A one-run privileged perf observer successfully records a workload
+At the October 2026 capture, unprivileged counters worked but stack sampling
+returned `EACCES`. A one-run privileged perf observer successfully records a workload
 launched through `sudo -u maci`; the game remains UID 1000. No executable
 capabilities, sysctls, clocks, or power policy were changed. Linux also documents
 `CAP_PERFMON` for profiling access; see the
@@ -155,14 +155,15 @@ sample chunks and was terminated without a complete trace. Animation spans
 alone do not prove visible rendering. A third bounded probe preserved the normal
 desktop-session environment and still did not establish visibility. An activation
 request in the fourth did not remove its hidden state. These runs
-contribute no frame or GPU performance claim. Campaign HUD, audio mixing,
-GPU driver submission and all-map
-coverage remain open.
+provide no frame or GPU measurements. They did not cover campaign HUD work,
+audio mixing, GPU driver submission or the full map corpus. See the later
+[offscreen Prologue02 workload](render-cpu.md).
 
-## Privileged observers and BPF flame graphs
+## Recorded Wayland and BPF profiling
 
-A normal-user Wayland viewer now closes normally through its own window's close
-request, producing a complete trace. KWin reports that owned window as active,
+In the recorded visible run, the Wayland viewer closed through its own
+window’s close request and produced a complete trace. Automated runs use the
+[offscreen and muted setup](../../AGENTS.md#test-isolation). KWin reports that owned window as active,
 not hidden and not minimized. The earlier X11 diagnostic used `windowclose`,
 which destroys the X11 window; its subsequent swapchain-loss messages are not
 evidence of an initial rendering failure. Use a close request (`windowquit` on

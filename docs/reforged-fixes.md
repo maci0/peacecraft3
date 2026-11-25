@@ -1,18 +1,14 @@
 # Reforged fixes ledger
 
-Process ledger, not game behavior. No shipped-byte, native-code, or runtime
-evidence is claimed by this file's existence. It records the adoption policy
-from `PLAN.md` §3.9 so a future fix has a place to land with its evidence.
-
-Rule (from `PLAN.md` §3.9):
+The [asset-mode plan](../PLAN.md#39-reforged-assets-and-reforged-fixes) defines
+how to document and verify an opt-in gameplay change.
 
 - `vanilla` is the only mode the §6 fidelity gate is measured against.
-- `reforged-fixes` mode applies only rows marked `adopt`, and the game
-  prints or logs which rows were active for a run. A run's trace header
-  carries that list.
-- Rows default to `defer`. Adoption requires the fix to be (i) observable
-  in a scripted scenario, (ii) not break any 1.28c golden trace in
-  `vanilla` mode, and (iii) justified in writing.
+- The `fixes` behaviour mode may apply only rows marked `adopt`. A trace
+  must identify its mode and the active ledger rows.
+- Rows default to `defer`. Adoption requires a scripted observation of the
+  change, unchanged Legacy reference traces in `vanilla` mode, and a written
+  reason for the decision.
 
 Local sources (from `PLAN.md` §3.9, identities only):
 
@@ -23,9 +19,7 @@ Local sources (from `PLAN.md` §3.9, identities only):
 
 ## Ledger
 
-| id | subsystem | symptom | 1.28c behaviour | Reforged behaviour | evidence | disposition |
-|---|---|---|---|---|---|---|
-| — | — | No fix admitted yet. Categories named in `PLAN.md` §3.9 (stuck units, desyncs, pathing, UI, Classic-HD fallback) remain unmeasured placeholders, not rows. | — | — | none — unmeasured | defer |
+No fixes are admitted.
 
 Adding a row requires: subsystem, symptom, both behaviours, an `ev_…`
 id and/or patch note, and a disposition. Do not change `defer` to

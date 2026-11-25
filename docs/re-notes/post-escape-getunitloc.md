@@ -1,7 +1,8 @@
 # Post-Escape `GetUnitLoc` wrong-family failure
 
-The actual menu app, after Escape's intro is skipped and control returns, fails
-`GetUnitLoc` with a wrong-family handle at about 10s of game time. This note
+In the original application diagnostic, skipping the intro with Escape
+restored control. About 10 seconds into that menu run, `GetUnitLoc` failed
+on a wrong-family handle. This note
 records the production-VM reproduction and the call chain that produces it.
 It is diagnostics, not a fix: `unit_removal_host` / `Entry::RemovedUnit` shape
 is owned separately by the removal-seam work and is not changed here.
@@ -50,9 +51,8 @@ The host does not expose a JASS call stack; the evidence therefore combines (a)
 the reproducing VM run, (b) the tombstone probe, and (c) the unique static call
 site for the exercised rect/unit pair.
 
-## Status
+## Follow-up
 
-This is a real post-Escape gameplay stop, not a static inference. It does not
-determine whether `GetUnitLoc` should accept a removed handle or whether the
-authored callback should be suppressed; that decision belongs to the removal-seam
-owner and the menu/UI wiring, and is out of scope for this diagnostic.
+The later [removed-unit location check](removed-unit-locations.md) records
+same-clock tombstone support and a separate menu retest. This diagnostic
+identified the failing call. The later note qualifies the fix and its limits.

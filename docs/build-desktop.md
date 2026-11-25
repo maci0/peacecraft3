@@ -1,11 +1,11 @@
 # Windows and macOS builds
 
 The desktop matrix builds the actual `peacecraft3` game executable with the
-latest stable Rust compiler and committed Cargo.lock. Compiler warnings are errors for build and test, including when existing Rust
-flags are supplied. Workspace crates inherit the same warning policy for local
-Cargo commands. Each job compiles and
-executes the binary's unit tests on the target OS and CPU, then verifies the
-executable header before uploading an archive and SHA-256 checksum.
+latest stable Rust compiler and committed `Cargo.lock`. Build and test commands
+treat warnings as errors, including when `RUSTFLAGS` is already set. Workspace
+crates apply the same policy to local Cargo commands. Each job builds and tests
+the executable on its target OS and CPU, verifies its header, and uploads an
+archive with a SHA-256 checksum.
 
 | OS | CPU | Rust target | GitHub runner | Download |
 | --- | --- | --- | --- | --- |
@@ -21,15 +21,14 @@ Windows uses the
 and the runner's Visual Studio C++ tools / Windows SDK; macOS uses the
 [Darwin targets](https://doc.rust-lang.org/rustc/platform-support/apple-darwin.html)
 and Xcode's SDK. The local Python helper uses only the standard library.
-Checkout v5 and upload-artifact v6 both use the Node.js 24 action runtime;
 [upload-artifact v6](https://github.com/actions/upload-artifact/tree/v6) requires
 Actions runner 2.327.1 or newer, as provided by the hosted runners.
 
 ## Run a build
 
-On a Windows or macOS machine of the matching architecture, install Rust through
-rustup and the platform compiler (Visual Studio C++ build tools on Windows;
-`xcode-select --install` on macOS). Substitute the target from the table:
+On a Windows or macOS machine of the matching architecture, install Python 3,
+Rust through rustup, and the platform compiler. Use Visual Studio C++ build
+tools on Windows or `xcode-select --install` on macOS. Substitute the target from the table:
 
 ```sh
 rustup toolchain install stable-aarch64-apple-darwin --profile minimal
@@ -50,32 +49,11 @@ Bevy again in a second profile.
 macOS tar archives preserve executable permissions during artifact download.
 The workflow `.github/workflows/desktop-builds.yml` runs this same helper on
 pushes / pull requests affecting the build, and offers a manual **Desktop builds**
-action. Download the four separately named artifacts from a successful workflow
-run. Each job is independent, so one failed target does not cancel the others.
+action. Download the target archive and SHA-256 checksum from its successful job.
+Artifacts are retained for 14 days. Each job is independent, so a failure on
+one target does not cancel the others.
 
-## Validation status and limits
-
-The matrix passes actionlint and YAML validation; the packaging helper's check
-covers all four binary headers and rejects wrong-CPU / malformed inputs. On the
-Linux development host, the Windows x64 binary and test code passed Rust 1.99.0
-cross-target checks using clang-cl and llvm-lib:
-
-```sh
-CC_x86_64_pc_windows_msvc=clang-cl AR_x86_64_pc_windows_msvc=llvm-lib \
-  cargo +1.99.0 check --locked --target x86_64-pc-windows-msvc \
-  -p peacecraft3 --tests -j 2
-```
-
-That checks the Windows x64 Rust code and builds Blake3's target assembly, but
-does not link a Windows executable. ARM64 checking stopped at Blake3's NEON C
-code because the Microsoft CRT header `assert.h` is absent on this Linux host;
-no code or features were changed to bypass that dependency.
-
-Source is in the private [maci0/peacecraft3 repository](https://github.com/maci0/peacecraft3).
-The [first native four-target run](https://github.com/maci0/peacecraft3/actions/runs/38409132391)
-compiled Windows ARM64 and macOS ARM64. Their test phase failed because a
-local-install integration test assumed developer folders existed on the runner;
-that test is now explicitly ignored by default. The [corrected four-target run](https://github.com/maci0/peacecraft3/actions/runs/38419274743) passed compilation, native unit tests, executable-header checks and artifact upload on **all four OS/CPU combinations** at commit `3055771d80a8b4f28fb06162c52652051757ca5d`. All four downloaded archives passed independent checksum and executable-header checks; both macOS tar archives preserve executable permissions. The [later four-target run](https://github.com/maci0/peacecraft3/actions/runs/38439725394) at `d31dc67a262fbe4a87af7309c88cafbd22d35698` also passed all four jobs. Its downloaded artifacts passed independent SHA-256 and PE/Mach-O CPU-header checks, with executable permissions preserved on macOS. This revision includes startup movie and relative layout changes; the new FDF/FPS/format integration needs a subsequent matrix run. Native GPU/audio behavior on Windows/macOS is not established by build and unit-test success. The native Windows runners include the actual CRT headers and SDK missing from the Linux cross-check environment.
+## Run the packaged game
 
 Archives contain only the executable; players supply their own Warcraft III
 assets. Point `PEACECRAFT3_INSTALL` at a directory containing the original MPQs:
@@ -89,21 +67,37 @@ $env:PEACECRAFT3_INSTALL = 'C:\Games\Warcraft III'
 PEACECRAFT3_INSTALL='/path/to/Warcraft III' ./peacecraft3
 ```
 
-The original TFT music can be read from that installation. For decoded menu
-audio files, create an `assets` directory beside the executable containing
-`menu-music.mp3` and `menu-click.wav`, extracted from the player's own install.
-The current native reader cannot decompress the click's Huffman/ADPCM sectors,
-so the decoded WAV is required for click feedback.
+The startup cinematic uses `ffmpeg` on `PATH`. The game menu can open
+without it.
 
-Asset tests skip when the original installation is absent. Compilation
-and unit tests do not prove menu rendering or sound on the target machine: that
-still requires running the game with a real GPU and the user's installation.
-These are unsigned executables, without installers, notarization, or signing.
-The workflow runs on macOS 15; compatibility with older macOS versions has not
-been verified.
+## Validation status
 
-The [strict latest-source run](https://github.com/maci0/peacecraft3/actions/runs/38456169192)
-at `122ecd0` was blocked before any job steps started. GitHub's check annotations
-report failed account payments or an insufficient spending limit. No build/test
-failure is inferred from those empty jobs, and no retry or billing change was
-made. The last independently verified four-target artifacts remain `d31dc67`.
+The [0.19.0 desktop run](https://github.com/maci0/peacecraft3/actions/runs/44262745099)
+passed both Windows jobs. Its macOS ARM64 job failed in the
+`audio_wall_sample_declares_its_actual_platform_origin` test. The macOS code
+path returns an unsupported-clock error before supplying a boot-relative
+sample. The macOS Intel job was cancelled after hitting its 90-minute timeout.
+The run did not produce verified macOS artifacts.
+
+In October 2026, four-target runs passed at
+[`3055771`](https://github.com/maci0/peacecraft3/actions/runs/38419274743)
+and [`d31dc67`](https://github.com/maci0/peacecraft3/actions/runs/38439725394).
+All four archives from each run passed independent SHA-256 and executable
+header checks. The macOS archives preserved execute permissions. An
+[earlier run](https://github.com/maci0/peacecraft3/actions/runs/38409132391)
+found a test that depended on a local installation. That test is now ignored by
+default. Billing blocked the later October run at
+[`122ecd0`](https://github.com/maci0/peacecraft3/actions/runs/38456169192)
+before its jobs started.
+
+The packaging self-test covers all four executable headers and rejects
+malformed or wrong-architecture inputs. A historical Linux cross-check with
+Rust 1.99.0 checked the Windows x64 Rust code and built Blake3 assembly without
+linking a Windows executable. The ARM64 cross-check stopped at missing
+Microsoft CRT headers. The native Windows runners supply the SDK and CRT.
+
+The runners do not supply original game assets. Tests that need them are
+ignored or return early without exercising those paths. Native rendering and
+audio behavior remain unverified.
+The executables are unsigned and ship without installers or notarization.
+Compatibility with macOS versions older than the macOS 15 runners is unverified.

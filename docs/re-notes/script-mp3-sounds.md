@@ -78,6 +78,8 @@ later unsupported native. Strict native/WASM checks are distinct from playback.
 
 Campaign startup now attaches direct-file, PCM label-constructor and parameter
 source loading on executed arguments. Other Host bootstrap inputs remain open.
-See `script-label-sounds.md` and `script-sound-parameter-banks.md`. Browser playback
-dependency, device output, native decoder/
-gapless behavior, 3D effects and complete campaign remain unverified.
+See [sound labels](script-label-sounds.md) and
+[sound parameter banks](script-sound-parameter-banks.md) for source admission.
+Later [browser playback checks](script-audio-playback.md) cover their own
+device path. Native decoder and gapless behavior, 3D effects and complete
+campaign behavior remain unverified.

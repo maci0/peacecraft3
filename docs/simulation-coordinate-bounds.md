@@ -7,10 +7,10 @@ or wrap. Taking the absolute value of `i32::MIN` also exceeds that type.
 Movement and selection now compute differences as `i64`. Movement clamps each
 axis to the existing harness speed, then converts the bounded step back to `Fx`.
 The next position lies between the current position and the target, both valid
-`Fx` values. Selection compares the widened absolute distance with its unchanged
-radius. This preserves the existing rules for distances that previously fit.
+`Fx` values. Selection requires each widened absolute axis difference to be
+strictly less than its limit. The transport can impose narrower input bounds.
 
-Four regressions cover opposite coordinate extremes, a distance equal to
+Four regressions cover opposite coordinate extremes, a signed difference of
 `i32::MIN`, exact arrival at both boundaries, and far selections that previously
 wrapped into the selection radius. Before the fix, three native cases panicked;
 on actual 32-bit release WASM, three cases trapped at assertions detecting wrong

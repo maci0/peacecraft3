@@ -1,14 +1,6 @@
-//! Bevy asset loaders for the pcx-* decoders.
-//!
-//! This crate is the boundary between the format decoders and the engine, and it
-//! is deliberately not the thing that proves the formats right — that is the
-//! decoders' own sweeps. Its job is to take a decoded asset and produce
-//! something Bevy can draw, without a second copy of the format knowledge.
-//!
-//! The one design constraint that matters ahead of the WASM target: nothing here
-//! may do synchronous file I/O. Assets arrive either from an MPQ mount or, in a
-//! browser, as bytes already in memory. So the loaders take `&[u8]` and a path,
-//! never open anything themselves.
+//! Byte-based decoder adapters for Bevy textures, meshes and presentation.
+//! The adapters take a byte slice and source label. Desktop viewers may
+//! open a local installation to supply those bytes.
 
 use bevy::asset::RenderAssetUsages;
 
@@ -101,11 +93,9 @@ pub fn rgba_mip_bytes(
     Some(total)
 }
 
-/// One authored mip, decoded and sliced to the caller-supplied colour
-/// depth. This is the Texture Quality consumer: `one` selects the level,
-/// `depth_bytes` selects how many bytes per pixel are retained. Both are
-/// validated before allocation, and a missing or undecodable level refuses
-/// rather than falling back to the top level.
+/// Decode one authored mip selected by the texture quality policy. Check mip
+/// existence and its configured byte count before decoding. The adapter
+/// accepts only RGBA8 output and returns an error for any other colour depth.
 ///
 /// The returned texture carries the selected level as its base image with
 /// no further mip chain, because the native quality setting names a single
@@ -177,10 +167,7 @@ where
     })
 }
 
-/// Retain the first `depth_bytes` of every 4-byte RGBA pixel.
-///
-/// `depth_bytes` of 4 is the identity; deeper values have no second store
-/// in the RGBA8 loader and refuse instead of inventing a pixel format.
+/// Copy RGBA8 bytes when the requested depth is four bytes per pixel.
 fn slice_color_depth(rgba: &[u8], depth_bytes: usize) -> Option<Vec<u8>> {
     if depth_bytes == 4 {
         return Some(rgba.to_vec());
@@ -255,11 +242,8 @@ pub enum AssetKind {
 }
 
 impl AssetKind {
-    /// Classify by magic, not by suffix.
-    ///
-    /// The shipped set contains `.tga` files that hold no TGA and MDLs whose
-    /// names end in `.mdl` while their contents are `MDLX`, so the extension is
-    /// only a hint and the bytes decide.
+    /// Classify BLP, DDS and MDLX by magic. Consider TGA using a header
+    /// heuristic when no magic matches.
     pub fn detect(bytes: &[u8]) -> Self {
         match bytes.get(0..4) {
             Some(b"BLP1") | Some(b"BLP0") | Some(b"BLP2") => AssetKind::Blp,
@@ -271,8 +255,8 @@ impl AssetKind {
     }
 }
 
-/// A TGA footer is 26 bytes ending in `TRUEVISION-XFILE.`; a TGA header's
-/// colour-map type is 0 or 1 and its image type is one of a small set.
+/// Check the minimum TGA header length, colour-map type and image type.
+/// Full validation belongs to the decoder.
 fn looks_like_tga(d: &[u8]) -> bool {
     if d.len() < 18 {
         return false;
@@ -282,7 +266,7 @@ fn looks_like_tga(d: &[u8]) -> bool {
     colour_map <= 1 && matches!(image_type, 0 | 1 | 2 | 3 | 9 | 10 | 11 | 32 | 33)
 }
 
-/// Validate decoded dimensions against caller policy before allocating a menu image.
+/// Check the decoded RGBA byte budget before allocating a BLP or TGA image.
 pub fn load_image_bounded(
     bytes: &[u8],
     source: &str,
@@ -321,11 +305,8 @@ pub fn load_image_bounded(
     load_image(bytes, source)
 }
 
-/// Loads bytes into whatever the format turns out to be.
-///
-/// Returns the decoded texture for image formats. Models are handled by
-/// [`load_model`], because a model is not one texture.
-/// DDS callers must supply resource limits through [`dds::decode`].
+/// Decode supported BLP and TGA images. Use [`dds::decode`] with explicit
+/// limits for DDS, or [`load_model`] for models.
 pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Error> {
     let kind = AssetKind::detect(bytes);
     match kind {
@@ -338,9 +319,7 @@ pub fn load_image(bytes: &[u8], source: &str) -> Result<LoadedTexture, crate::Er
         }
         .into()),
         AssetKind::Blp => {
-            // Two content paths, and the header says which: direct (palettised)
-            // and JPEG. Routing both through the palettised decode fails on
-            // 4,924 of the 6,696 shipped textures, which is most of them.
+            // The content field selects JPEG or direct decoding.
             let h = pcx_blp::Header::parse(bytes)
                 .map_err(|e| crate::Error::Decode(format!("{source}: {e}")))?;
             let (w, hgt, rgba) = if h.content == 0 {
@@ -464,9 +443,9 @@ pub fn pose_from_poses(
 
 /// Skins a mesh's vertices by a posed skeleton.
 ///
-/// Each vertex's matrix group comes from `GNDX`, and that group's bone is the
-/// slice of `MATS` the group counts select. This is the whole point of the mesh
-/// path: without it a model shows its rest pose, which looks fine and is wrong.
+/// Each `GNDX` group selects a node-ID span from `MATS`. Use the first
+/// node ID for the pose matrix. A vertex without a matrix stays in its
+/// rest position.
 #[cfg_attr(
     feature = "profile-cpu",
     tracing::instrument(skip_all, target = "pcx_cpu", name = "animation.skin_mesh")
@@ -552,11 +531,11 @@ pub struct LoadedMesh {
     /// Matrix group per vertex, indexing into [`LoadedMesh::bone_indices`]
     /// through the group counts.
     pub vertex_groups: Vec<u8>,
-    /// Bone indices per group.
+    /// Flat node-ID list, partitioned by matrix group.
     pub bone_indices: Vec<u32>,
-    /// Indices into the arrays above, per group.
+    /// Number of node IDs in each matrix group.
     pub group_counts: Vec<u32>,
-    /// Name of the geoset this came from, for a trace.
+    /// Zero-based geoset ordinal used in traces.
     pub geoset: usize,
     /// Index into the model's `MTLS` materials, and the answer to "which
     /// texture does this geoset draw with".
@@ -575,9 +554,9 @@ pub struct LoadedModel {
     pub minimum_extent: [f32; 3],
     pub maximum_extent: [f32; 3],
     pub meshes: Vec<LoadedMesh>,
-    /// Bone names in file order; `parent_id[i]` indexes this same list or the
-    /// wider node space, matching the decoder's own reading.
+    /// Bone names in file order.
     pub bone_names: Vec<String>,
+    /// Raw parent node IDs in bone order. A parent may be a helper.
     pub bone_parents: Vec<i32>,
     /// Animation sequences, in file order, with their duration and looping.
     pub sequences: Vec<Sequence>,
@@ -672,12 +651,9 @@ pub fn load_model(bytes: &[u8], source: &str) -> Result<LoadedModel, crate::Erro
                 .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect(),
-            // `MTGC` says how many indices the groups actually use. The MATS
-            // span is wider than that — a footman's block ends in float rows
-            // the group counts do not reach — so trim to the semantic count
-            // rather than handing Bevy numbers that index nothing.
             vertex_groups: mesh.vertex_groups.clone(),
             bone_indices: {
+                // Keep only the matrix indices consumed by the group counts.
                 let want: usize = mesh.matrix_groups.iter().map(|&c| c as usize).sum();
                 mesh.matrix_indices[..want.min(mesh.matrix_indices.len())].to_vec()
             },
@@ -743,7 +719,7 @@ pub enum Error {
     Unsupported(&'static str),
 }
 
-/// A Bevy plugin wiring the loaders as asset sources.
+/// Empty Bevy plugin. Loader adapters are called directly.
 pub struct PcxGfxPlugin;
 
 impl Plugin for PcxGfxPlugin {
@@ -777,12 +753,8 @@ mod tests {
 
     const FOOTMAN: &str = "Units\\Human\\Footman\\Footman.mdx";
 
-    /// Both BLP content paths must load, because they are both shipped.
-    ///
-    /// `load_image` used to route everything through the palettised decode,
-    /// which fails on every JPEG-content texture — 4,924 of the 6,696 in the
-    /// 1.29b set. A texture that fails to load falls back to flat colour, so
-    /// nothing looks broken; the model just has no texture on it.
+    /// Exercise named JPEG and direct BLP members from a local install. Skip
+    /// an unavailable install or member.
     #[test]
     fn loads_both_blp_content_paths() {
         let Some(dir) = install() else { return };
@@ -813,8 +785,7 @@ mod tests {
     fn detects_formats_by_magic_not_by_name() {
         assert_eq!(AssetKind::detect(b"BLP1...."), AssetKind::Blp);
         assert_eq!(AssetKind::detect(b"MDLXVERS"), AssetKind::Mdl);
-        // A real TGA header the shipped set uses: 24bpp, no colour map.
-        // 18 bytes is the minimum the detector trusts, so pad the probe.
+        // A minimal header probe for an uncompressed truecolour TGA.
         let mut tga = [0u8; 18];
         tga[1] = 0; // no colour map
         tga[2] = 2; // uncompressed truecolour

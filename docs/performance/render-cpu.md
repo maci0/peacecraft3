@@ -1,8 +1,9 @@
 # Render and HUD CPU work
 
 Fixed-work counters for the per-frame render and HUD systems of the mounted Prologue02
-campaign scene and the main menu. Counts and instruction totals gate regressions; elapsed
-time, FPS and rasterizer work are report-only (see [performance testing](../performance-testing.md)).
+campaign scene and the main menu. The budget checks named work counters.
+Instruction counts, elapsed time, FPS and rasterizer work are report-only.
+See [performance testing](../performance-testing.md).
 Inputs are the local Legacy install (not committed); nothing from the assets is copied here.
 
 ## Workload `render-cpu-v1`
@@ -48,15 +49,21 @@ calls and bytes its own thread made inside it, excluding child spans (`bench/spa
 
 ### Running it
 
+Use an isolated display, null audio and a fresh profile as described in
+[test isolation](../../AGENTS.md#test-isolation). The recorded software
+renderer run used the lavapipe ICD. Set `PCX_NATIVE_CHAPTER_INSTALL` to the
+local install, `PCX_NATIVE_CHAPTER_MAP` to the archive member, and
+`PCX_CAMPAIGN_CAPTURE_DIR` to a fresh output directory.
+
 ```sh
 # build once (profiling profile, thin-LTO off for compile time)
 CARGO_PROFILE_PROFILING_LTO=off CARGO_PROFILE_PROFILING_CODEGEN_UNITS=16 \
   cargo test -p peacecraft3 --bin peacecraft3 --features test-fixtures \
   --profile profiling --no-run --locked --offline
-# run: headless env of the other GPU fixtures (fresh XDG_DATA_HOME, null ALSA, lavapipe ICD),
-# PCX_NATIVE_CHAPTER_MAP='Maps\Campaign\Prologue02.w3m', PCX_NATIVE_CHAPTER_ADDON=roc,
-# a new PCX_CAMPAIGN_CAPTURE_DIR, then
-taskset -c 0-3 <test-binary> campaign_entry_gpu_tests::mounted_campaign_render_cpu_workload \
+# Set test_binary to the executable path Cargo prints.
+export PCX_NATIVE_CHAPTER_MAP='Maps\Campaign\Prologue02.w3m'
+export PCX_NATIVE_CHAPTER_ADDON=roc
+taskset -c 0-3 "$test_binary" campaign_entry_gpu_tests::mounted_campaign_render_cpu_workload \
   --ignored --exact --nocapture --test-threads=1
 ```
 
@@ -191,9 +198,9 @@ Unchanged by round 2 (submission side): draw calls 15,426 / 18,432 / 18,432 and 
 calls 25,344 / 25,344 / 25,600 (idle / hud / motion), pipelines set 9,060 / 11,520 / 11,520,
 bind groups set 46,196 / 51,687 / 51,863, render-world mesh instances 102 to 103. Per frame in
 `campaign_idle` that is 60 draws, 99 multi-draws, 35 pipeline and 180 bind group switches for
-102 visible mesh entities, with 75 bind groups and 19 buffers created. The scene is not
-draw-call bound, and no material or mesh batching change was needed to keep these low (see
-below). Allocator totals vary between runs of one binary by under 0.01% (calls) and under 0.1%
+102 visible mesh entities, with 75 bind groups and 19 buffers created. The CPU
+instruction count fell while submission counters held. The comparison did not
+vary batching. Allocator totals vary between runs of one binary by under 0.01% (calls) and under 0.1%
 (bytes). Every other campaign counter repeated exactly across five runs; the menu phase counters
 vary slightly because its animation phase at capture depends on asset-load timing.
 
@@ -326,23 +333,25 @@ on the final tree, and the render workload passes the budget file on a fresh run
 with a bound 1% too low for a menu counter failed with the counter named, which is how the
 menu headroom was found).
 
-### GPU observations on the RX 7900 XTX (report-only)
+### Manual GPU comparison procedure
 
-Nothing below was run on a real GPU; the lavapipe numbers here say nothing about it. Steps for
-the maintainer, using the existing overlay and [profiling](../profiling.md):
+The recorded workload used software Vulkan. This procedure uses a physical GPU
+and a visible display, so use it only for an explicitly requested visible run.
+Use the existing overlay and [profiling guide](../profiling.md):
 
 1. Build once: `cargo build --locked --profile profiling -p peacecraft3 --features profile-gpu`.
    `profile-gpu` adds Bevy's render diagnostics and a diagnostics log line per interval; the
    binary is `target/profiling/peacecraft3`.
 2. Start it on the real display (`WGPU_BACKEND=vulkan`), enter Prologue02 and wait until
    control returns, so the scene matches the `campaign_idle` phase. Do not move the camera.
-3. Press F8 for the frame-time graph and F7 for renderer, scene and device-memory data; both
+3. Press F6 for the frame-time graph and F7 for renderer, scene and device-memory data; both
    report Bevy frame cadence and allocator usage, not draw counts. Let the scene run 60 s with
-   F8 open and note the smoothed frame time and the peak buckets.
+   F6 open and note the smoothed frame time and the peak buckets.
 4. With `profile-gpu` the log carries per-pass GPU elapsed times (`render/<pass>/elapsed_gpu`
    for the opaque, transparent and UI passes). Take the median over at least 100 reports.
-5. For per-draw timing, run `python3 tools/profile.py gpu -- target/profiling/peacecraft3`, press
-   the same scene, then `python3 tools/profile.py trigger` and open the `.rgp` capture in RGP.
+5. For per-draw timing, run `python3 tools/profile.py gpu -- target/profiling/peacecraft3`,
+   enter the same scene, then run `python3 tools/profile.py trigger` and open the
+   `.rgp` capture in RGP.
    Do not sum overlapping draw durations into a pass time.
 6. Repeat steps 2 to 4 on the commit before and after a change, same session, same camera. Record
    the host clocks and load beside each result; none of these numbers is a pass or fail

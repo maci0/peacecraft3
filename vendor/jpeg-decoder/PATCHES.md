@@ -1,3 +1,5 @@
+# jpeg-decoder 0.3.2 patch
+
 Based on image-rs/jpeg-decoder 0.3.2 (MIT OR Apache-2.0).
 
 The full 8×8 integer IDCT uses 13 fractional bits and signed rounding, matching
@@ -6,11 +8,11 @@ retain upstream behavior. PeaceCraft enables `platform_independent` so architect
 specific 12-bit transforms cannot change decoded pixels. Quantization tables and
 coefficients continue to come from each JPEG stream.
 
-The selected legacy executable contains the same 13-bit transform constants;
-see docs/re-notes/campaign-minimap.md in the repository root for evidence and
-local original-input validation. No game data is included here.
+The [minimap JPEG evidence](../../docs/re-notes/campaign-minimap.md#live-sight-endpoints-and-jpeg-precision-2026-11-04)
+records the 13-bit constants and original-input check for the selected Legacy
+executable. The vendored crate contains no game data.
 
 Obsolete `asmjs` target conditions were removed so current Rust check-cfg stays warning-free.
-The saturated-block wrapping regression has the 13-bit transform result.
+`test_dequantize_and_idct_block_8x8_saturated` checks the 13-bit result.
 The thread-worker module is compiled only on its supported non-WASM targets.
 File-based documentation examples compile without requiring upstream image fixtures.

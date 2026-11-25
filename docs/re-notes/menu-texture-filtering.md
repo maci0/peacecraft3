@@ -28,9 +28,10 @@ TFT/RoC/TFT journals retain the expected backgrounds, particles and logos at bot
 extents. An unavailable gamepad device is recorded separately from renderer errors;
 the first classifier rejected that environment message as a rendering failure.
 
-A fresh browser package builds, but its first 1024×768 adapter run times out before
-menu readiness. That run is rejected, stopped and not retried; 4K browser capture
-was not attempted after it. Rendered WASM acceptance, rain appearance, exact
-transparency and original/native/WASM output equality remain open. No public site
+The candidate browser package built, but its first 1024×768 adapter run
+timed out before menu readiness and stopped. This candidate had no 4K browser
+capture. [Later mipmap checks](menu-texture-mipmaps.md) report their own
+browser results. Rain appearance, transparency and cross-client equality
+were outside this result. No public site
 deployment occurred. Commands, source hashes, rejected attempts and the local
 `comparison.html` remain under `.scratch/menu-wrap-filter-root-20261019/`.

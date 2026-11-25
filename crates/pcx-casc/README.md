@@ -1,8 +1,8 @@
 # Local CASC reader
 
-This Rust 2024 / Rust 1.99 crate belongs to the shared workspace and uses its
-lockfile and warning-denial policy. No network access, install mutation or original asset
-contents are part of the reader. All source fixtures are synthetic.
+This Rust 2024 crate uses the workspace lockfile and has a minimum Rust
+version of 1.99. The reader works offline and opens the install read-only.
+Checked-in fixtures are synthetic. The ignored tests take local original inputs.
 
 ## Provenance and measured scope
 
@@ -16,8 +16,8 @@ verified release or a security boundary. Parser entry points require explicit
 provenance; they do not infer a version from a path.
 
 Reconfirmed: `.build.info`, `_retail_/`, 16 `.idx` files and 33 data parts.
-Data parts total 34,960,815,844 bytes. The ignored fixture validates every
-index entry against the corresponding part's actual size. It does not hash or
+Data parts total 34,960,815,844 bytes. The ignored `all_local_indexes_and_configured_manifests` test checks every
+index entry against its data part’s actual size. It does not hash or
 decode the entire 34.96 GB store.
 
 ## Closed index feature
@@ -89,8 +89,7 @@ Envelope size disagreement is refused rather than assigned alternate semantics.
 BLTE supports unencrypted `N` and `Z`, scalar and chunk-table framing. Declared
 sizes, header/key identity, every chunk MD5, zlib end-of-stream, exact consumption
 and caller memory limits are checked. Unknown signatures/tags, encryption and
-recursive frames return contextual `Unsupported` with the next probe. The plan's
-BLDR label is not assumed to be an alias for the measured BLTE signature.
+recursive frames return contextual `Unsupported`.
 
 The configured ENCODING manifest decodes to 8,846,470 bytes. EN v1 parsing checks
 all 1,294 CKey-page and 849 EKey-page directory hashes and first-key relations.
@@ -226,7 +225,6 @@ patch execution, model rendering or runtime behavior.
   bytes retained. Next: trace native patch/spec selection for that exact record.
 - Full-store codec coverage remains unproven; encryption/recursive modes, other
   index layouts, remote-only content and original-client execution remain open.
-- Existing local-envelope, maximum-offset and ENCODING ESpec refusals are preserved.
 
 ## Primary format and dependency references
 
@@ -251,11 +249,13 @@ The shared workspace owns dependency resolution; no manifests or lockfiles were 
 
 ```sh
 CARGO_TARGET_DIR=/tmp/pcx-casc-tvfs-target cargo test --locked -p pcx-casc
-PEACECRAFT3_REFORGED_DIR='/home/maci/Faugus/battle-net/drive_c/Program Files (x86)/Warcraft III' \
+PEACECRAFT3_REFORGED_DIR='/path/to/Warcraft III' \
 PEACECRAFT3_REFORGED_ASSET='war3.w3mod:units/human/footman/footman.mdx' \
 CARGO_TARGET_DIR=/tmp/pcx-casc-tvfs-target cargo test --locked -p pcx-casc -- --ignored --nocapture
 ```
 
-The ignored original-fixture test fails without its explicitly supplied install.
-It never succeeds by skipping missing source assets. Console measurements stay
-local; no decoded original bytes are written.
+Both ignored tests in [local_install.rs](tests/local_install.rs) require
+`PEACECRAFT3_REFORGED_DIR`. Only
+`named_asset_resolves_through_tvfs_encoding_and_content` also requires
+`PEACECRAFT3_REFORGED_ASSET`. Missing inputs fail the tests. Console measurements
+stay local, and the tests write no decoded original bytes.

@@ -39,9 +39,10 @@ The recreation stores the state each native writes. It renders none of it.
   `+0x48c` (`UnitSetUsesAltIcon`, see `unit-alt-icon.md`). The routine that draws
   those units with the alternate icon is not decoded.
 - Recreation: `ObjectHost::alt_minimap_icon` returns the last accepted path
-  (`None` before one). Null and empty paths are ignored. A `TRIGSTR_` text
-  refuses, because this host has no map string table. The texture load and its
-  failure path are not modeled. Source: `alt_minimap_icon_host.rs`.
+  (`None` before one). The host resolves `TRIGSTR_` references through the
+  admitted map string table and ignores null or empty values. This path stores
+  the requested icon path. Texture loading and failure belong to the caller.
+  See `alt_minimap_icon_host.rs`.
 - Chapters that call it: TFT `HumanX01` (`war3map.j:7476`) and `UndeadX08`
   (`war3map.j:8396`), both with a literal `UI\Minimap\Minimap-Tower` path.
 

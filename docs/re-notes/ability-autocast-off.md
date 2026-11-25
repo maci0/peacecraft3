@@ -2,8 +2,8 @@
 
 The selected Legacy client capability is read from the retained executable, with
 its input identity and SHA checked at admission. Named Slow, Inner Fire and Heal
-class getters lead to their class-code and on/off-order virtuals. The bound
-classes are Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`),
+class getters lead to their class-code and on/off-order virtuals. The initial
+admission covered Slow, Inner Fire, Heal, Raise Dead (`CAbilityRaiseDead`, code `Arai`),
 Auto-Dispel Magic (`CAbilityAutoDispelMagic`, code `Aadm`), Web (`CAbilityWeb`,
 code `Aweb`), Faerie Fire (`CAbilityFaerieFire`, code `Afae`), Renew
 (`CAbilityRenew`, code `Aren`), Bloodlust (`CAbilityBloodlust`, code `Ablo`), Frost
@@ -11,8 +11,9 @@ Armor (`CAbilityFrostArmorAuto`, code `AUfu`), Restoration (`CAbilityRestoration
 code `Arst`), Mana Shield (`CAbilityManaShield`, code `ANms`) and Immolation
 (`CAbilityImmolation`, code `AEim`), Repair (`CAbilityRepair`, code `Arep`) and Black
 Arrow (`CAbilityBlackArrow`, code `ANba`). The
-reader decodes all fifteen with the same OFF handler checks and refuses the image
-otherwise. Each OFF order name is the `Orderoff` (or, for Immolation, the `Unorder`)
+reader used the same OFF handler checks for those fifteen classes. See the
+[current class list](../../crates/pcx-play/src/autocast_rules.rs) for later
+admissions. Each OFF order name is the `Orderoff` (or, for Immolation, the `Unorder`)
 of an ability section in the `*AbilityFunc.txt` members, and each section's `code`
 (from `Units\AbilityData.slk`) selects the class: `repairoff` in `[Ahrp]`
 (`NeutralAbilityFunc.txt`, code `Arep`), `weboff` in `[Aweb]` and `[ACwb]`,
@@ -120,8 +121,8 @@ An OFF on a unit with that alias refuses with a profile mismatch: the host reads
 `UnitAbilities.slk` `auto` row lists `Amic`. Two candidate classes failed the reviewed
 checks when added temporarily and then removed: `CAbilityMilitiaConvert` (the reader
 fails with `neutral-player context: Rule(Range)`) and `CAbilityCallToArms` (`autocast
-instruction differs at 0`). Town Bell stays refused. Whether `Amic` is an autocast
-ability is unverified.
+instruction differs at 0`). This initial attempt did not admit Town Bell.
+The later immediate-order checks below treat it separately from autocast.
 
 `innerfireon` (`[Ainf]`, code `Ainf`, `CAbilityInnerFire`) and `webon` (`[ACwb]`
 and `[Aweb]`, code `Aweb`, `CAbilityWeb`) are decoded and implemented as state

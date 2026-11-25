@@ -2,10 +2,8 @@
 
 The selected Legacy 1.29.2.9231 executable has SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`.
-Its owned `common.ai` declares `StopGathering` with no arguments and no result.
-`InitAI` calls it before campaign build and captain setup. The unchanged
-Human01-to-Human02 opening-minute gate now passes this call and refuses
-`SetNewHeroes` after captain creation at 7.218750 seconds; this is not completed campaign execution.
+Its `common.ai` declares `StopGathering` with no arguments or return value.
+`InitAI` calls it before campaign build and captain setup.
 
 ## Selected-code effects
 
@@ -41,8 +39,8 @@ context flag, so a context-free successful no-op would lose state.
 
 ## Policy reader checks
 
-The original StopGathering reader binds six checked image windows and charges their complete lengths
-against the input budget. It preserves the constructor condition and joins the
+`GatheringPolicy` binds six checked image windows and charges their full
+lengths against the input budget. It preserves the constructor condition and joins the
 context clear to its later reader. Candidate branches must reach the actual
 boolean returns. Six focused tests, including a real selected-image decode,
 pass alongside strict native/WASM Clippy and formatting. The initial draft
@@ -73,9 +71,9 @@ foreign or removed unit.
 The combined host, startup wiring and policy reader pass 1,555 core tests,
 610 app tests, strict native/WASM Clippy, formatting, selected Human01 startup
 and Human02 Continue startup. A published two-program fixture checks independent
-owner associations before and after sleep. The actual unchanged opening-minute
-gate passes gathering and captain creation and stops at `SetNewHeroes`. These are shared-world
-and script-execution checks, not rendered or native callback parity. Receipts
+owner associations before and after sleep. At that checkpoint, the opening-minute test passed gathering and captain
+creation before reaching the then-unsupported `SetNewHeroes` at 7.218750
+seconds. The checks covered shared-world state and script execution. Receipts
 remain local under `.scratch/campaign-flee-integration/gathering-*`.
 Native callback delivery, later classification changes, AI production and
 strategy, rendered behavior and chapter completion remain open. The retained
@@ -83,7 +81,7 @@ local evidence is under `.scratch/campaign-basics-native/`, including the
 selection, callback and initialized type-mask lineage notes and their mapped
 window hashes. No original assets are tracked.
 
-The same admission now additionally binds
+The same admission binds
 [`ClearHarvestAI` assignment rollover](campaign-ai-harvest-assignments.md).
 Its assignment flags remain separate from the context gathering flag and the
 one selected-unit association; clearing assignments does not issue worker stops.

@@ -1,9 +1,9 @@
 # Campaign AI construction
 
-`SetProduce` on a structure kind (`common.ai` `StartUnit`, line 1292) is how the campaign AI
-builds. The recreation answers false when nothing could build or upgrade the kind and refuses
-every other structure request loudly. This note records what the Legacy executable
-(SHA-256 `3f2ed012...`) and original-client probes show, and what is not decoded.
+The campaign AI requests structures through `SetProduce` in the selected
+Legacy 1.29.2 `common.ai` (`StartUnit`, line 1292). The host supports bounded
+build and upgrade requests. This note records evidence from the selected
+executable (SHA-256 prefix `3f2ed012`) and original-client probes.
 
 ## Executable evidence
 
@@ -207,9 +207,8 @@ remainder modulo 64, adds 32 toward that coordinate's sign when bit 1 of the cor
 dimension is set, and adds 16 toward the sign when the dimension is odd (`0x4e013d` through
 `0x4e028d`, initializer `0x403b40`). Zero uses the positive sign. Mapping the selected TGA's
 axes to those native dimensions and the live construction facing remain unqualified. The
-recreation's current `construction_position` explicitly uses a source-grid anchor as an
-unqualified snap, and its construction host supports only the Human worker style and a subset of
-placement tokens. Those limitations remain fidelity questions for this shared path.
+recreation uses a source-grid anchor in `construction_position`. Its equivalence
+to native snapping remains unqualified.
 
 ## Recreation
 
@@ -219,9 +218,9 @@ and the snap arithmetic. It reads grid, score and snap operands from the fingerp
 and uses the reviewed client real-number helpers for the snap's addition and subtraction.
 Its caller must supply terrain samples, texture dimensions, complete texture-rectangle cells,
 the extra check and the shared build validator; it propagates errors from those inputs. Synthetic
-tests exercise these pieces. Production does not yet obtain those inputs or issue a build order.
-The diagnostic below supplies provisional inputs from the local map. The caller must resolve the
-special buffer-radius branch before scoring, and the `0x7fd6b0` reach check is not fully decoded.
+tests exercise these pieces. The production host assembles bounded live placement
+inputs in `ai_construction_host.rs`. The earlier diagnostic below used provisional
+map inputs. The complete native `0x7fd6b0` reach check remains unqualified.
 
 The ignored local-input test `ai_placement_original.rs` reads the selected executable, the
 Human05 terrain and pathing bounds, and the stock Necropolis texture from the selected install.
@@ -229,10 +228,13 @@ With the texture header dimensions supplied as native dimensions, the two record
 positions are unchanged by the snap. This is a snap compatibility check only: it does not apply
 map object overrides, establish the native dimension mapping, or run the placement search.
 
-`set_ai_produce` (`unit_training_host.rs`) for a structure kind:
+`set_ai_produce` in `unit_training_host.rs` accepts the default town argument
+(`-1`). Other town arguments return an explicit error. For a structure kind:
 
-- a live unit of the player lists the kind in `Builds`: refuse (`AI construction placement is
-  not admitted`, naming the builder type and position);
+- It tries live units that list the kind in `Builds`, skipping builders with
+  active construction orders. It looks for a site through `ai_structure_site`
+  and returns the build order’s acceptance. If no builder yields a site, it
+  returns false. Resource structures other than `ugol` are unsupported.
 - no builder, and the request is not `ugol`: the first idle unit that lists the kind in `Upgrade` pays the amount derived from the source `RelativeUpgradeCost` mode ([pricing/refund contract](player-production-queues.md#structure-upgrade-cost-and-refund-policy)) and, after the target's `bldtm` seconds, becomes that unit. Idle means shown, unpaused, not under construction, and holding no queue job. Those stand in for the undecoded counters at `+0x3c` and `+0x40`. The target's `Requires` stands in for check slot `0x328`. A building that cannot be paid for, or a request with no idle upgrader, returns false and orders nothing. Death while the job runs refunds the paid amount through `UpgradeRefundRate`; an enabled, unqualified damage penalty refuses admission. Completion writes the new type's base life and mana; researched bonuses are not rebased onto that base. A session with a model loader refreshes the model through the replacement form;
 - otherwise return false, charge nothing, order nothing.
 
@@ -296,8 +298,8 @@ same setup without the position recording. Scripts, map, run receipts and sample
 
 This differs from the unblocked probe, while the mine stays at the same coordinates. Creating a
 unit can also affect handles or random state, so the comparison does not isolate a footprint or
-prove a specific blocking rule. The recreation refuses before selecting a site, so no placement
-comparison from production orders is available.
+prove a specific blocking rule. This probe predates production placement
+comparisons.
 
 ### Order-time observations
 
@@ -403,9 +405,9 @@ surrogate implements the native check. The mine-origin traversal also finds a va
 class candidate at rank 280; the later immediate score-5 candidate takes precedence.
 
 The mine is present at the expected location, but the diagnostic does not issue or compare a
-haunted-mine build. The two original ziggurat sites in each layout are recorded above; no
-ziggurat comparison is available because the current construction host refuses its `blighted`
-requirement. A first attempt using 8 s worker positions rejected the blocked oracle due to a
+haunted-mine build. The original ziggurat sites are recorded above. The
+construction host at this checkpoint refused the `blighted` requirement, so
+the diagnostic did not compare ziggurat placement. A first attempt using 8 s worker positions rejected the blocked oracle due to a
 mobile occupancy cell. Using the 9 s samples instead admits it. This shows the importance of
 the exact order-time state, not a proven validator error.
 
@@ -431,7 +433,7 @@ result as a finite coordinate-based value (`0x8a4b59` through `0x8a4b9e`, `0x8a2
 two individual masked high-bit states (`0x8a20c4` through `0x8a211d`). Mapping those states and
 the temporary rectangle operations to live placement data remains open, so ordinary reachability is not
 an equivalent replacement. The recreation's route cannot substitute a stationary mine as its moving
-unit: it refuses moving pathing textures. No production placement is admitted on these results.
+unit because it refuses moving pathing textures.
 
 ### Reach search and temporary occupancy cache
 
@@ -716,9 +718,8 @@ the native texture index as (6, 0), with texture flag `0x08`; that selected Necr
 blue-only. The construction raster at the time retained red pixels only, so this border cell was
 absent from its check. The subsequent channel decode and diagnostic are below.
 
-The native hierarchical queue and its occupancy mapping remain incomplete. The diagnostic
-surrogate is not that search, and the strict production refusal remains. Human05 was not rerun
-because both layouts are not reproduced by the recreation.
+This diagnostic used a surrogate for the native hierarchical queue and
+occupancy mapping. The team did not rerun Human05 at this checkpoint.
 
 ### Texture channels, town selection and reach traces, 2026-10-28
 

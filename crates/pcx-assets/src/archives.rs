@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Mutex};
 
 use crate::{AssetPath, ContentSource, LayerKind, SourceContent, SourceError, SourceInfo};
 
-/// Caller-selected logical identity and exact archive/TVFS member.
-/// This declares a mounted subset, not the archive's complete inventory.
+/// One mounted mapping from a logical resolver path (`asset`) to the exact
+/// archive or TVFS member name (`member`).
 pub struct NamedMember {
     pub asset: String,
     pub member: String,
@@ -135,7 +135,10 @@ impl MpqSource {
             extraction: None,
         })
     }
-    /// Add explicit packed/decoded policy and caller-owned codec input.
+    /// Construct an MPQ source with packed and decoded limits for bounded reads.
+    ///
+    /// The supplied Huffman table takes precedence over a table already
+    /// attached to the archive.
     pub fn new_bounded(
         archive: pcx_mpq::MpqArchive,
         id: String,
@@ -188,7 +191,6 @@ impl ContentSource for MpqSource {
         let mut archive = self.archive.lock().map_err(|_| SourceError::Unavailable {
             detail: "MPQ reader lock is poisoned".into(),
         })?;
-        // A per-source table wins; otherwise the codec source imported with the archive.
         let imported = archive.codec_table();
         let codec = huffman.as_ref().or(imported.as_deref());
         let bytes = archive

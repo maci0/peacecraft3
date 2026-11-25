@@ -20,8 +20,9 @@ The music extracts with the existing archive reader:
   'Sound\Music\mp3Music\War3XMainScreen.mp3' web/assets/menu-music.mp3
 ```
 
-The click uses compression mask `0x41`, which the Rust reader does not yet
-decode. Its verified sector offsets and decryption can be exported separately:
+The click uses compression mask `0x41`. The Rust reader supports this
+combined compression when the source Huffman table is supplied. The earlier
+Storm.dll comparison exported verified sector offsets and decrypted data:
 
 ```sh
 cargo run -p pcx-mpq --example export_audio_sectors -- \

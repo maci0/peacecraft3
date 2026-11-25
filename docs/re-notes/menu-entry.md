@@ -263,9 +263,7 @@ observation is retained separately from the baseline. The overall renderer gate
 still fails explicitly for sky illumination and terrain/tree sight occlusion;
 these lifecycle assertions do not turn it green.
 
-The current HUD Menu action and camera menu key still reveal the chapter screen.
-That does not implement Warcraft's in-game pause menu. Selected source members
-`EscMenuMainPanel.fdf` and `EscMenuTemplates.fdf` provide its main, end-game and
-confirmation panels; their source relationships must drive the eventual surface.
-No copied geometry, assumed save-game behavior or placeholder success is justified
-by the lifecycle fix.
+At this checkpoint, the HUD Menu action and camera menu key revealed the
+chapter screen. The later [campaign escape menu](campaign-escape-menu.md)
+records the separate pause-menu implementation, including the authored main,
+end-game and confirmation panels.

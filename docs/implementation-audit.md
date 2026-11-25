@@ -5,7 +5,7 @@ current source APIs and the CPU test baseline. Checkboxes are historical evidenc
 not a reliable measure of game completeness. New implementation changes are separately
 validated before integration.
 
-## Corrections to the tracker
+## Tracker corrections from the October audit
 
 - The scripting crate already contains a resolver, typed values, interpreter and
   host interface. The statement that it stops at syntax is stale. Most game
@@ -37,7 +37,7 @@ The reviewed CPU baseline passed script 96, triggers 52, play 14 plus one CLI,
 network 43 and simulation 8 tests. Original-asset fixtures remain explicit and
 ignored by default. These counts identify a baseline, not a fidelity result.
 
-## Full backlog and dependencies
+## Backlog at the October checkpoint
 
 | Area | Existing foundation | Missing work and acceptance gate | Workstream |
 | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ ignored by default. These counts identify a baseline, not a fidelity result.
 | Performance | F8 frame diagnostics, strict profiling feature checks and a deterministic movement workload | F8 overlay, CPU/render traces, fixed-work allocation/instruction budgets as each subsystem lands; timing/FPS are report-only under contention | Integration/performance |
 | Menu fidelity | Original font/art/scene/logo, relative layout | Parse FDFs instead of copied values; blue fill/state edges, hanging panel/entrance, live camera/tints, scene framing, options and original input/sound | Menu integration, then renderer |
 
-## Implementation order
+## Implementation order proposed in October
 
 Keep parser/data, scripting/playtest and menu changes isolated until their
 interfaces and targeted tests are stable. Integrate those results into the app

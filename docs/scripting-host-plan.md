@@ -6,7 +6,7 @@ unchanged map's script or editor trigger graph. Campaign startup is the first
 acceptance gate, not the end of the scope. A declaration, source-code mention,
 successful no-op or parser test does not establish implemented behavior.
 
-Current unchanged campaign boundary (2026-10-25): RoC Prologue01 and TFT
+25 October 2026 campaign checkpoint: RoC Prologue01 and TFT
 NightElfX01 publish their sessions, restore player control after the opening skip
 and pass a five-minute idle script horizon. The TFT permanent-corpse helper now
 executes through real decay suspension, retaining canonical bone-phase corpses.
@@ -78,7 +78,7 @@ dispatch, shared state, renderer/audio/UI consumers, fixtures and lifecycle test
 in the same slice. Use synthetic nonstock data to discriminate derivations, then
 explicit local-original gates. All automated runtime tests are headless and muted.
 
-## Current campaign-entry priorities
+## Campaign-entry checkpoints and open gates
 
 1. RoC `Chasing Visions`: the unchanged application gate publishes the mission,
    returns the opening to player control with Escape events and passes a
@@ -94,13 +94,14 @@ explicit local-original gates. All automated runtime tests are headless and mute
    presentation remain separate fidelity work.
 3. Complete the in-game menu's unavailable controls and original-behavior
    comparisons. Its source panels now overlay the paused mission and connect
-   return/end/back, restart and exit handlers; Save/Load/Options/Help/Tips are
-   disabled rather than pretending support. Script exit and the mounted Quit path
+   return/end/back, restart and exit handlers. Help and Tips have scoped
+   panels. Save, Load and in-game Options remain disabled. Script exit and the mounted Quit path
    retire owned UI before a later launch. Complete source-driven save/load and
    paused settings/help content remain work; native quit/score and dynamic
    visibility/timing parity still need qualification.
-4. Continue each unchanged first mission through player control and its real
-   objectives; turn each uncovered API/behavior gap into a regression.
+4. Extend authored-objective and continuation checks beyond the recorded
+   Human campaign runs. See the [tracker](../TRACKER.md) and
+   [Human campaign handoff](handoff-human06.md) for the exact frontiers.
 5. Run the complete source inventory and the custom-map compatibility corpus.
    Empty startup diagnostics alone do not close the matrix above.
 

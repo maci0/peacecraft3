@@ -94,10 +94,11 @@ Those are different policies. The current constant must not be presented as
 the native campaign mount order, and it should not be changed globally to
 implement campaign selection without checking every existing consumer.
 
-## Minimal scoped implementation path
+## Scoped design and implementation
 
-The following uses existing `pcx-assets` and `pcx-mpq` types and leaves
-`DEFAULT_PRIORITY` unchanged.
+The scoped native design uses existing `pcx-assets` and `pcx-mpq` types and
+preserves `DEFAULT_PRIORITY`. The numbered steps record the design. The
+subsequent checks record what shipped and what still needs qualification.
 
 1. **Derive the namespace in a new reader** under `crates/pcx-play` (beside the
    existing selected-image readers). Inputs: the selected executable bytes,
@@ -164,10 +165,10 @@ The selected RoC startup gate exposed an absent-upgrade query (`Rhrt`) in
 and synthetic tests alone do not establish successful unchanged chapter startup.
 The source-derived query correction subsequently passed selected Human01
 preparation, including the index-to-publication recipe identity assertion and a
-later launcher change. Selected Continue subsequently passes Human02's `prvt`
-(`AIlf` / `AIml`) held maximum-life passive and refuses the intelligence effect
-on `ckng`. This does not establish successful Human02 startup or mission
-completion.
+later launcher change. At that checkpoint, Continue passed Human02’s
+`prvt` (`AIlf` / `AIml`) held maximum-life passive and stopped at the `ckng`
+intelligence effect. See the [tracker](../../TRACKER.md) for later startup
+coverage.
 
 Do not switch unrelated rule consumers to the selected namespace until their
 source lookup and receipt paths agree. In particular, the native RoC speed

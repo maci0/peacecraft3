@@ -146,7 +146,7 @@ impl ColourChannel {
             return self.base;
         };
         let raw = pcx_mdl::sample_colour(&curve.track, curve.frame(frame, elapsed_ms));
-        // Warsmash f9e0aeed: static reverse cancels shader BGRA; KGAC needs that swizzle.
+        // Static colour already uses material RGB. Swap red and blue for sampled KGAC.
         [raw[2], raw[1], raw[0]]
     }
 }

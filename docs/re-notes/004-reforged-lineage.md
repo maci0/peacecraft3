@@ -1,15 +1,16 @@
 # RE-004 — Reforged 2.0.1 is the 1.28 tree continued
 
 Status: **read**. String scan of `wc3/pdbs-2.0.1/Warcraft III.pdb` (285,396,992 bytes).
-Its SHA-512 matches the Battle.net hash in RE-002. `World Editor.pdb` matches too,
+Its SHA-512 matches the [recorded 2.0.1 manifest](002-reforged-2.0.1-checksums.md). `World Editor.pdb` matches too,
 and was not scanned. The PDBs stay under ignored `wc3/`; this note records paths
 and counts only.
 
 ## Verdict
 
-The 2.0.1 game is the classic codebase, built on from 1.28. The same translation
-units are still compiled. The build root moved, a few directories were nested
-one level deeper, and new subsystems were added beside the old ones.
+The overlapping source filenames support continuity between the classic
+compatibility binary and the inspected 2.0.1 PDB. The path samples show a new
+build root and some directory changes. They do not establish equivalent
+implementation or behavior.
 
 Of the 247 unique filenames in `rea/game-source-paths.txt` (254 paths), 240 are
 still path suffixes in this PDB. The root changed from
@@ -88,14 +89,13 @@ These six filenames have **zero** hits anywhere in the PDB:
 - `gxvideo.h`
 - `JassWar3.cpp`
 
-`SAPIExtend.h` occurs twice as a byte string and is not the suffix of a path
-this regex captured. Absence from a string scan means the filename is not in
-the PDB's path table. It does not by itself say the behaviour was deleted.
+`SAPIExtend.h` occurred twice as a byte string but did not match a captured
+path suffix. A regex miss establishes absence from the captured set only.
 
 ## Method
 
-Same class of evidence as RE-001: a path proves the filename was compiled into
-this PDB, not what a given function does. Paths were taken with an ASCII regex
+As in the [classic string survey](001-classic-symbols.md), a match establishes
+that the path string is present. An ASCII regex extracted paths
 over the raw PDB. UTF-16 produced no additional paths. `llvm-pdbutil` is
 available and was not required for the lineage question.
 
@@ -104,6 +104,6 @@ available and was not required for the lineage question.
 `pcx-sim` can keep the RE-001 layering. `engine/{base,agile,jass2,frame}` and
 `war3/{unit,game,world}` are still the fidelity surface. Reforged adds
 `Scripting\{Jass3,Lua}`, `WebUI-Backend`, PopcornFX, FaceFX, and the client
-SDK around that surface. Retail `war3_loader.dll` remains Aegis-obfuscated;
-this PDB is the unobfuscated compile of the same tree, which is why the names
-are readable here and not in the shipped loader.
+SDK around that surface. The separately inspected retail `war3_loader.dll`
+had an obfuscated CodeView record. The PDB scan above used the named 2.0.1
+artifact.

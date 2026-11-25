@@ -62,9 +62,8 @@ replacing either clock with the scene-loop duration.
 ## First-layer translation implementation
 
 `pcx_gfx::mdx_uv_translation::UvTranslationPlan` consumes the checked runtime
-plan, selected source interval and actual UV-set metadata. The existing MDX
-mesh walk now retains each UVAS count and validates its UVBS records. No UV
-declaration stays unknown; an authored zero stays zero. General runtime/rig
+plan, selected source interval and actual UV-set metadata. The mesh reader retains each `UVAS` count and validates its `UVBS` records.
+A missing declaration leaves the count unknown. A declared zero stays zero. General runtime/rig
 parsing still accepts an otherwise valid mesh without UV metadata. Only the UV
 binding consumer refuses unknown metadata, with source and geoset context.
 Typed-only runtime inputs likewise retain unknown counts rather than assuming
@@ -109,8 +108,8 @@ Both original menu backgrounds also pass the helper-parent import gate with
 real decoded textures; six retained models pass the actual image/material binding
 gate. The target Legacy parser corpus remains 3,249 parsed with zero failures.
 Sources, exact commands and logs are in `.scratch/menu-uv-root-review/` and
-`.scratch/menu-uv-app-root-review/`. These are data and CPU material checks;
-release WASM and new browser/rendered acceptance remain pending.
+`.scratch/menu-uv-app-root-review/`. This checkpoint checked data and CPU material binding. It did not qualify
+release WASM or rendered output for the UV change.
 
 Do not infer native clock origin, live UV orientation, full TRS behavior or sky
 projection from these checks. No camera angle, sky vertex, clear color or UV

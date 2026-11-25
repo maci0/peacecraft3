@@ -3,7 +3,7 @@
 ## Selected-source audit (2026-10-23)
 
 The private campaign continuation passes Human02 initialization with nearby
-lumber harvesting admitted. The latest authored opening reaches 8.312500
+lumber harvesting admitted. That authored opening reached 8.312500
 seconds, then refuses the red program's `HarvestGold`. The
 [captain combat query](campaign-ai-captain-combat.md) now reads the selected
 captain's published target state, independently of ungrouped owned fighters. The
@@ -44,8 +44,9 @@ establish working campaign AI.
 The runtime must keep each player's AI globals and continuations separate
 while using the session's existing world, handles and deterministic clock.
 The existing script VM supplies the private shared-world execution foundation
-below. AI-native gameplay behavior and cross-program callback invocation remain
-open. The [world-query evidence](campaign-ai-world-queries.md) distinguishes
+below. At this checkpoint, the AI bridge refused writes when map observers were
+registered. The later [player-state callback work](ai-player-state-callback-order.md)
+records bounded synchronous handoff to initialized map observers. The [world-query evidence](campaign-ai-world-queries.md) distinguishes
 player-dependent costs, completed-unit counts and upgrade queries from the
 remaining production and targeting systems.
 
@@ -67,8 +68,8 @@ signatures before globals execute or the world is lent.
 A synthetic test through the actual `MapStartupHost` and `MapScriptSession`
 checks synchronous resource writes, independent programs, a map timer preceding
 their wakes, and world restoration after callback refusal. Player-state mutation
-from an AI program refuses before writing when map callback registrations are
-present; callbacks are not forwarded into the wrong VM. Unsupported AI gameplay
+from an AI program refused before writing when map callback registrations were
+present in this initial test. Unsupported AI gameplay
 natives report their exact names. The selected red/purple source fixtures reach
 `SetTargetHeroes` and `SetHeroLevels` in a synthetic normal-difficulty world;
 they are not a complete Human02 run, and the selected map does not start purple.
@@ -82,8 +83,8 @@ and formatting. Later health/harvest imports pass the real selected Continue
 startup after Human01 publishes 152 executed units; the separate opening-minute
 check stops at the targeting refusal above. Its retained log is
 `.scratch/campaign-continuation/health-harvest-final-selected.log`.
-Campaign strategy, construction, combat, cross-program callbacks and full chapter
-completion remain unqualified.
+These receipts left campaign strategy, construction, combat, callback
+coverage and full chapter completion unqualified.
 
 ## Native loader path
 

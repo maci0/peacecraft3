@@ -1,6 +1,7 @@
 //! BLTE framing and unencrypted N/Z chunks. Unknown tags fail with a next probe.
 use crate::{Error, Evidence, Failure, Key, Provenance, bytes, error, integer, verify_md5};
 
+/// Byte limits for the encoded stream and the combined decoded output.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub encoded_bytes: u64,
@@ -26,12 +27,15 @@ pub struct Chunk {
 pub struct Decoded {
     pub evidence: Evidence,
     pub ekey: Key,
+    /// MD5 of the decoded bytes. The caller can compare it with an expected content key.
     pub content_key: Key,
     pub header_size: usize,
     pub chunks: Vec<Chunk>,
     pub bytes: Vec<u8>,
 }
 
+/// Decode a bounded BLTE stream. Verify the encoding key against the header,
+/// or against the whole stream when the header size field is zero.
 pub fn decode(
     data: &[u8],
     expected_ekey: Key,

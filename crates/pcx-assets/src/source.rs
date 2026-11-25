@@ -35,7 +35,7 @@ pub struct SourceInfo {
     pub kind: LayerKind,
     /// Archive/install identity or the canonical override directory.
     pub origin: String,
-    /// Exact detected version/source label, or explicitly unknown/unversioned.
+    /// Version label supplied by the source, or `None`.
     pub version: Option<String>,
 }
 
@@ -126,10 +126,13 @@ struct OverrideEntry {
     length: u64,
 }
 
-/// A real, recursively scanned directory tree. Paths are indexed at mount time;
-/// remount to discover new names. Existing files are read on demand, not converted.
+/// An override tree indexed by relative path and file length at mount time.
+///
+/// The configured root is canonicalized. Symlinks and non-regular entries
+/// below it are refused. Reads open files on demand and check their length.
+/// Remount after adding, removing or resizing files.
+///
 /// Root `index.json` and `.pcx-assets-index-*` are reserved generated metadata.
-/// Symlinks and non-regular entries below the selected root are refused.
 pub struct OverrideDirectory {
     pub(crate) root: PathBuf,
     pub(crate) info: SourceInfo,
@@ -287,7 +290,7 @@ impl OverrideDirectory {
                 layer: self.info.id.clone(),
                 path: path.clone(),
             })?;
-        // Recheck ancestors so a replaced directory cannot silently redirect a read.
+        // Recheck each component below the root for symlinks or changed file types.
         let relative = entry
             .file
             .strip_prefix(&self.root)

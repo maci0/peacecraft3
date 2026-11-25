@@ -1,8 +1,9 @@
 # Bounded differential seed minimization
 
-`pcx_play::minimize` reduces a reproducing seed over an explicit candidate corpus.
-It supports the Tier C harness in PLAN.md §3.5; it does not establish native RNG,
-combat ordering, a native baseline, or a global minimum over all u64 values.
+`pcx_play::minimize` reduces a reproducing seed over an explicit candidate
+corpus. Here “original seed” means the starting seed. The minimizer supports
+[Tier C](../PLAN.md#35-programmatic-play-testing-the-real-acceptance-test).
+Its result is bounded by the candidate corpus and the supplied oracle.
 
 ## Fresh execution and trace identity
 

@@ -1,4 +1,4 @@
-//! V2 contiguous guarded index blocks. Other revisions/layouts are refused.
+//! Contiguous CASC V2 index blocks with revision 7 and checksum guards.
 use crate::{Error, Evidence, Failure, Provenance, bytes, error, integer, jenkins};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +44,7 @@ pub struct Index {
 }
 
 impl Index {
+    /// Return the unsupported error for the preserved maximum-offset word.
     pub fn max_offset_semantics(&self) -> Error {
         error(
             &self.evidence.source.member,

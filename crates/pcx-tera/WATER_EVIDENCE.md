@@ -160,9 +160,9 @@ cargo test -p pcx-tera --locked --test local_water -- --ignored --nocapture
 Only summaries and this interpretation boundary are recorded. Original payloads,
 extracted files, and generated copies of their contents remain local.
 
-## Current geometry integration
+## October 2026 geometry checkpoint
 
-The current geometry path borrows the existing parsed SYLK table and selected
+The geometry path borrows the existing parsed SYLK table and selected
 row; it adds no parser or copied-row allocation policy. Vertex and index caps
 apply before mesh storage is reserved. The in-memory Human01 terrain check
 passes with the explicitly selected compatibility install. Synthetic checks
@@ -170,8 +170,9 @@ cover ambiguous rows, non-finite or overflowing table heights, independent
 vertex/index caps, masked height words and non-flat wet tiles. Native and actual
 WASI executions are recorded in `.scratch/ground-water-root-20261016/`.
 
-The separate proposed ground material is not integrated. Its packed-atlas
-nearest sampling differs from the pinned reference's filtered, isolated cells
-and mipmaps. Ground texture predecode limits, that sampling behavior, water
-materials, cliffs, ramps and blight remain work for the renderer. Geometry
-checks establish none of those rendered results or native visual parity.
+At this checkpoint the proposed packed atlas used nearest sampling, while
+the reference used filtered, isolated cells and mipmaps. The later
+[ground renderer](../../docs/re-notes/admitted-ground-rendering.md) implements
+isolated filtered cells, retained mips, predecode limits and a bounded
+Water.slk surface. Native LOD, animation timing and broader visual fidelity
+remain separate checks.

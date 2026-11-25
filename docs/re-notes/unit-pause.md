@@ -52,10 +52,10 @@ projection, timer or event-delivery loop is introduced by the setter.
 
 Synthetic tests check preservation, idempotence, resume without catch-up,
 argument validation and lifecycle. They establish the recreation contract only.
-The selected Human03 startup now passes its `PauseUnit` calls and refuses later
-at `RestoreUnit` in `Blizzard.j:7480`. This is a startup-frontier result, not
-unchanged campaign acceptance or an original-client comparison. Results belong
-to the exact checked tree.
+The selected Human03 startup run passed `PauseUnit` and stopped at
+`RestoreUnit` in `Blizzard.j:7480`. The later
+[unit cache work](script-game-caches.md) covers a bounded restore path. This
+run did not check campaign completion or original-client behavior.
 
 Worktree-private checks on this increment:
 

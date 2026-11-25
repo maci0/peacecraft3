@@ -23,7 +23,9 @@ The constructor now reports errors, so callers must handle its result. The unuse
 `TechnologyRequirements` alias was removed before public module integration.
 No dependency count defaults to one, no all/any or `DependencyOr` semantics are
 implemented, and no availability, native technology graph or gameplay parity is
-claimed. This is a checked batch of the existing asset joins.
+claimed. This API joins the asset records. See
+[unit technology prerequisites](unit-technology-prerequisites.md) for the
+separate runtime evaluation.
 
 ## Verification
 

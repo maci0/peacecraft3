@@ -1,14 +1,14 @@
 # freearc-codec
 
-Browser WebAssembly decoders for the FreeArc 0.67 archives inside the supplied
-installer ISO: LZMA control blocks, AES-CTR, and `rep:...+[exe+]4x4:tor:...` data
-blocks. It decodes a 1.2 GB block in a dedicated worker without
+Browser WebAssembly decoders for the verified Inno/FreeArc 0.67 installer
+profile: LZMA control blocks, AES-CTR, and `rep:...+[exe+]4x4:tor:...` data
+blocks. The measured local run decoded a 1.2 GB block in a worker without
 SharedArrayBuffer, threads or cross-origin isolation, and never holds the
 decoded block in memory.
 
 This directory is a separate GPL-2.0 component (see [License](#license)). The
-application loads the built `freearc-codec.wasm` and `js/freearc-codec.mjs` at
-runtime; no Rust crate links them.
+browser package loads the built WASM and JavaScript wrapper from
+`web/pkg/freearc/`. The wrapper source is `js/freearc-codec.mjs`.
 
 ## Build and test
 
@@ -17,11 +17,12 @@ tools/freearc-codec/build.sh wasm   # build/freearc-codec.wasm + build/freearc-c
 tools/freearc-codec/build.sh test   # wasm, native ASan/UBSan tests, then bun tests
 ```
 
-`build.sh [wasm|native|all|test] [out-dir]` needs only this directory. It
-writes to `build/` here by default and refuses to build if any file under
-`upstream/` differs from `upstream.sha256`. Checked with emcc 6.0.12-git
-(5488e087), clang 23.1.1 and bun 1.4.2. `test` also needs `xz`, used to
+`build.sh [wasm|native|all|test] [out-dir]` uses `emcc` for WASM and
+`clang` and `clang++` for native. The test mode uses Bun and `xz` to
 encode the LZMA test streams.
+The script writes to `build/` by default and refuses if any file under
+`upstream/` differs from `upstream.sha256`. Checked with emcc 6.0.12-git
+(5488e087), clang 23.1.1 and Bun 1.4.2.
 `test` also runs the same production EXE-stage/reference proof natively and on
 wasm32 (77 synthetic length/chunk partitions), plus full-chain WASM lifetime,
 limits, cancellation and reuse cases. Test outputs belong in a private output
@@ -90,7 +91,7 @@ const { outputBytes, peakAllocBytes } = await codec.decodeStream({
 - Errors are `FreeArcCodecError` with a `code`. A status error leaves the
   instance usable. A trap, or an upstream `exit()` (`CODEC_ABORT`, e.g.
   Tornado's range decoder on corrupt data), poisons it, and every later call
-  throws `POISONED`. Load a fresh instance for each retry or session.
+  throws `POISONED`. Replace a poisoned instance before retrying.
 
 Decoded bytes are not authenticated; callers check member CRCs.
 

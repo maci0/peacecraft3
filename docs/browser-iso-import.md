@@ -1,9 +1,11 @@
 # Local ISO discovery
 
 `web/iso.js` exports `discoverIso(blob, options)` and `sliceIsoFile(blob, file)`.
-It has no imports, dependencies, network APIs, application wiring, or executable
-execution. Supply the selected browser `File` directly. Reads use only
-`Blob.slice().arrayBuffer()`; no whole-image buffer is allocated.
+The discovery module reads the selected browser `File` with
+`Blob.slice().arrayBuffer()`. It does not allocate a whole-image buffer,
+make network calls or run executables. This example shows direct MPQ discovery.
+Installer members require the separate local decoder described in the
+[Pages guide](pages-demo.md).
 
 ```js
 import { discoverIso, sliceIsoFile } from './iso.js';
@@ -13,8 +15,11 @@ const result = await discoverIso(file, {
   onProgress: ({ bytesRead, reads }) => showProgress(bytesRead, reads),
 });
 for (const candidate of result.candidates) {
-  const archiveBlob = sliceIsoFile(file, candidate);
-  // The application connects a local archive decoder and validates members before registration.
+  const archiveBlob = sliceIsoFile(file, {
+    offset: candidate.offset,
+    size: candidate.archiveSize,
+  });
+  // Pass archiveBlob to the local decoder for member validation.
 }
 ```
 
@@ -26,41 +31,56 @@ records). Volume descriptor scanning has a 64-sector budget. Limits are resource
 policies, not inferred game data.
 
 The result contains `provenance`, `files`, `candidates`, `diagnostics`, and `work`.
-Provenance preserves the supplied filename as a label, parsed primary volume
-identifier, source size, declared volume size, and explicitly selected filesystem.
-Edition/build remain null: neither filenames nor ISO volume labels establish a
-Warcraft release. Paths retain authored primary identifiers and version suffixes.
-File offsets/sizes/extents come from directory records. Candidates additionally
-carry MPQ header version and declared archive size. Use the same input Blob with
-returned offsets; descriptors are not authenticated capabilities for another file.
+Provenance records the filename label, source size, and selected filesystem,
+descriptor offset, Joliet level, volume identifier and volume size. Edition and
+build remain null. Paths preserve the selected namespace’s identifiers and
+version suffixes.
 
-Primary ISO9660 traversal checks duplicated endian numbers, volume/image bounds,
+File offsets and extent sizes come from the directory records. Direct MPQ
+candidates also carry the header version and declared `archiveSize`. Import
+reads that archive size, which can be smaller than the full file extent. Use
+the returned offsets with the same input Blob.
+
+ISO9660 primary and Joliet traversal checks duplicated endian numbers, volume/image bounds,
 record lengths, sector padding, extent bounds, directory cycles, and entry limits.
 It follows directory records rather than path-table guesses. Files are inspected
 by bytes at their declared extent, irrespective of filename. MPQ v0 headers must
 have a valid header/archive size and bounded hash/block tables. This is structural
-candidate discovery: decryption, member validation, content identity, edition,
-archive priority, mixed-install detection and Rust asset registration remain root
-integration work. No candidate automatically becomes a selected asset set.
+candidate discovery for files directly in the ISO. Installer-directory
+choices are provisional until extraction and an MPQ header check. The app may
+preselect a unique `war3.mpq` within budget. Confirm that selection to import
+and publish the validated archives. The parser does not
+establish edition, content identity or archive priority.
 
-Unsupported states are explicit:
+Fatal image errors throw `IsoError`. Unsupported file contents appear in
+the result’s per-file diagnostics.
 
-- Supplementary descriptors (including Joliet) reject the image rather than
-  silently switching namespaces. UDF recognition descriptors encountered in the
-  descriptor scan reject with `UNSUPPORTED_UDF`. This is not a complete UDF
-  detector; hybrid images using an ISO primary namespace can be traversed only
-  through that namespace. UDF contents are never inferred or decoded.
+- A single recognized Joliet descriptor selects the Joliet namespace. Unknown
+  or multiple supplementary descriptors refuse without a primary fallback.
+  Detected UDF recognition descriptors reject with `UNSUPPORTED_UDF`.
+  The scanner does not implement a complete UDF detector or decoder.
 - Multi-volume, multi-extent, interleaved and extended-attribute extents reject.
-  Rock Ridge system-use metadata is not decoded; only primary ISO paths are
-  exposed. No Unicode or alternate namespace is guessed.
+  Rock Ridge system-use metadata is not decoded. Joliet identifiers are read
+  from their own UCS-2 records.
 - MPQ user-data wrappers and later header versions are reported as requiring a
   verified archive decoder. Embedded signatures are not searched for.
-- DOS/PE, CAB and 7z signatures produce specific unsupported diagnostics. A PE
+- DOS/PE, CAB, 7z and FreeArc signatures produce specific unsupported
+  diagnostics. When discovery finds no direct MPQ candidate, the app can use
+  `UNSUPPORTED_FREEARC` to start inspecting a supported installer profile. A PE
   header establishes executable content, not Inno/NSIS identity or installer
   success. Unknown/repacked files remain `UNRECOGNIZED_CONTENT`. No executable
   runs and there is no remote extraction fallback.
-- `IsoError` carries `code` and, where available, absolute image `offset`;
-  diagnostics also include authored path, offset and size.
+- `IsoError` carries a `code` and an offset when available. That offset can
+  be relative to the descriptor or record being checked. Per-file diagnostics
+  retain the authored path, ISO extent offset and size.
+
+## Import and rollback
+
+Hydration validates canonical names and renderer aliases before publication.
+Two unequal files mapping to the same alias reject with `AMBIGUOUS_ASSET_ALIAS`;
+the previous visible store and revision survive. Identical content may share
+an alias. Checked memory accounting charges only newly stored names, and failed
+inserts do not partially populate the staging map.
 
 ## Synthetic verification
 
@@ -70,46 +90,36 @@ Run with Node's built-in test runner (verified on Node 26.11.1):
 node --test tests/browser-iso/iso.test.mjs
 ```
 
-Six test groups generate their ISO bytes locally in memory; no original assets
-or copied content are included. They check content-based recognition despite
+The tests generate ISO bytes in memory without using original assets. They check content-based recognition despite
 misleading filenames, local slices, provenance, a 2048-byte maximum read, network
 API traps recording zero calls, malformed bounds/endian numbers/records/padding,
 MPQ table bounds, unsupported namespaces/extents, PE blockers, directory recursion
-and cycles, entry budget, and cancellation. These tests are parser/API evidence;
-no original ISO, in-browser network capture, archive-member gate or rendered
-asset import has been claimed.
+and cycles, entry budget, and cancellation. This Node suite covers the
+parser and API with synthetic inputs. Browser and archive-member evidence
+comes from separate checks.
 
-Original campaigns remain **BLOCKED** separately by the real game Host/native
-execution gap (including exact `GetPlayerNeutralPassive` behavior). ISO discovery
-and scripting source-expression tests do not establish campaign outcomes.
+## Earlier browser integration checks
 
-## Browser integration verification
-
-The generated WASM API passed 26 synthetic archive/transaction assertions in a
-Chromium worker. Chromium audio checks cover mute, intro pause/resume, click,
+The generated WASM API passed 26 synthetic archive and transaction assertions
+in a Chromium worker. See the [test guide](../tests/browser-iso/README.md)
+for current commands and fixture requirements. Chromium audio checks cover mute, intro pause/resume, click,
 content rejection and Blob URL replacement/reset. Network capture found zero
 uploads, unexpected requests or sockets. A separate rendered-app file-input check
 recognized a content-valid MPQ under a misleading filename without replacing
 active assets during discovery. These checks do not establish original installer
 ISO acceptance or rendered fidelity from the synthetic fixture art.
 
-Hydration validates canonical names and renderer aliases before publication.
-Two unequal files mapping to the same alias reject with `AMBIGUOUS_ASSET_ALIAS`;
-the previous visible store and revision survive. Identical content may share
-an alias. Checked memory accounting charges only newly stored names, and failed
-inserts do not partially populate the staging map.
-
-### Current control-layer capture
+### 14 October 2026 control-layer capture
 
 The 2026-10-14 local Chromium run used generated WASM SHA-256
 `303dd8666f58251aa6640e9519d391e0965a56843dbf276158160c70d43acdaf`
 and the retained 115-member fixture with explicit archive-variant provenance.
-The label assertion now follows each FDF-derived text-frame name and the
+The corrected label assertion followed each FDF-derived text-frame name and the
 renderer diagnostic's quoted text; it still requires fresh logs after commit.
 The earlier failure against the obsolete diagnostic format is preserved.
 
 The rerun passed real file-input import, revision increment, six fresh authored
-labels/faces, scene rebuilding, six F8 visibility checks, imported click audio
+labels/faces, scene rebuilding, six F8 visibility checks on that build, imported click audio
 before and after resize, and conflicting-member rollback. All six labels were
 independently readable in the capture; automatic full-scene OCR was inconclusive.
 The 113 captured requests included two local Blob GETs during import, no HTTP
@@ -119,5 +129,7 @@ Proof and 19 captures remain local under
 `.scratch/post-control-art-browser/run-2-contract-fix/`. This is functional
 acceptance of a locally repacked fixture, not retail installer ISO acceptance or
 full native fidelity. Unsupported border mappings and absent inset defaults are
-reported and omitted. Missing panel assets, sky projection, lower framing,
-material equivalence and original gameplay remain open.
+reported and omitted. The run did not qualify panel assets, sky projection,
+lower framing, material equivalence or original gameplay. The
+[Pages guide](pages-demo.md#earlier-verification-runs) records separate
+stored-base installer evidence.

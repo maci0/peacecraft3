@@ -1,10 +1,10 @@
 # Simulation, script VM and campaign runtime CPU
 
-Gates here are fixed-work counters: user-mode instructions (`perf stat -e instructions:u`),
-allocation calls and requested bytes from a counting allocator, and an output digest. Elapsed time
-is report-only. Instruction counts are load-independent on this host; they are not portable
-across compilers or CPUs. Baseline is the tree at commit 389d316; candidate is the working tree
-with the changes below. Every candidate digest and route checkpoint equals its baseline.
+Budgets check allocation calls, reallocations, requested bytes, vision cell
+visits and the output digest. User-mode instruction counts and elapsed time
+are report-only. Compare instruction counts on the same compiler and CPU.
+For the first comparison, the baseline was `389d316`. Recorded candidate
+digests and route checkpoints matched their baselines.
 
 ## Workloads
 
@@ -175,7 +175,7 @@ Human03, `unit_revision` changes in 4,096 of 4,096 ticks and `vision_revision` i
 because units are always moving. They save work only in idle stretches (menus, cinematics,
 paused or stopped armies).
 
-### Budgets
+## Budgets
 
 `tools/perf/budgets/sim.json` holds, for each workload of `tools/perf/sim_run.py`, the exact
 allocation calls, reallocations and requested bytes of the measured region (and
@@ -285,12 +285,12 @@ the control above, this is 11,145 allocations, 157 reallocations and 1,222,072 b
 mask change adds 16 requested bytes to the prior tracked measurement. The pool allocation
 increase remains unresolved.
 
-### Hand-off to render
+## Revision and column APIs
 
-All of these are read-only and cheap. They exist in `pcx-play` and `pcx-sim`; nothing in
-`crates/peacecraft3` uses them yet.
+The minimap uses the vision revision to retain its fog raster. Campaign actor
+lookups use the indexed definition column accessor.
 
-- `ObjectHost::vision_revision() -> Option<u64>` (`pcx_play::playercolor_host`): `None` until the
+- `ObjectHost::vision_revision() -> Option<u64>` (`pcx-play/src/vision_field.rs`): `None` until the
   first sample, then a count that increases whenever a sample changes any viewer's raw cells or the
   set of viewers. While it is equal, every `vision_cell` and `vision_presented` answer for a given
   fog and mask setting is equal. The fog and mask switches are not part of it; read them from

@@ -20,7 +20,7 @@ copied into the repository.
 | The camera setter `0x5de2c0(duration, flag)` fills a stack frame from two XMM table copies per field plus immediates, then indexes it: distance `[ebp+level*4-0x28]`, angle of attack `[ebp+level*4-0x40]`, rotation `[ebp+index*4-0x88]` with `index = level + 6 * state`. `level` is `[this+0x20]`, `state` `[this+0x24]`; both are range-checked (`cmp edx,6`, `cmp ecx,0x12`) and fall back to 0. | EX `0x5de2c0` |
 | Distance 1650, 1600, 1500, 1400, 1275, 1200; angle of attack 304, 311, 318, 325, 332, 335; rotation 90 x6, 20 x6, 160 x6. The last level differs from the `[Camera]` file (1100 and 339); the live camera settles at the executable values. | EX table words; RO-dbg ([live capture](input-live-capture.md)) |
 | FarZ 5000, field of view 70 degrees, roll 0 and height 0 are immediates in the same function, not table entries. The audit found the file values equal for field of view and FarZ. | EX `0x5de4eb`, `0x5de6fd`, `0x5de826`, `0x5dea09` |
-| Each field moves at `(target - current) / duration`, so every ease is linear in time. Rotation, angle of attack and field of view pass through angle helpers (`0x5dfd00`, `0x8a19b0`) that were not decoded. No table pair differs by more than 180 degrees, so a plain linear ramp gives the same path. | EX `0x5de43f`, `0x5de5fb`; helpers UNK |
+| The rate uses `(target - current) / duration`. Rotation, angle of attack and field of view pass through untraced angle helpers (`0x5dfd00`, `0x8a19b0`). None of the measured table pairs spans more than 180 degrees. The exact angular trajectory remains unverified. | EX `0x5de43f`, `0x5de5fb`; helpers UNK |
 | `0x5e1090(level)` clamps to 0..5 (`mov eax,5`) and, only when the level changes, calls the setter with `1.0` (`mov dword [esp],0x3f800000`). | EX `0x5e1090` |
 | Page Up (VK `0x21`) requests level + 1 on every key-down message including repeats; Page Down (`0x22`) requests level - 1 when the level is not 0. | EX `0x5e12f0` |
 | Wheel event `0x400500cd`: delta divided by 120 (multiply by `0x88888889`, shift 6), truncating toward zero. A negative quotient with level > 0 requests level - 1, a quotient of 1 or more requests level + 1. The size of the quotient does not matter, so a 360-unit delta is one level. | EX `0x5e12f0` |
@@ -146,7 +146,9 @@ Cancel, persistence and actual keyboard/edge displacement. The ignored mounted
 menu test `gameplay_camera_options_render_cancel_apply_and_reload` exercises the
 selected original controls, Cancel, Apply and a fresh application reload with an
 isolated preferences directory. These are recreation tests, not native runtime
-measurements of non-default scroll speed. Other Gameplay controls remain disabled.
+measurements of non-default scroll speed. See
+[held-inventory presentation](held-inventory-presentation.md) for the separately
+verified tooltip setting.
 
 Validation for this connection: 943 non-ignored application tests passed (117
 explicit local-fixture tests ignored). The explicit original-control domain gate

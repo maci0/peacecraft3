@@ -309,7 +309,7 @@ impl Manifest {
         })
     }
 
-    /// Uninterpreted CFT bytes remain available with bounds fixed by references.
+    /// Return the raw CFT record up to the next referenced offset or table end.
     pub fn cft_record(&self, span: &Span) -> Result<&[u8], Error> {
         let table = bytes(
             &self.data,
@@ -336,6 +336,7 @@ impl Manifest {
         bytes(table, span.cft_offset, length, &self.evidence.source.member)
     }
 
+    /// Return the unsupported error for interpreting CFT patch and write controls.
     pub fn control_semantics(&self) -> Error {
         unsupported(
             &self.evidence.source.member,
@@ -598,12 +599,13 @@ impl Resolver {
         &self.manifests
     }
 
-    /// Exact authored namespace. ':' explicitly enters a configured TVFS mount.
-    /// ASCII folding is applied only under the manifest's lowercase flag.
+    /// Resolve a UTF-8 path using the same rules as [`Self::resolve_bytes`].
     pub fn resolve(&self, path: &str) -> Result<ResolvedPath, Error> {
         self.resolve_bytes(path.as_bytes())
     }
 
+    /// Resolve raw path bytes in the authored namespace. A colon enters a
+    /// configured TVFS mount. The manifest's lowercase flag enables ASCII folding.
     pub fn resolve_bytes(&self, path: &[u8]) -> Result<ResolvedPath, Error> {
         if path.is_empty() || path.contains(&0) {
             return Err(error(

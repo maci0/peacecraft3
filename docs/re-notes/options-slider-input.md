@@ -56,9 +56,9 @@ choices or full menu fidelity.
 
 Separate actual input-pipeline tests reproduce lost clicks when movement onto a
 new target and press/release share one update. Existing widget collection tests
-do not cover that upstream loss. The browser gate now acknowledges movement,
-press and release before continuing. This validates a normal multi-frame
-interaction, not a repair of the separately tracked fast-click defect. Retained
+do not cover that upstream loss. At this checkpoint, the browser gate acknowledged movement, press and release
+across separate frames. The later event-local picking section records the
+separate fix for same-update input. Retained
 evidence: `.scratch/options-fast-click-pipeline-20261016/`.
 
 ## Pressed labels and button activation
@@ -150,8 +150,8 @@ additions matter because a press insertion can be deferred until after disable.
 The removal tolerates the old control being despawned before its command runs.
 It emits no activation and leaves enabled held buttons alone. A regression fails
 on the old owner, then passes immediate and deferred disable, release without
-activation, and a fresh successful click after re-enable. This does not fix
-same-frame pointer hit resolution or enable any unsupported setting.
+activation, and a fresh successful click after re-enable. This check covered disabled-button cleanup. The separate event-local picking
+path below addresses same-update hit resolution.
 
 The complete native suite, strict native/WASM Clippy, WASM application build and
 format checks pass. Evidence, including the baseline failure and intermediate

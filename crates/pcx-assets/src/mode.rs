@@ -32,7 +32,7 @@ pub enum Behaviour {
     Fixes,
 }
 
-/// PLAN §3.6's four orthogonal axes, defaulting to the target fidelity baseline.
+/// Requested build, add-on, asset and behavior policies.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GameMode {
     pub build: Build,
@@ -42,7 +42,8 @@ pub struct GameMode {
 }
 
 impl GameMode {
-    /// Vanilla art and behavior policy; not a certificate of native parity.
+    /// Returns true for vanilla assets and behavior, independent of build and add-on.
+    /// Native parity requires separate validation.
     pub fn is_fidelity_baseline(self) -> bool {
         self.assets == AssetMode::Vanilla && self.behaviour == Behaviour::Vanilla
     }

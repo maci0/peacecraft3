@@ -20,7 +20,7 @@ pub struct Build {
 #[derive(Debug)]
 pub enum EnvelopeKey {
     MatchesRequestedKey(Key),
-    /// A partial/zeroed envelope does not identify a file. BLTE does that.
+    /// The stored envelope key differs from the requested key. BLTE is checked separately.
     Unverified {
         stored: Key,
         requested: Key,
@@ -52,6 +52,7 @@ pub struct PathBytes {
 }
 
 impl FileBytes {
+    /// Return the envelope key when it matches the requested encoding key.
     pub fn envelope_key_semantics(&self) -> Result<Key, Error> {
         match self.local_envelope.ekey_claim {
             EnvelopeKey::MatchesRequestedKey(key) => Ok(key),
@@ -71,6 +72,7 @@ impl FileBytes {
         }
     }
 
+    /// Return the unsupported error for interpreting local span flags and checksum.
     pub fn span_fields_semantics(&self) -> Error {
         error(&self.archive.to_string_lossy(), self.archive_offset as usize + 20, Failure::Unsupported {
             feature: "local span flags/checksum semantics",
@@ -90,6 +92,8 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// Open local storage using the build configuration and the newest index
+    /// generation from each of the 16 required buckets.
     pub fn open(install: &Path, limits: Limits) -> Result<Self, Error> {
         let info_path = install.join(".build.info");
         let info_bytes = read_bounded(&info_path, limits.encoded_bytes)?;
@@ -125,8 +129,7 @@ impl Storage {
         verify_md5(&config_bytes, build_key, &config_member, 0)?;
         let config_values = parse_config(&config_bytes, &config_member)?;
         let config = Evidence::of(source(config_member), &config_bytes);
-        // One DirEntry per member: `entry.metadata()` reuses the type/size
-        // the directory already reported instead of a fresh `stat` per path.
+        // Select the newest index per bucket and record part sizes for span checks.
         let mut entries = std::fs::read_dir(install.join("Data/data"))
             .map_err(|err| io_error(&install.join("Data/data"), err))?
             .map(|entry| entry.map_err(|err| io_error(&install.join("Data/data"), err)))
@@ -224,11 +227,13 @@ impl Storage {
         })
     }
 
+    /// Read and verify the file for an encoding key using the storage limits.
     pub fn read_ekey(&self, ekey: Key) -> Result<FileBytes, Error> {
         self.read_ekey_with_limits(ekey, self.limits)
     }
 
-    /// Keep mounted encoded policy; narrow decoded output before BLTE allocation.
+    /// Read using the storage's encoded limit and the smaller of the caller's
+    /// and storage's decoded limits. The encoded span is read before decoding.
     pub fn read_ekey_bounded(
         &self,
         ekey: Key,
@@ -373,6 +378,8 @@ impl Storage {
         Encoding::parse(&file.decoded.bytes, file.decoded.evidence.source)
     }
 
+    /// Resolve a content key with an encoding table from the same install and
+    /// build, then verify the decoded length and content hash.
     pub fn read_content(&self, encoding: &Encoding, ckey: Key) -> Result<FileBytes, Error> {
         if encoding.evidence.source.build_key != self.build.info.source.build_key
             || encoding.evidence.source.install != self.build.info.source.install
@@ -457,7 +464,8 @@ impl Storage {
         self.read_path_bytes_bounded(resolver, path.as_bytes(), decoded_byte_limit)
     }
 
-    /// Known decoded size refuses before encoded read; opaque path bytes are retained.
+    /// Preserve opaque path bytes and reject a declared decoded size above the
+    /// effective limit before reading the encoded data.
     pub fn read_path_bytes_bounded(
         &self,
         resolver: &crate::tvfs::Resolver,

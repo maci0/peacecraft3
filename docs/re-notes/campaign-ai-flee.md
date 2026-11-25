@@ -118,14 +118,13 @@ reference at `0x6b3eeb`. No gameplay rule follows from that discarded font trace
 The source-key audit, aligned windows and hashes remain local under
 `.scratch/campaign-tactics-native/setunitsflee/`, including
 `canflee-pe-address-audit.json`, `canflee-cached-record-consumer-review.md` and
-`canflee-behavior-gate-review.md`. This establishes a consumer and a data input,
-not the remaining decision thresholds, route or complete flee policy. Production
-`SetUnitsFlee` behavior remains unsupported pending those consumers.
+`canflee-behavior-gate-review.md`. Those notes establish a consumer and data
+input. The admitted decision and route inputs are listed below.
 
 ## Admitted policy operands
 
-`campaign_flee_policy::FleePolicy::read` now binds the reviewed image and
-decodes 26 bounded instruction/data windows. It derives the context flag and
+`campaign_flee_policy::FleePolicy::read` binds the reviewed image and
+decodes 34 bounded instruction and data windows. It derives the context flag and
 default, current-speed minimum, ordinary life cutoff, six life bands, route
 default distance and margin, near-zero distance, and route movement order.
 The first four life bands remain separate from the final two because the native
@@ -317,12 +316,9 @@ policy binds the selected recipe image. Receipts remain local under
 state and production input wiring. Incoming-damage retreat execution remains a
 separate integration gate.
 
-The unchanged selected Human01-to-Human02 opening-minute check now passes
-`SetUnitsFlee`, `StopGathering`, `CreateCaptains`, `SetNewHeroes`, `SetHeroesFlee` and `SetGroupsFlee` and refuses at `SetSlowChopping`, still at
-7.218750 seconds in Human02's `StartCampaignAI` call. This is the next exact
-script frontier, not a completed opening minute or a flee-movement result.
-The earlier failure remains in `state-frontier.log`; the latest final-consumer
-result is in `.scratch/campaign-flee-integration/groups-flee-frontier.log`.
+At this checkpoint, the unchanged Human02 opening-minute check reached the
+then-unsupported `SetSlowChopping` at 7.218750 seconds. See the
+[campaign tracker](../../TRACKER.md) for later startup coverage.
 
 ## Ordinary damage consumer
 
@@ -363,9 +359,8 @@ formatting and selected Human01 startup and Human02 Continue startup. All 13
 flee-policy tests pass with the original-image tests enabled, including both
 branch directions and the selected numeric/math route join. No warning
 suppression is used in these root checks. Local receipts are under
-`.scratch/campaign-flee-integration/consumer-final-*`. The unchanged Human02
-opening-minute check now passes captain creation and the named flag setters and stops at `SetSlowChopping`; rendered path parity and
-complete native flee behavior have not been checked.
+`.scratch/campaign-flee-integration/consumer-final-*`. Rendered path parity and
+complete native flee behavior remain unverified.
 
 ## Hero decision boundary
 
@@ -400,8 +395,7 @@ verify normal damage for inactive human heroes, active false-policy damage, and
 unchanged life, trace, RNG and pending combat on enabled-hero refusal. Queued
 impact tests remain separately identified. Local receipts are under
 `.scratch/campaign-flee-integration/heroes-flee-*`. No new original-client or
-rendered hero-retreat check was run. The unchanged Human02 execution now stops
-at `SetGroupsFlee`, so the opening minute and campaign remain incomplete.
+rendered hero-retreat check was run.
 
 ## Group flag boundary
 
@@ -430,9 +424,8 @@ including the selected image and numeric/math join, strict native/WASM Clippy,
 formatting, selected startup and Continue. The published two-program fixture
 changes the group flag before captain creation and after sleep. A real melee
 regression keeps ordinary retreat independent of the group flag. Truncated
-setter windows refuse before indexing. The unchanged Human02 opening-minute
-gate now passes `SetGroupsFlee` and stops at `SetSlowChopping`; no full-minute,
-group-retreat or original-client behavior claim follows from these checks.
+setter windows refuse before indexing. These checks cover flag handling and
+ordinary retreat. Native group-retreat behavior remains unqualified.
 
 Receipts remain under `.scratch/campaign-flee-integration/groups-flee-*` in the
 private checkout. Mapped windows and byte hashes remain local in the main

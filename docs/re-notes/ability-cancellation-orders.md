@@ -4,8 +4,10 @@
 
 The selected Human02 script creates Uther (`Huth`), requests hero level and mana,
 learns his authored skills, then issues `undivineshield`. It also issues
-`militiaoff` to newly created peasants (`hpea`). These calls currently reach an
-unsupported immediate-order path in the recreation.
+`militiaoff` to newly created peasants (`hpea`). The initial probe stopped on
+unsupported immediate orders. Later code admits the selected fresh base-form
+`militiaoff` case and returns false for stock Divine Shield cancellation.
+Edited shield cancellation has its own qualification limits below.
 
 A local diagnostic copied Human02's archive members and creation statements,
 replaced only its script, and omitted placed-unit creation and authored

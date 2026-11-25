@@ -5,11 +5,11 @@ These are application rendering settings, not original game content. They are
 absent from the imported main-menu and in-game options definitions. The default
 1× path keeps the existing camera and display target.
 
-At higher scales, `internal_resolution.rs` redirects only the campaign scene and
-its sky to an offscreen sRGB image. Both physical dimensions are multiplied, so
-2× renders four times as many pixels and 4× renders sixteen times as many. A
-separate display-sized camera averages each complete N×N pixel block in linear
-colour. The display resolution and the original HUD, cinematic overlays and menu
+At higher scales, the campaign scene and sky render to an offscreen sRGB image.
+The scale multiplies both scene dimensions, so 2× renders four times as many
+scene pixels and 4× renders sixteen times as many. The original implementation
+used a separate display-sized camera to average N×N blocks in linear colour.
+See [HUD fidelity](gameplay-hud-fidelity.md) for the later compositor work. The display resolution and the original HUD, cinematic overlays and menu
 cameras retain their existing targets. No source layout, animation, material,
 texture or game-rule values are replaced.
 
@@ -21,8 +21,7 @@ campaign or replacing its camera retires the image, material and compositor.
 Before allocating, dimensions are checked against the render device's texture
 limit and an application ceiling of 64 megapixels. Unsupported sizes render at
 1× and report the reason in diagnostics and the PeaceCraft panel. These limits
-are allocation policy, not measured original game values. Higher scales increase
-GPU memory and work; the choice lasts for the current application session.
+are allocation policy. Higher scales increase GPU memory use and rendering work.
 
 ## Verification
 

@@ -36,8 +36,9 @@ layout. Documentation does not establish this client's UI or first-run policy.
 
 ## What this changes about the implementation plan
 
-The current application reduces device modes to `(width,height)` pairs. That
-loses fields the original routine retains. Future mode choices must preserve
+At the enumeration-only checkpoint, the application reduced modes to
+`(width, height)` pairs, losing fields the original retained. The grouped
+choices and conditional popup are documented below. Mode choices must preserve
 stable device/mode identity, depth and refresh, and distinguish a window render
 size from an exclusive display mode. Browser render sizes are a separate host
 capability; a browser cannot claim this OS-exclusive enumeration contract. A
@@ -141,8 +142,8 @@ returning the collection, it augments the enumerated records using two
 source-resident dimension-pair tables, a source floating-point aspect predicate,
 a dimension transformation, and per-index dimension queries. Both tables have
 nine pairs in this selected image. Their contents and the predicate operands
-were read in memory and validated, without publishing a resolution list or
-copying those values into production. The transformation fits a rectangle to
+were validated from the mapped executable bytes. This check did not publish
+a resolution list or copy those values into production. The transformation fits a rectangle to
 source-derived integer aspect units; it does not use a screenshot fit.
 
 The conversion groups records by a formatted key containing dimensions, depth,

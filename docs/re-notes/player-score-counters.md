@@ -15,9 +15,9 @@ Status: no counter is derived. `GetPlayerScore` refuses every selected
 - Production admission reads these constants from the program at startup
   (`map_startup_host.rs`, presence-gated on the `GetPlayerScore` native like the
   `Location` gate). Ordinals come from the declarations, not from a table in code.
-- Not verified here: that the evidence copy is the selected `common.j`. The
-  original-input admission gate (selected install, `Scripts\common.j` through the
-  production resolver) is not written yet.
+- This evidence copy has no verified install identity. The later opt-in
+  [original-input gate](../../crates/pcx-play/tests/player_score_original.rs)
+  reads `Scripts\common.j` from the selected install.
 
 ## Native evidence (selected executable)
 
@@ -32,15 +32,15 @@ Executable `Warcraft III.exe`, SHA256
   returns 0. The original therefore reports 0 for invalid input. This port refuses.
 - Jump table `0x4948e0` (25 entries) selects a getter per index. Index 0 reaches
   `0x4c11b0`, index 1 reaches `0x4c11a0`. Both load `[player+0x390]` and tail-jump
-  into a list walk (`0x514cc0`, `0x514c80`) that sums a field at `+0x2c` over
-  nodes whose `+0x30` has bit `0x8` set.
+  into a list walk (`0x514cc0`, `0x514c80`). Index 0 sums `+0x1c` and index 1
+  sums `+0x2c` over nodes whose `+0x30` has bit `0x8` set.
 
 ### Static writer and caller trace (objdump, no Ghidra)
 
 - The getters' list walk at `0x514c80` (index 1) and `0x514cc0` (index 0) uses
   byte-offset links inside a container at `[player+0x390]`: the walk starts at the
-  container count `[+0x10]`, reads base `[+0x8]`, follows `[node+0x4]`, sums `[node+0x2c]`
-  only where `[node+0x30]` has bit `0x8`.
+  container count `[+0x10]`, reads base `[+0x8]` and follows `[node+0x4]`.
+  Each walk uses the field and flag test above.
 - Records are inserted by `0x513470`. It decodes a handle to an object with `0x95c860`,
   stores that object at `[node+0x14]`, and sets flags `0x2`, `0x4` or `0x8` on
   predicates `0x6e0580`, `0x5cc9f0` and `0x696d50`. The predicates test membership in

@@ -101,11 +101,9 @@ both affected library builds also passed. Those receipts precede the final
 stereo/pan relationship and checked-multiplication refinement and do not validate
 that refinement.
 
-The latest isolated rerun was not executed: automatic approval review could not
-complete because its usage quota was exhausted. The final source is uncommitted
-pending those checks. The actual app pending-gain and live-null-sink tests are
-written but have not run; they await the same-generation optional module
-producer. The first selected-reader invocation accidentally filtered zero tests;
+At this checkpoint, the isolated rerun stopped before the app pending-gain
+and live-null-sink tests. The integrated run below exercised those cases
+with the same-generation module producer. The first selected-reader invocation accidentally filtered zero tests;
 its later corrected invocation ran exactly one named test and passed. No zero-
 test receipt is counted as evidence.
 

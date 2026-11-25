@@ -6,9 +6,9 @@ This joins the bounded code observations in
 [legacy-simulation-clock](legacy-simulation-clock.md) to a campaign consumer.
 It does not establish complete simulation, scheduler, heading or spell parity.
 
-Normal-campaign adoption of this candidate is held until both script and AI wake
-families carry source-qualified raw points and callback scopes. The called timer
-and timed-event tests below do not qualify those other continuation families.
+The first campaign candidate covered called timers and timed events. The later
+paired transport in this note qualifies additional wake paths. See
+[application counter pacing](native-counter-pacing.md) for the opt-in host path.
 
 ## Producer and arithmetic
 
@@ -84,10 +84,10 @@ they do not establish native Windows or complete campaign tick parity.
 
 ## Called path and domain compatibility
 
-Normal selected-source campaign preparation attaches the general queue policy to
-`NumericPolicy`, independently of map ability declarations. `map_startup_host`
-admits its active state after numeric admission and before VM globals execute.
-No new map-input flag or user option selects it.
+In the first called-pacing implementation, campaign preparation attached the
+general queue policy to `NumericPolicy`, independent of map ability declarations.
+`map_startup_host` admitted its state before VM globals. Policy admission and
+application driver selection are separate.
 
 The application calls
 `CampaignRuntime::advance_one_tick -> campaign_host::advance_paced_tick`.
@@ -229,8 +229,10 @@ callback integration; this counter transport alone does not activate it.
 
 ## Remaining fidelity work
 
-The normal application adapter and pre-startup mode selection remain open. The
-new called queue transport does not reconstruct source points from `f64`.
+The later [opt-in counter adapter](native-counter-pacing.md) selects its platform
+before startup. Ordinary launches still use caller-time pacing. The queue
+transport preserves raw source points rather than reconstructing them from
+`f64`.
 
 The older game-only prototype refuses an unbound map wake before changing its public
 clock or consuming its thread. An unbound AI wake refuses before the no-expiry

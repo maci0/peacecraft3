@@ -15,12 +15,10 @@ Provenance carried by `GridAlignment`:
 - derived width/height/uniform ratios;
 - checked products for terrain tile, terrain corner and pathing cell counts.
 
-This is explicit dimension validation; map importers and simulation do not
-automatically invoke it. It does not define native world
-units, pathing cell world size, height scaling, terrain walkability, or the
-meaning of any WPM flag bit. Runtime map importers may use it to reject grids
-whose authored dimensions do not form one uniform integer raster relationship,
-but it is not evidence that any gameplay behavior follows from that relationship.
+Map admission and campaign placement use this check to reject grids without
+a uniform integer raster ratio. The calculation validates dimensions. World
+units, cell pitch, height scaling, walkability and WPM bit meanings require
+separate evidence.
 
 Synthetic public-API tests cover distinct ratios, mismatched axes, zero dimensions
 and corner overflow. The optional original gate requires a caller-supplied local

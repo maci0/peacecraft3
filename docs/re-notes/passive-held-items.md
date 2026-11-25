@@ -4,8 +4,8 @@
 
 A held passive item (`ItemData` `usable=0` and `powerup=0`) contributes the strength, agility and
 intelligence of its `AIab`-class abilities, flat armor from `AIde`, flat attack damage from `AIat`,
-maximum life from `AIml`, life regeneration from `Arel`, and a mana-regeneration fraction from
-`AIrm` while held. The unit total is the retained powerup strength plus the held passive totals,
+maximum life from `AIml`, maximum mana from `AImm`, attack speed from `AIas`,
+life regeneration from `Arel`, and a mana-regeneration fraction from `AIrm`. The unit total is the retained powerup strength plus the held passive totals,
 derived on demand from the held slots, so no add/remove state exists.
 
 - Derived: damage (primary STR plus held flat damage), armor and speed (AGI), and the level-up
@@ -37,8 +37,8 @@ derived on demand from the held slots, so no add/remove state exists.
   after the death and spends its charge; see "`AIrc`" below.
 - A vampiric attack (`AIva`) heals the holder on its attack hits; see "`AIva`" below. A holder takes
   at most one, and none beside an orb.
-- Usable items (`usable=1`) are held without any passive bonus. Their activation is not
-  implemented.
+- Usable items (`usable=1`) provide no held passive bonuses. The admitted
+  `AIhe` healing path activates separately and spends a charge.
 - Passive rows whose abilities are outside the admitted classes refuse the pickup atomically
   with a diagnostic. No slot, event, pool or held state is written before the refusal.
 
@@ -116,7 +116,8 @@ diagnostic instead of applying a silent wrong stat.
   life this is a faithful derivation, not a measured observation. Mana drops and dead-holder
   removal are measured in the controlled RoC mana probes.
 - The source of the revival current-mana value is not qualified.
-- Usable item activation (`UnitUseItem`) and its charges.
+- Activation and charge handling for usable classes outside the admitted
+  healing path.
 - Passive families other than `AIab`, `AIde`, `AIat`, `AIml`, `AImm`, `Arel`, `AIrm`, `AIas` and the
   orbs: mana (`AIrn` auras and other classes), and the rest of the refused rows.
 - Non-hero passive equip: pure intelligence is accepted with no modeled effect, while strength

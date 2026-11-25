@@ -16,11 +16,10 @@ limits refuse. Invalid calls leave the previous selection intact. Copying is
 fallible and completes before the state changes. Empty selection text is retained
 as empty text, without assigning it a clearing or fallback meaning.
 
-This is selection storage for a future music consumer. Track expansion, starting
-or stopping music, random selection/RNG work and music completion are not
-implemented here. The existing source-backed sound-start queue remains separate;
-no audio device or playback state is fabricated. Default launcher admission is
-still open.
+This slice implemented selection storage. The later
+[regular music controller](script-regular-music-controller.md) covers track
+choice, playback commands and completion. The sound-start queue remains
+separate.
 
 ## Source evidence and scope
 

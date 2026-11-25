@@ -15,8 +15,8 @@ struct Joint {
 }
 
 /// Checked hierarchy with a camera basis that can follow authored camera motion.
-/// Axis locks and inheritance flags outside a full-billboard family retain the
-/// ordinary pose path's existing behavior; this plan does not implement them.
+/// Reject unsupported transform flags on a billboard, its ancestors or its
+/// descendants. Unrelated joints retain ordinary pose behavior.
 pub struct CameraPosePlan {
     joints: Vec<Joint>,
     order: Vec<usize>,

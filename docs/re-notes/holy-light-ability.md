@@ -40,11 +40,11 @@ from the row:
 - Target rules: `notself` refuses self-targeting, `nonancient` refuses ancient units,
   and `organic` refuses undead and mechanical friendly units. Enemy targets must be
   undead, so enemy organic units are refused. Heal targets are allies: the same player,
-  or a player that has an explicit passive alliance toward the caster's owner. The
-  tooltip says "friendly living". Neutral passive units heal only through such an
-  alliance; no owner-number rule applies.
+  or a player toward whom the caster's owner has an effective passive alliance.
+  This includes admitted startup defaults. The tooltip says "friendly living".
+  Neutral passive eligibility follows the same alliance check.
 - Heal: `DataA` life up to max life. Invulnerable undead take no damage but still
-  spend the cast.
+  consume mana and start the cooldown.
 - Undead damage: `DataA / UNDEAD_DAMAGE_DIVISOR` through `damage_unit`, the shared
   life-loss path. Kills name the caster as killer. Armor is not applied to spell damage.
 - Mana spend, cooldown start and clearing of the caster's attack target happen on a

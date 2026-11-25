@@ -9,8 +9,7 @@ all public hashing APIs remain compiled. No SIMD or scalar algorithm changes.
 
 Published license notices and other source files are retained. Package lockfiles
 and Cargo cache/package stamps are omitted; the workspace lockfile owns product
-resolution. The only manifest changes are the explicit local Rust floors noted
-above, where applicable.
+resolution. The published manifests are unchanged.
 
 See [the workspace compatibility note](../../docs/re-notes/rust-dependency-warnings.md)
 for provenance, validation scope and remaining upstream Clippy style debt.

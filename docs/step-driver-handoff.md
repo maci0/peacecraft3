@@ -12,16 +12,22 @@ changes, when `game_paused() == Some(true)`, or when control is off
 Proof: ignored test `step_driver_two_steps_with_one_real_order` in
 `crates/peacecraft3/src/campaign_entry_gpu_tests.rs` issues one legal
 `standard_target` Move order, then two `step_once(20)` steps, asserting
-movement across both. Run headless/muted with a local original install:
+movement across both. Use a local original install, a map member and a fresh capture
+directory. Verify offscreen display and null audio before launch.
 
 ```bash
-PCX_NATIVE_CHAPTER_INSTALL=<install> PCX_NATIVE_CHAPTER_MAP=<map> \
-PCX_NATIVE_CHAPTER_ADDON=roc PCX_CAMPAIGN_CAPTURE_DIR=<new-dir> \
-cargo test -p peacecraft3 --test-threads=1 -- step_driver_two_steps --ignored --nocapture
-python3 tools/step_driver_handoff.py <PCX_CAMPAIGN_CAPTURE_DIR>
+export PCX_NATIVE_CHAPTER_INSTALL='/path/to/Warcraft III (Legacy)'
+export PCX_NATIVE_CHAPTER_MAP='path/within/selected/archive.w3m'
+export PCX_NATIVE_CHAPTER_ADDON=roc
+export PCX_CAMPAIGN_CAPTURE_DIR='.scratch/step-driver-new'
+
+cargo test --locked -p peacecraft3 --bin peacecraft3 --features test-fixtures -- \
+  --exact campaign_entry_gpu_tests::step_driver_two_steps_with_one_real_order \
+  --ignored --nocapture --test-threads=1
+python3 tools/step_driver_handoff.py "$PCX_CAMPAIGN_CAPTURE_DIR"
 ```
 
-`tools/step_driver_handoff.py` is pure stdlib and validates the journal's
+`tools/step_driver_handoff.py` is pure stdlib and validates `observation-journal.json` for
 `StepState`, legal order and `moved_squared > 1.0`. This is a harness proof,
 not campaign-AI completion: T0885's acceptance gate (one selected campaign
 AI entry, next missing interface recorded) remains open.

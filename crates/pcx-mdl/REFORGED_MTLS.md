@@ -76,7 +76,9 @@ their shapes, signatures and behavior. The v800 parser implementation is
 unchanged. `Mdlx::materials()` still refuses v1800 so its callers cannot silently
 project newer fields into classic material semantics.
 
-Use the explicit new API:
+The inspected SD fixture opens with the strict parser. For a v1800 file
+with chunks the strict parser refuses, use `Mdlx::parse_stored_v1800` for framing only.
+To inspect the stored material records:
 
 ```rust,ignore
 let model = pcx_mdl::Mdlx::parse(bytes)?;
@@ -88,7 +90,7 @@ for material in model.materials_v1800(bytes)? {
 
 `materials_v1800` checks the parsed version and validates inclusive records and
 layers before returning raw-backed `Material` entries. Other versions refuse
-this accessor. `Material.data` retains every original record byte except its
+this accessor. `Material.data` owns a copy of each record body, excluding its
 inclusive size word, retained in `Material.len`.
 
 `MaterialLayer1800` exposes the original classic prefix separately from the
@@ -118,8 +120,8 @@ track with a cubic header, scalar/vector cubic tracks, and malformed framing.
 The discriminating valid fixture fails `checked_layers()` and succeeds through
 the explicit v1800 reader without changing its bytes.
 
-The ignored direct-CASC fixture requires explicit install and authored path
-environment variables, verifies content identity, checks every fixed field/key
+The ignored [local_reforged fixture](tests/local_reforged.rs) requires
+`PEACECRAFT3_REFORGED_DIR` and `PEACECRAFT3_REFORGED_ASSET`. It verifies content identity, checks every fixed field/key
 against its original input slice and reports exact tiling/counts. Both classic
 corpus sweeps remain separate regression evidence. None proves shader selection,
 texture-slot role, blending, fresnel/emissive appearance, animation evaluation,

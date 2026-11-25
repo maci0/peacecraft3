@@ -118,14 +118,16 @@ duplicate VERS, short VERS payloads (0 through 3 bytes) and oversized VERS
 payloads (5 and 8 bytes). Classic-accessor acceptance of duplicates/oversized
 records remains covered, without making a native rejection claim.
 
-The ignored direct-CASC test requires explicit install and discovered HD asset
-environment variables. It verifies identity, every geoset's counts/tiling, each
+The ignored [local_hd test](tests/local_hd.rs) requires
+`PEACECRAFT3_REFORGED_DIR` and `PEACECRAFT3_REFORGED_HD_ASSET`. It verifies identity, every geoset's counts/tiling, each
 tangent bit/skin word against its input slice, and the strict mesh refusal.
 Classic/SD fixtures remain regression checks, not native or render oracles.
 
-Unestablished: tangent sign/handedness use, joint-word mapping into MATS/global
-nodes, BPOS bind-pose semantics, GPU influence selection, weight normalization,
-rounding, LoD choice, HD shaders and rendered/runtime/native fidelity. One next
+[Joint metadata](REFORGED_JOINTS.md) records a checked join under the primary
+format convention. Native joint selection, tangent sign/handedness use, BPOS
+bind-pose semantics, GPU influence selection, weight normalization,
+rounding, LOD choice, HD shaders and rendered/runtime/native fidelity remain
+unverified. One next
 probe for future integration is the exact-target v1800 weighted-skin consumer:
 trace its SKIN joint lookup through MATS and BPOS and its integer-weight conversion
 before constructing GPU bindings. No REA provider retry was performed here.

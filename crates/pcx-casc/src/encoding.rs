@@ -34,7 +34,7 @@ pub struct Encoding {
     pub ckey_hashes_verified: usize,
     pub ekey_hashes_verified: usize,
     pub opaque_specs: Vec<u8>,
-    /// Hash-verified but not interpreted as ESpec instructions.
+    /// Hash-verified raw EKey page bytes.
     pub opaque_ekey_pages: Vec<u8>,
     pub opaque_tail: Vec<u8>,
 }
@@ -201,6 +201,7 @@ impl Encoding {
         })
     }
 
+    /// Return the unsupported error for interpreting ESpecs and EKey pages.
     pub fn interpret_specs(&self) -> Error {
         error(
             &self.evidence.source.member,

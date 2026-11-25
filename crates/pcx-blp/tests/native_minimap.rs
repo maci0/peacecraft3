@@ -1,4 +1,5 @@
-//! Explicit local original-input gate; no game bytes are included.
+//! Compare a supplied minimap BLP with raw BGRA pixels captured from the same
+//! map in the original client. Supply both files locally to run the ignored test.
 use pcx_blp::{Header, decode_jpeg};
 
 #[test]

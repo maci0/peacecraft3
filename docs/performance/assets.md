@@ -1,8 +1,8 @@
 # Asset loading and decode performance
 
-Gate metrics are user-mode instructions, allocation calls and requested bytes
-over fixed workloads, plus an output digest that must not change. Elapsed time
-is printed for orientation only. See
+The deterministic budget checks allocation calls, requested bytes, fixed-work
+counters and digests. Same-environment comparisons also check instruction
+growth against a configurable tolerance. Elapsed time is report-only. See
 [performance testing](../performance-testing.md) for the shared rules.
 
 ## Running
@@ -10,11 +10,14 @@ is printed for orientation only. See
 ```sh
 python3 tools/perf/assets.py list
 python3 tools/perf/assets.py run --label before --repeat 3
-python3 tools/perf/assets.py run --binary <other build> --label before   # build against another revision
+# After applying the change:
+python3 tools/perf/assets.py run --label after --repeat 3
 python3 tools/perf/assets.py compare .scratch/perf-assets/results/before.json .scratch/perf-assets/results/after.json
-python3 tools/perf/assets.py check                                       # allocation and fixed-work budgets
-python3 tools/perf/assets.py lower .scratch/perf-assets/results/after.json
+python3 tools/perf/assets.py check
 ```
+
+To profile a binary built from another revision, pass
+`--binary "/path/to/other build"` to `run`.
 
 `PEACECRAFT3_LEGACY_DIR` (or `--install`) names the Legacy install. The
 program is `tools/perf/assets/` (own manifest and lockfile, path dependencies on
@@ -35,8 +38,9 @@ Method details:
   sets another count (instructions then include every thread). Three identical
   runs differ by 0 to 1.4 million instructions out of 10 million to 3.5
   billion (largest: `mdx-sample-v1`, libm and allocator variance).
-- `compare` fails on a differing input digest, output digest or fixed-work
-  counter, on more allocation calls, or on instruction growth above 2%.
+- `compare` fails on unequal workload sets, changed digests or fixed-work
+  counters, more allocation calls, or instruction growth above `--tolerance`
+  (2% by default).
 
 Measured on AMD Ryzen 9 9950X, rustc 1.99.1, perf 7.2.11, Legacy 1.29 install.
 Absolute counts depend on compiler and code layout; compare only like with like.
@@ -54,7 +58,7 @@ workloads once (`--repeat` for more) and exits 1 when
   1.29 install the budget was taken from; another install is not a comparison),
 - a workload has no budget, or a budget has no workload.
 
-Instruction counts are printed and never decide the exit code. Budgets only
+The `check` command reports instructions without using them in its exit status. Budgets only
 move down. After a change that lowers a counter, measure with `run`, then
 `python3 tools/perf/assets.py lower RESULT.json`: it lowers each counter to the
 measured value and refuses (exit 1, file untouched) when any allocation counter
@@ -128,7 +132,7 @@ growth copies for fewer calls.
 
 ## Round 2 results
 
-Before is the tree at HEAD `b4a28f5` and after is the working tree, both built
+The baseline was `b4a28f5`; the candidate was the Round 2 working tree, both built
 with the same harness (which gained `map-members-v1`), `--repeat 2`, one
 thread. Every output digest and fixed-work counter is identical; no allocation
 call count rose. The suite total falls from 7,051,886,819 to 6,548,838,574
@@ -215,7 +219,7 @@ allocation calls). The rest of that workload is inflate.
   map from the archive set on every call. They serve the `objx` tool and tests
   and have no workload, so they are unmeasured and unchanged.
 
-## What remains
+## Open questions at the Round 2 checkpoint
 
 - `mdx-sample-v1` (2.55 billion): slerp with `f64` `sin` and `acos`, then
   `bone_matrices_from_poses` and `sample_joint_pose`. The workload's own
@@ -238,7 +242,7 @@ allocation calls). The rest of that workload is inflate.
 - Browser ISO import and WASM paths are not measured; only native instruction
   counts exist here.
 
-## Hand-off (outside this area)
+## Round 2 handoff notes
 
 - `pcx-play` reads several members per map through `Map::extract_checked`
   (`editor_triggers.rs`, `campaign_inputs.rs`, `campaign_placement.rs`). They
@@ -248,15 +252,11 @@ allocation calls). The rest of that workload is inflate.
 - `campaign_data_set.rs` copies each archive to a private snapshot in chunks
   and hashes it with SHA-256 (about 5% of the Human03 startup capture); it
   uses `MpqArchive::read_at`, which zero-fills each chunk before reading.
-- `pcx_blp::decode_jpeg` decodes one mip per call; whether `pcx-gfx` decodes or
-  regenerates mips the file already stores was not examined.
 - `sample_decoder_frame` and similar callers in `pcx-gfx` pass a `parent`
   closure backed by a `BTreeMap`; a flat index would remove it, as it would in
   this harness.
-- Decision for the owner of the workspace lockfiles: build `jpeg-decoder`
-  without its `rayon` feature (measured above, -18% instructions, same pixels).
 - `cargo clippy -p peacecraft3 --lib --bins --features test-fixtures --target
-  wasm32-unknown-unknown -- -D warnings` stops at `crates/pcx-play/src/pe_image.rs:35`
+  wasm32-unknown-unknown -- -D warnings` stopped in that run at `crates/pcx-play/src/pe_image.rs:35`
   (`chunks_exact_to_as_chunks`), outside the asset crates; `cargo check --all-targets`
-  for `peacecraft3` stops at unused `totals` and `thread_totals` in
+  for `peacecraft3` stopped at unused `totals` and `thread_totals` in
   `crates/peacecraft3/src/counting_allocator.rs`.

@@ -3,7 +3,8 @@
 This runs the supplied original executable in a private Docker/Wine/Xvfb environment.
 It is a Wine runtime reference, not native Windows ground truth. The image contains
 only Debian/runtime packages. Game files, license files, profile writes, logs and
-screenshots stay in a local ignored run directory. No original files are uploaded.
+screenshots produced by `reference.py` stay in an ignored local run directory.
+The separate [campaign decision tool](#campaign-play) contacts a provider.
 
 Prerequisites: Docker, Python 3, and Pillow for `report`. Tests additionally use
 `jsonschema`. Build package downloads use ordinary network access; game containers
@@ -21,6 +22,12 @@ python tools/original-game-reference/reference.py capture --run-dir .scratch/ori
 python tools/original-game-reference/reference.py key --run-dir .scratch/original-reference-1 --key Escape
 python tools/original-game-reference/reference.py click --run-dir .scratch/original-reference-1 --x 300 --y 400
 python tools/original-game-reference/reference.py stop --run-dir .scratch/original-reference-1
+```
+
+After a played match, stop its container and export a replay if the match wrote
+one:
+
+```sh
 python tools/original-game-reference/reference.py export-replay --run-dir .scratch/original-reference-1 --label match-1
 ```
 
@@ -58,13 +65,14 @@ not acquire or bypass them. Private runs should not be shared.
 
 ```sh
 python tools/original-game-reference/reference.py report \
-  --reference .scratch/original-reference-1/captures/main.png \
+  --reference .scratch/original-reference-1/captures/startup.png \
   --recreation /path/to/local-matching-canvas.png \
   --output .scratch/comparison-1 --note 'Record source, edition, scene and clock differences here'
 ```
 
-The report refuses differing pixel extents rather than rescaling. It copies both
-images and hashes them into a standalone local HTML folder. A same-size pair alone
+The example uses the quickstart’s startup capture. Inspect its scene before
+choosing the matching application capture. The report requires equal pixel
+extents and copies both images and their hashes into a local HTML folder. A same-size pair alone
 is not evidence of matching source, edition, camera, settings or animation phase.
 
 ## Paired input replay
@@ -268,8 +276,9 @@ python tools/original-game-reference/reference.py report \
   --note "Observed application captures; clocks and RNG are uncontrolled"
 ```
 
-A static report only labels caller-supplied PNGs; its execution provenance is in
-the replay receipt. The native application's frame state is currently unobserved,
+A static report displays three caller-supplied PNGs. Its difference image,
+mask and overlay still compare the original and recreation inputs. Use the
+replay receipt for execution provenance. The native application's frame state is currently unobserved,
 and the browser's before/after state does not control animation phase. Three-way
 visual replay still refuses a non-null seed. It is a visual diagnostic until
 application seed acknowledgments, shared logical ticks, all consumers and repeated
@@ -409,12 +418,18 @@ This diagnostic limit does not change input delivery, readiness or click timeout
 
 ## Campaign play
 
+The `decide` and `play` subcommands send encoded screenshot frames to the
+chosen provider and can incur usage charges. `decide` makes a provider request
+without sending game input. Use the local `reference.py` commands above for
+captures that stay on the machine.
+
 `campaign_agent.py` drives a reference that is already running. It captures the
 window, asks a vision decision model for one action, and sends that action with
 the existing click and key path. Jev 1.14 (`jev-1.14.0`) is the default because
 it returns a box: the click is the center of that box, mapped back onto the
-capture. A box below 0.08 confidence, a box covering more than about a third of the frame, or a cell below the same point gate becomes a wait, and a
-victory or defeat screen ends the session without another click.
+capture. A weak, oversized or invalid box can fall back to a valid grid cell with
+its own confidence check. If neither is accepted, the loop waits. A victory
+or defeat screen ends the session without another click.
 
 OpenRouter is the other provider. Vision decision models there, default
 `perplexity/pplx-decider-v1.2`, return a label rather than a box, so the same

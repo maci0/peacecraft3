@@ -1,10 +1,11 @@
-//! Renders the Footman offscreen and writes a PNG, so the render can be checked
-//! without a human at a window.
+//! Render the scene offscreen and attempt to save a PNG.
 //!
-//! The image is the artefact: `analyze` reads the pixels back and reports
-//! coverage, colour spread, and whether anything drew at all. A render that
-//! produces an empty or monochrome buffer is a failure this catches, and a
-//! human-verified screenshot is not required to see it.
+//! The screenshot readback is checked for more than 200 lit pixels and full
+//! opacity. Colour distribution is reported for inspection. A save error is
+//! logged separately.
+//!
+//! Install lookup tries `PEACECRAFT3_LEGACY_DIR`, `PEACECRAFT3_INSTALL`, then
+//! `wc3/game/app`.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -59,7 +60,7 @@ struct Shot {
     image: Handle<Image>,
     /// Set once the readback has been asked for, so only one is requested.
     requested: bool,
-    /// Set once the buffer has been written and analysed.
+    /// The save attempt and pixel analysis have completed.
     saved: bool,
 }
 
@@ -86,10 +87,6 @@ fn main() -> ExitCode {
         .extract(TERRAIN)
         .ok()
         .and_then(|b| load_image(&b, TERRAIN).ok());
-    // One entry per material, in material order, so a geoset's `material_id`
-    // indexes this list exactly as it indexes the model's `MTLS`. A material
-    // with an empty path — the footman's second — or a texture that fails to
-    // load is `None`, and its geoset falls back to flat colour.
     let tex_paths = model_texture_paths(&bytes, MODEL).unwrap_or_default();
     let mut textures: Vec<Option<pcx_gfx::LoadedTexture>> = Vec::with_capacity(tex_paths.len());
     for p in &tex_paths {
@@ -197,7 +194,6 @@ fn spawn(
             far: 5000.0,
             ..default()
         }),
-        // Framed from the model's own height rather than a magic distance.
         Transform::from_xyz(150.0, -210.0, 120.0).looking_at(Vec3::new(0.0, 0.0, 80.0), Vec3::Z),
     ));
 
@@ -240,13 +236,7 @@ fn spawn(
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, skinned);
         let mesh_handle = meshes.add(mesh);
 
-        // The texture bound to this geoset is the one its `material_id` names,
-        // read off the geoset's trailer rather than cycled from the geoset
-        // index. The Footman's five geosets read 0, 1, 0, 0, 2: the last is the
-        // blood geoset and takes `Textures\gutz.blp`, which index cycling gave
-        // to a body piece while the blood geoset drew with the empty-texture
-        // material instead. A material with no loadable texture falls back to
-        // flat colour; it is never silently swapped for another material's.
+        // Select the authored material slot. A missing texture uses flat colour.
         let texture = scene
             .textures
             .get(rest.material_id as usize)
@@ -305,10 +295,10 @@ fn quad() -> Mesh {
     mesh
 }
 
-/// How many frames the GPU needs before a fresh render target holds pixels.
+/// Fixed frame delay before requesting readback.
 const WARMUP_FRAMES: u32 = 40;
 
-/// Asks the renderer for the pixels once the image render target is warm.
+/// Request render-target readback after the fixed delay.
 ///
 /// The image asset itself never receives data: `RenderTarget::Image` renders
 /// into the GPU texture behind the handle, so the only way back to the CPU is
@@ -403,8 +393,7 @@ fn analyze(data: &[u8]) {
     );
     println!("  distinct colours (5-bit) {}", colours.len());
 
-    // A silhouette: how much of each row is lit. A standing figure has a wide
-    // middle and narrow top; a flat plane is uniform.
+    // Plot summed RGB intensity in 16-row bands.
     let step = 16;
     for y in (0..HEIGHT as usize).step_by(step) {
         let v: u32 = rows[y..(y + step).min(rows.len())].iter().sum();

@@ -144,13 +144,13 @@ in a separately authorized exact-build task, is to trace Altar geoset 3's joint
 selects object 0 or 3 and which stored row/transform it uses. No provider or
 runtime change was attempted here.
 
-The malformed-short-node test initially exposed an underflow in the existing
-classic `Mdlx::bones` reader at `src/lib.rs:2800`. Its behavior is unchanged.
-The new helper checks record spans and inventories bounded source headers
-directly, so that eight-byte record now yields a typed `RecordShape` refusal
-without entering the classic animation reader.
+The malformed-short-node test initially exposed an underflow in the classic
+`Mdlx::bones` reader. The classic reader now checks node size and record end
+before subtracting the trailer, returning `BoneRecordOverruns` for a short
+record. The separate joint accessor returns `RecordShape` for the eight-byte
+record without entering the classic reader.
 
-## Validation and caller handoff
+## Recorded validation
 
 Exact scoped commands, using the unchanged lockfile and a private target:
 

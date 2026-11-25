@@ -1,8 +1,17 @@
-# PeaceCraft3 — Tracker
+# PeaceCraft III tracker
+
+[Release 0.19.0](docs/releases/0.19.0.md) records the latest published scope,
+validation and known limits. The [desktop build guide](docs/build-desktop.md)
+tracks Windows and macOS release results.
+
+Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
+
+Dated checkpoints retain their original test scope and failure frontiers.
 
 All-menu completion requires every control wired and every source-supported state
 verified against synchronized original full frames. The current gaps are listed in
-[menu acceptance](docs/menu-acceptance.md). Campaign progression follows that work.
+[menu acceptance](docs/menu-acceptance.md). Final campaign sign-off follows
+that gate. Dated entries below include earlier progression tests.
 
 - [~] Single-player escape-menu Pause is omitted, matching the isolated original
   capture, while its source frame remains available to dependent anchors. The
@@ -54,8 +63,8 @@ verified against synchronized original full frames. The current gaps are listed 
   `docs/re-notes/slice-wtg-desugar.md`, and
   `docs/re-notes/script-parse-bounds.md`.
 
-- [~] Campaign loading screen. Launching a mission opens the original loading
-  screen: `Loading.fdf` frames, the background model and sequence the map header
+- Earlier indexed-map loading-screen checkpoint. Mission launch drew the
+  original loading screen: `Loading.fdf` frames, the background model and sequence the map header
   selects through `UI\WorldEditData.txt` `[LoadingScreens]`, the `LoadingProgressBar`
   model, and the map's text, title and subtitle. The bar's easing steps are read
   from the reviewed image. The simulation is held and input blocked until the map
@@ -73,9 +82,10 @@ verified against synchronized original full frames. The current gaps are listed 
   The emblem and icons now blend correctly (an earlier black-rectangle capture
   predated the BLP alpha fix). A map that sets no camera still ends its load on
   published terrain, and script audio is not gated behind the screen because the
-  original's sound natives have no loading check. Open: colour is not qualified, the screen has not been compared with an original capture, and
-  the melee panel, network wait, custom map-supplied loading models, continuation
-  and browser launches have no loading screen.
+  original's sound natives have no loading check. This checkpoint left colour
+  qualification, original capture comparison, the melee panel, network wait,
+  custom loading models, continuation and browser launches open. See the later
+  loading-screen entry above for changes to that scope.
 
 - [x] Release 0.7.0: source-derived HUD command states, selected-unit panel,
   portrait composition, upper buttons and quest layout improvements; scripted
@@ -153,11 +163,6 @@ verified against synchronized original full frames. The current gaps are listed 
   App Clippy is blocked in `pcx-play` ability-tooltip code, so WASM Clippy has
   not run. The earlier offscreen replay remains exit 101. This is not full
   renderer fidelity. See [particle publication](docs/re-notes/script-doodads.md#deferred-particle-publication-2026-10-25).
-
-Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` open unknown
-
-Frontiers in older entries retain the result at that slice; the newest entry
-reports current progress.
 
 - [~] The source menu key and HUD Menu button now open the selected escape-menu
   panels over the retained campaign scene. The clock pauses without replacing the
@@ -831,7 +836,7 @@ reports current progress.
   factors still refuse before mutation pending death/revive semantics. See
   [player-health-handicap.md](docs/re-notes/player-health-handicap.md).
 
-### 2026-10-23: Destructable death delivery
+### 2026-10-23: Destructable death delivery (combined app checks)
 
 The private host now derives the canonical widget-death event from the selected
 source global, delivers script-produced deaths synchronously through the shared
@@ -1020,9 +1025,7 @@ comparison.
   comparison. This remains partial startup observation, not campaign acceptance.
   See [summoning](docs/re-notes/water-elemental.md).
 
-Last updated: 2026-10-15
-
-Historical menu verification (2026-10-14; current increment below): WASM release build succeeds; the app
+Historical menu verification (2026-10-14): the WASM release build succeeded and the app
 has 99 passing tests and five explicitly ignored local-fixture tests. PeaceCraft
 settings precede the skippable original cinematic and original menu. Edition is
 RoC on the left and TFT on the right, with TFT selected by default; 1.28 is absent
@@ -1044,29 +1047,20 @@ not rendered, and lighting, particles,
 texture animation, material blending and original options/gameplay remain
 unfinished. Parser and screenshot success do not establish native behavior.
 
-Earlier format-sweep baseline: **15 crates / 336 tests passing, 0 failing**, `cargo fmt`
-clean — expect the number to move, because `pcx-trig` is still being edited
-concurrently. Engine is **Bevy 0.20** (upgraded from 0.17 this wave; the four API
-migrations that forced are in the fidelity log). The coordinator's last measurement
-before the wave was **314 tests, 0 failures** on 1.28c and the same suite on 1.29b,
-with every `#[ignore]`d asset sweep green on both builds — that still holds; the count
-grew with the four new crates.
+The format sweep at this checkpoint recorded 336 passes across 15 crates
+and a clean format check. The earlier comparison recorded 314 passes on each
+source tree. Those runs used Bevy 0.20 after the upgrade from 0.17.
 
-The full-asset sweeps are `#[ignore]`d because they walk the whole shipped set; run one
-with `cargo test -p <crate> -- --ignored --nocapture`. Nine crates carry twelve such
-sweeps (`pcx-blp`, `pcx-map`, `pcx-mdl` ×3, `pcx-objects`, `pcx-play`, `pcx-script`,
-`pcx-slq`, `pcx-tga`, `pcx-trig` ×2). The sweeps discover installs rather than being
-told one: `PEACECRAFT3_INSTALL` (default `wc3/game/app`, the 1.28c tree) and
-`PEACECRAFT3_LEGACY_DIR` (default the Battle.net Legacy install, 1.29b). Both present →
-one run covers the matrix; only `PEACECRAFT3_LEGACY_DIR` set → 1.29b alone.
-**Every sweep is `failed=0` on both 1.28c and 1.29b** — MDX, BLP, SYLK, TGA, the map
-container family (`doo`/`shd`/`mmp`/minimap image), `pcx-objects`, `pcx-script` and
-`pcx-trig`. TGA's 1.29b run still pins its own measured footer split — see *Known
-issues*.
+The recorded local sweeps covered twelve ignored cases across nine crates:
+`pcx-blp`, `pcx-map`, `pcx-mdl` (three), `pcx-objects`, `pcx-play`,
+`pcx-script`, `pcx-slq`, `pcx-tga` and `pcx-trig` (two). They reported
+zero failures on the compatibility and Legacy trees, with a separate footer
+check for Legacy TGA files. See [the cross-version plan](PLAN.md#26-multi-version-support)
+and each named test for its required local inputs.
 
 ---
 
-## Current recreation work (2026-10-16)
+## Recreation checkpoint (2026-10-16)
 
 ### Human01 runtime frontier (2026-10-20)
 
@@ -1358,9 +1352,10 @@ evidence for independent AI globals and synchronous initial execution are record
 - [x] `pcx-mpq`: decompression — PKWARE implode + zlib working
 - [x] `pcx-mpq`: ADPCM mono/stereo and Huffman decode, derived from the supplied
       compatibility Storm.dll; synthetic sectors and original WAV bytes match
-      its native decoder. Huffman weights require a caller-supplied local PE
-      source; Legacy has no co-located DLL, and browser import wiring remains open.
-      This is not target-native 1.29b codec parity; see `format-mpq.md`.
+      its native decoder. Huffman weights require an admitted local PE source. File-backed Legacy
+      extraction can use its co-located executable. Browser import can attach
+      the table from its admitted client image. Target-native codec parity
+      remains unqualified. See [MPQ format notes](docs/re-notes/format-mpq.md).
 - [x] `pcx-mpq`: bounded standalone sparse (`0x20`) and sparse-plus-ZLIB (`0x22`)
       archive admission. Six encrypted/public consumer groups pass native and
       actual WASM; intermediate arithmetic/layout bounds are checked before
@@ -1622,7 +1617,7 @@ Local source: `/home/maci/Faugus/battle-net/` — Reforged **3.0.0.24268**, CASC
        the test asserts some sequence exists where that is observable.
 - [x] `pcx-slq`: `.slk` / SYLK tables — **not** a Miles container, see below
 - [ ] `pcx-gfx`: Bevy loader plugins (asset cache, async decode)
-- [ ] `pcx-gfx` `view`: no terrain tile (the capture draws one; the viewer does not)
+- [x] `pcx-gfx` viewer accepts a selected texture tile.
 
 #### `pcx-slq` — the premise was wrong, and the crate name is now a misnomer
 
@@ -1688,7 +1683,7 @@ terrain rendering, asset-defined terrain materials or native rendering fidelity.
   split instead of one build silently failing a constant written for the other.
   Both pass, 435/435 and 383/383, 0 unread and 0 failed.
 
-## Browser / wasm render path (verified)
+## October 2026 browser and WASM checkpoint
 
 - [x] wasm32 release build of `peacecraft3` compiles
 - [x] Wasm runs in a browser on **WebGL2** (ANGLE/Vulkan/SwiftShader). Proof:
@@ -1858,7 +1853,7 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
       `.txt` on 1.28c, 17 + 49 on 1.29b; `Doodads\`: 2 + 0 on both. The union
       listfile holds 59 `.slk` (1.28c) / 65 (1.29b). **No `Abilities\*.slk` and no
       `Misc\` directory exist** — the remembered names are wrong; the ability data
-      is `Units\AbilityData.slk`, the misc constants `Units\/`UI\MiscData.txt`, the
+      is `Units\AbilityData.slk`, the misc constants `Units\MiscData.txt` and `UI\MiscData.txt`, the
       UI table is spelled `Units\unitUI.slk`, and the unit localisation tables are
       `.txt`, not `.fdf`. `Melee_V0`/`Custom_V0`/`Custom_V1` are the World Editor's
       working copies and are deliberately not decoded
@@ -1899,7 +1894,7 @@ ship custom objects, and a map whose rawcodes do not resolve is unplayable.
       Synthetic tests and an explicit local archive gate cover collection,
       not native prerequisite evaluation or availability.
 - [ ] **Gate:** stock unit stats diff-clean against in-game editor
-- [x] **Gate:** a map with custom objects resolves every rawcode it declares —
+- [x] **Gate:** resolve declared custom objects and report unresolved rawcodes.
       1.28c **888 first-table records (887 resolved) + 282 custom (282 new, 0
       collisions)**, 1.29b **757 (756) + 252 (252)**, 0 unknown fourccs, 0 field
       mapping failures. **One rawcode resolves to nothing on both builds**: `Nwar`
@@ -2004,9 +1999,8 @@ post-1.24 APIs in active use simultaneously.
 - [x] `war3map.wct` — `u32 unknown0` + `u32 N` + `N × {u32 len; len bytes}`; 14 non-empty
        texts are NUL-terminated JASS with the NUL **inside** `L`, the 9,117 empty blocks
        are `L == 0` with no NUL
-- [x] `war3map.wtg` — `WTG!` + **version 4 only** (version 7 is Reforged-era with child
-       ECAs, `is_comment` and array-size words, and is **refused**, not walked with v4
-       rules), then categories, variables, triggers, ECAs
+- [x] The `war3map.wtg` v4 reader checks categories, variables, triggers and ECAs.
+      A [separate v7 reader](crates/pcx-trig/src/wtg_v7.rs) handles its own framing.
 - [x] **Parameter arity comes from `UI\TriggerData.txt`, never from the file** —
        `TriggerArity::from_trigger_data` builds the table (4 groups, 1,045 names on
        1.28c, 1,136 on 1.29b, 0 arity conflicts) and a name outside it is
@@ -2100,9 +2094,10 @@ milestone, regardless of unit-test count.
 See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcomes.
 
 ### Tier A — scripted scenarios
-- [ ] `tests/play/roc/` — 5 chapters (Reign of Chaos) + 3 (Frozen Throne)
-- [ ] `tests/play/orc/`, `undead/`, `nightelf/` — chapters + 3/1/1
-- [ ] `tests/play/demo/DemoCampaign.rpl`
+- [ ] Exercise every chapter selected from the authored campaign and mission
+      metadata. Current [harness probes](docs/playtest-script-execution.md)
+      live under `tests/play/<campaign>/chapterNN.rpl`.
+- [ ] Cover all selected chapters from the supplied demo campaign.
 - [ ] Gate: every scenario's expectations met, traces byte-identical across 100 runs
 - [ ] Baselines captured from the original under Wine, each pinned to an `ev_…` id
 
@@ -2126,7 +2121,8 @@ See `PLAN.md` §3.5 for the harness design. Each chapter asserts specific outcom
       native RNG generation remain open; see `docs/playtest-generation.md`.
 - [~] Three synthetic movement seeds are checked in, regenerated byte-for-byte
       and independently repeated 100 times. Native differential corpus remains open.
-- [ ] Divergences auto-filed into *Open unknowns* with minimal reproducing seed
+- [~] The synthetic corpus comparator writes to a caller-selected report.
+      Record matched native divergences with a reproducing seed.
 - [ ] Gate: zero unexplained divergences over the corpus
 
 ## Open unknowns
@@ -2345,18 +2341,19 @@ Format: `date — subsystem — symptom — root cause — status`
       (`web/pkg/peacecraft3_bg.wasm`), zero DWARF. Still 62,950,809 of `name`
       section (symbol names, not code); `code` 47,289,068, `data` 8,629,367.
       Same lesson: measure the release path, never the dev artifact.
-- [x] Current Pages artifact uses `wasm-bindgen --remove-name-section`:
+- [x] The earlier Pages artifact used `wasm-bindgen --remove-name-section`:
       61,332,742 bytes, no debugging name section, with all executable sections
       compared equal to the same build's unstripped output. Prior artifact sizes
       above are historical. Native performance/full-frame FPS are not implied.
-- [x] Three browser limitations documented rather than fixed: **staging** (no
-      destination to copy into → every source reported rejected), **install-level
-      version detection** (one archive can be opened and counted, but not
-      identified as 1.28c or 1.29b), **rendering without a canvas**.
+- [x] The browser prototype lacked native filesystem staging and install-level
+      identification and required a canvas. Later [ISO imports](docs/pages-demo.md)
+      stage selected MPQs locally.
 - [x] `crates/peacecraft3/README.md` provides the browser build recipe and earlier
       artifact-size measurements. Current artifact measurements remain a separate gate.
 
-## Desktop builds
+## Desktop CI baseline at `d31dc67`
+
+See [desktop build results](docs/build-desktop.md) for the later 0.19.0 run.
 
 - [x] Four-target native CI matrix and packaging helper added; executable
       header validation covers both Windows PE and macOS Mach-O architectures.
@@ -2658,7 +2655,7 @@ Format: `date — subsystem — symptom — root cause — status`
       `script-mp3-sounds.md`/`script-rectangles.md`/`script-sound-properties.md`/
       `script-stacked-sounds.md`.
 
-### Current implemented slices (2026-10-14)
+### Implemented slices at the 2026-10-14 checkpoint
 
 
 - Menu PRE2 now has bounded source-driven persistent simulation, image admission,
@@ -4908,7 +4905,7 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   map transition, save handoff and score presentation remain open; see
   [game exit](docs/re-notes/script-game-exit.md).
 
-### 2026-10-23: Destructable death delivery
+### 2026-10-23: Destructable death delivery (core checks)
 
 - [~] Destructable death subscriptions now share a prepared transition producer
   across script setters, kill/restore and engine damage, with a prepare/commit
@@ -7652,8 +7649,9 @@ unwired score input, click handling, and FDF or header restrictions are out of d
   fixes the needless borrows and nested conditional without changing behavior.
   The failed run remains separate from the corrected acceptance receipt.
 
-  Both strengthened unchanged RoC Human01/Undead02 Counter probes now pass and
-  their test-only callers (`5c73a85a`, `22ef2cad`) are integrated. Each consumes
+  Both strengthened unchanged RoC Human01/Undead02 Counter probes passed in
+  this run. The Undead02 attribution was later withdrawn and the verified
+  rebuild failed at frame 45. Their test-only callers (`5c73a85a`, `22ef2cad`) are integrated. Each consumes
   all 299,975,000,000 ns accepted after initial runtime binding, ends with zero
   pending input, and advances the source Game point after control restoration.
   The initial weak probes are excluded. This is headless recreation startup
@@ -7789,7 +7787,9 @@ complete mission, rendered or audible parity.
   images visually inspected. Actual capture revision and hashes are recorded
   in docs/screenshots/provenance.json. The 27-file asset-free Pages package
   passes local and hosted browser gates with 20 GET requests each, zero page
-  errors/uploads/sockets and exact hosted file hashes. Private build, capture
-  and deployment evidence is retained under .git/release-audit/0.19.0/.
+  errors/uploads/sockets and exact hosted file hashes. The
+  [desktop release results](docs/build-desktop.md) record Windows passes and
+  the macOS audio-clock and timeout failures. Private build, capture and
+  deployment evidence stays local under `.git/release-audit/0.19.0/`.
   Armed-turn timing, the full IsUnitInRange protocol, original-client parity
   and complete gameplay/Save-Load fidelity remain open.

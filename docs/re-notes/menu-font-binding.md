@@ -4,7 +4,8 @@ A `FrameFont "MasterFont", 0.013, ""` record in the FDF names a **face**, not a
 file. The file comes from the shipped skin table, and that is where the binding is
 read from — the face name is not mapped to a path by any constant in this project.
 
-Read-only, via the prebuilt `target/release/mpqxtract`; no build was run.
+The initial binding check used a prebuilt `mpqxtract` for read-only extraction.
+Later sections record separate build, runtime and rendering checks.
 
 ## The binding
 
@@ -32,7 +33,7 @@ own console art and none of the font faces, so every race resolves the face thro
 
 ## Provenance
 
-| File | Bytes | SHA-256 (first 24) |
+| File | Bytes | SHA-256 prefix (24 hex characters) |
 | --- | --- | --- |
 | `War3\UI\war3skins.txt` | 44,153 | `7b685b0d2c1129d63de0b116` |
 | `War3x\UI\war3skins.txt` | 44,153 | `7b685b0d2c1129d63de0b116` (byte-identical to War3) |
@@ -98,10 +99,10 @@ and `Default` alike; each face appears **1×** across the table.
 
 ## Not established — do not infer
 
-* **`FIXEDSIZE` is unresolved native behaviour.** The flag is parsed from
-  `FontFlags`, but what it does (a reference-resolution pixel size, versus the
-  viewport-relative size the FDF's height implies) is **not** determined by the
-  name or by the table. It is reported as parsed-but-unapplied, not interpreted.
+* The native meaning of **`FIXEDSIZE`** remains unqualified. Menu text retains
+  the parsed flag. The default HUD font path rejects it rather than choosing a
+  reference-resolution size. The later font-object flags in this note do not
+  establish the meaning of this FDF token.
 * **The engine's actual lookup order is inference, not measurement.** That a race
   section can override `[Default]` is inferred from the table's shape; no native
   observation of the font lookup was made. What is proven is the data: the keys,
@@ -476,9 +477,9 @@ non-finite records refuse instead of substituting values.
 
 Two synthetic tests pass with deliberately different table contents and count;
 the explicit local-original test also passes. Strict native Clippy, WASM check
-and native/WASM library builds pass. This module does not yet replace Bevy
-shaping: source-font ordinary metrics, live string flags, scaling and placement
-remain to connect and verify. No screenshot recapture is warranted by this
+and native/WASM library builds pass. At this checkpoint, the reader had no connection to text shaping. The
+following sections qualify specific metrics and integrate them into resource
+labels and the unit panel. No screenshot recapture is warranted by this
 parser-only change, and no new pixel-parity claim follows from its tests.
 
 ### Source-font pair metrics (2026-11-03)
@@ -501,9 +502,8 @@ read from the native font record: all six match exactly. The original image
 policy test also passes (five focused tests total). Strict native Clippy and
 native/WASM library builds pass.
 
-This result qualifies the tested metrics, not every glyph/font/size. Bevy's
-ordinary shaping has not yet been replaced: the selected live string flags,
-raster bitmap widths, scaling and final layout integration remain to connect.
+This result qualifies the tested glyphs, font and size. This checkpoint
+left shaping unchanged. The next section covers the resource-bar integration.
 Local reference envelope: `.scratch/native-font-metrics-20261103/rust-metrics-reference.json`.
 No new screenshots or pixel-parity claim follow from this metrics-only change.
 
@@ -566,9 +566,9 @@ reference from the supplied executable, checking ranges and instruction shapes.
 A synthetic different-selector/different-value test checks the derivation and
 out-of-byte-range rejection. Seven focused tests pass, including explicit local
 font/image checks; strict native Clippy and native/WASM library builds pass.
-The runtime shader does not consume this cutoff yet. It must compare combined
-texture/material alpha and preserve surviving alpha: clearing low atlas bytes
-would be incorrect for faded or translucent text.
+This checkpoint decoded the cutoff. The later runtime check applies it to
+combined texture and material alpha, preserving surviving alpha in faded and
+translucent text.
 
 Applying only the derived alpha test in the separately registered *inner*
 glyph diagnostic reduces 19 differing pixels to zero. This isolates a rendering
@@ -587,8 +587,8 @@ negates the whole/half line width, and passes it through `0x7e3e50` when string
 flag `0x80` is clear before emission. After emitting, it calls `0x7ec790`, which
 combines the string's frame/justification operands and normalizes its offsets
 against the viewport. This is not evidence for applying a uniform (-1,+1)
-pixel offset, or for replacing all rounding with floor. The live frame/string
-operands and final application of those normalized offsets remain to qualify.
+pixel offset, or for replacing all rounding with floor. Later live checks record the frame and string operands. General placement
+parity remains unqualified.
 Local bounded windows are `string-origin-emission.asm` and
 `string-centering.asm` in the native-font evidence directory.
 
@@ -893,8 +893,7 @@ five refreshed README images were reviewed.
 The class-line diagnostic rectangle now has zero differences. Several labels
 still have seven residual pixels at the lowercase `g` descender, with repeated
 coverage differences across its occurrences. That pattern suggests a remaining
-glyph-raster coverage issue; native cache bytes for this glyph have not yet been
-compared directly. Portrait-frame/background residuals remain under readouts,
+glyph coverage difference. The next checkpoint compares the native cache bytes. Portrait-frame/background residuals remain under readouts,
 as do other UI/world/text differences and native animation/RNG identity. These
 pixels stay in the full-screen count. No FreeType dependency was added.
 

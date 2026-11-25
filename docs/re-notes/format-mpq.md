@@ -71,8 +71,8 @@ file offset `0x42c64`:
 The mono/stereo pointers are `0x1500d960` / `0x1500d9f0`; their instruction
 bytes call `FUN_1500d240` with channel counts one/two. Missing Ghidra procedure
 entries for those wrappers were a discovery limitation, not invalid pointers.
-This corrects the earlier table-as-string and RVA-offset interpretation in
-`000-mpq.md`; that historical note was not rewritten.
+This supersedes the initial table-as-string and RVA-offset interpretation
+recorded in the [early MPQ note](000-mpq.md).
 
 ADPCM evidence:
 

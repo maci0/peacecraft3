@@ -47,8 +47,8 @@ the original game's behavior. Performance regression gates must use deterministi
 work measurements rather than elapsed-time or FPS thresholds affected by unrelated
 machine load; report live timing and FPS separately.
 
-Do not add attribution to generated tools or agents in source, documentation,
-commit messages or pull requests.
+Do not credit automated tools or agents in source, documentation, commit
+messages or pull requests.
 
 ## Test isolation
 
@@ -64,16 +64,20 @@ Follow [The CLI Spec](https://clispec.dev/) when creating or changing command-li
 interfaces. Provide explicit structured output and errors, discoverable offline
 schema introspection, accurate exit codes, and separate stdout data from stderr
 diagnostics/progress. Non-interactive calls must complete or refuse safely.
-Declare real retry effects and bound collection/stream output appropriately.
+Declare what happens when a command is retried. Document and enforce the
+collection and streaming limits appropriate to each command.
 Preserve existing flags, output formats, exit semantics and binary/artifact
 streams; use `--format` when `--output` already names a destination. Do not add
 inert flags or new confirmation gates merely to satisfy a checklist.
 
-Read the version policy before implementing schemas: v0.3 is currently a
-candidate. Validate the declared version against checked, pinned published schema
-bytes, with process-level tests for parsing, stream separation, failure, retries
-and output limits. Do not claim conformance before those checks pass. Existing
-CLI gaps are tracked debt, not permission to copy incompatible behavior.
+Check the [version policy](https://clispec.dev/versions/) before implementing
+schemas. Verify the checksum of the pinned published schema, then validate
+emitted schemas against the pin for their declared version. Use process-level
+tests for parsing, stream separation, failure, retries, and output limits.
+See the original-reference CLI’s [schema pin](tools/original-game-reference/schema/clispec-v0.3.json)
+and [checksum manifest](tools/original-game-reference/schema/CHECKSUMS.txt) for
+an example. Do not claim conformance before those checks pass. Existing CLI gaps are
+tracked debt, not permission to copy incompatible behavior.
 
 ## Rust and build policy
 

@@ -293,8 +293,7 @@ pub fn run_with_terrain(
         })
         .transpose()?;
 
-    // Textures are resolved up front so a failure is a message rather than a
-    // silently untextured model.
+    // Load model textures up front and keep the ones that resolve successfully.
     let textures = crate::load_model(&bytes, &model)
         .ok()
         .map(|_| ())
@@ -753,7 +752,7 @@ impl Curve<Quat> for BoneQuatCurve {
 
 /// Builds one sequence as a Bevy [`AnimationClip`].
 ///
-/// Every bone with `KGTR`/`KGRT`/`KGSC` keys becomes three curves on its own
+/// Each `KGTR`, `KGRT` or `KGSC` track present on a bone adds a curve to its
 /// [`AnimationTargetId`], each driving that bone entity's [`Transform`]. Clip
 /// time 0 is the sequence's start, so a clip can be seeked independently of
 /// where it sits on the model's shared timeline.
@@ -812,7 +811,7 @@ fn build_clip(
     clip
 }
 
-/// Parsed model plus its animation records, cached for the session.
+/// Parsed model and the bone data used to pose its displayed instance.
 #[derive(Resource, Default)]
 struct ViewerCache {
     model: Option<crate::LoadedModel>,
@@ -823,7 +822,7 @@ struct ViewerCache {
     bone_entities: Vec<Entity>,
 }
 
-/// Cached animation records for the shown model.
+/// Read the model's geoset animation records, returning an empty list on error.
 fn model_anims(bytes: &[u8]) -> Vec<pcx_mdl::GeosetAnim> {
     pcx_mdl::Mdlx::parse(bytes)
         .and_then(|m| m.geoset_anims(bytes))

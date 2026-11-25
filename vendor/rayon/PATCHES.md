@@ -13,13 +13,12 @@ Four atomic `fetch_update` calls and the corresponding iterator doctest use
 are unchanged. The normalized and original manifests declare the local Rust
 1.95 floor, replacing upstream 1.80: the standard-library
 [`atomic_try_update` stabilization attribute](https://github.com/rust-lang/rust/blob/1.100.0/library/core/src/sync/atomic.rs)
-records 1.95.0. The workspace requires 1.99 and validation uses 1.100.
+records 1.95.0. The workspace requires 1.99 and the November 18, 2026 validation used Rust 1.100.
 No deprecation allowance is added.
 
 Published license notices and other source files are retained. Package lockfiles
 and Cargo cache/package stamps are omitted; the workspace lockfile owns product
-resolution. The only manifest changes are the explicit local Rust floors noted
-above, where applicable.
+resolution. The Rust-version declaration is the only manifest change.
 
 See [the workspace compatibility note](../../docs/re-notes/rust-dependency-warnings.md)
 for provenance, validation scope and remaining upstream Clippy style debt.

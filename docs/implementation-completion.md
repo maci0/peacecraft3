@@ -1,6 +1,9 @@
 # Implementation completion scope
 
-Renewed goal: implement all missing formats and functionality. This expands the acceptance backlog; it does not mean the game or any format family is complete. Target and asset-provenance rules remain those in PLAN.md and AGENTS.md. External projects are inspiration only; no third-party code is copied, ported, translated or adapted.
+This guide defines the remaining acceptance work. See the [project plan](../PLAN.md)
+and [asset provenance rules](../AGENTS.md). The reference-engine implementations
+linked here inform design and comparison. Licensed dependencies are separately
+identified in the repository.
 
 ## Acceptance levels
 
@@ -10,7 +13,7 @@ Track each item separately through bounded parsing, canonical runtime integratio
 
 | Area | Existing implementation / evidence | Remaining completion gate |
 |---|---|---|
-| Current campaign frontier | Human01 authored victory repeated; Human02 earned base, boss defeat and player Victory passed at tick 72769 / simulation time 1137.015625 with six surviving footmen | Verify real Human02 continuation through its interlude and Human03 carryover; then remaining Human chapters/interludes, other campaigns and community maps |
+| Recorded campaign milestones | Human01 authored victory repeated; Human02 earned base, boss defeat and player Victory passed at tick 72769 / simulation time 1137.015625 with six surviving footmen | Later runs carried the earned Human02 state through the interlude into Human03. Complete the remaining campaign and community-map gates. See the [tracker](../TRACKER.md) and [Human campaign handoff](handoff-human06.md) |
 | Archives and install/import | MPQ/CASC and installer/import modules exist; archive evidence and bounds retained | Inventory unsupported codec/version/patch/locale/corruption cases against current code; test actual native/browser import and mount precedence |
 | Map containers and world data | Map info, terrain, placements, pathing, regions, cameras, sounds, shadows and minimap modules exist | Version/variant census plus runtime consumers for every required map member; unchanged custom-map acceptance |
 | Object edits and metadata | Current ObjectFile parser accepts all seven w3u/w3t/w3a/w3b/w3d/w3h/w3q families for supported v1/v2 layouts | Verify field/metadata/overlay semantics and runtime behavior per family; older PLAN census/refusal wording is historical, not current parser capability |
@@ -28,9 +31,13 @@ This is the initial acceptance map, not an exhaustive audited list of unsupporte
 
 The active tracked inventory task lives in the existing local campaign Taskwarrior database. Implementation continues in bounded connected slices with coordinated file/Cargo ownership. Native/WASM strict checks, affected builds, meaningful synthetic tests and selected original-asset gates precede completion claims. Automated game/reference tests remain headless and muted. Supplied game data and generated asset copies stay local and uncommitted.
 
-## Current evidence boundary
+## Earlier Human02 checkpoint
 
-Human02 has not yet been verified won in the recreation. The support route reached the boss/outro boundary; a harness assertion incorrectly treated authored-hidden units as absent. The short outro confirms hidden-live identity and currently exposes hidden-world gold-harvest continuation. Original probes establish mining exit and retained hidden-depot travel; deposit-while-hidden is under measurement. Original-client Human02 victory is separate evidence and does not close recreation completion.
+Before the earned victory run, the support route reached the boss and outro.
+A harness assertion had treated hidden units as absent. The short outro
+confirmed that hidden units remained live and left hidden-world gold-harvest
+continuation open. Original-client probes separately observed mine exit and
+travel to a hidden depot. Deposit while hidden was still under measurement.
 
 See [external references](re-notes/external-engine-references.md) for the pinned inspiration-only index. Existing historical tracker entries retain their original slice results; do not infer that every older frontier is still active.
 

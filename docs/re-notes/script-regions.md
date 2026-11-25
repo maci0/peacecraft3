@@ -63,11 +63,11 @@ Commands, immutable input/source/artifact hashes and outputs are local in
 `.scratch/region-root-20261017/`. This is reconstructed script execution and
 retention evidence. No new original-client, render or site run was performed.
 
-## Remaining work
+## Limits at the storage checkpoint
 
-Region removal, rectangle/cell subtraction, cell additions, point/unit membership,
-region enumeration, event context and delivery remain unsupported. Native
-rasterization, repeated-registration identity and later rectangle effects have
-not been measured. These retained requests alone do not make a trigger fire.
+This slice did not qualify removal, rectangle and cell edits, membership, or
+event delivery. The later [range-event slice](slice-range-events.md) covers
+its registered crossing events. Native region rasterization, repeated
+registration identity and rectangle edits remain outside this result. These retained requests alone do not make a trigger fire.
 Full campaign execution, rendered gameplay and the 100-consecutive original
 baseline remain open. Original files and extracted contents remain local.

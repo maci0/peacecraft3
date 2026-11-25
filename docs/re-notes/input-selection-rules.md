@@ -117,7 +117,8 @@ name and damage rows.
   `PCX_NATIVE_CHAPTER_MAP=Maps\Campaign\Human01.w3m`, `PCX_NATIVE_CHAPTER_ADDON=roc`. Arthas
   and two footmen mount as three buttons, Arthas highlighted first, and the highlight moves to
   the footmen after one cycle. The existing `selected_chapter_mounts_the_card_under_its_admitted_console_and_retires_it`
-  fails at baseline on a missing resource in its own app setup; it was not changed.
+  failed in this baseline because its app setup lacked a resource.
+  [Later HUD checks](gameplay-hud-fidelity.md) report subsequent card mounting.
 - Nothing was rendered to a screen or compared with a capture.
 
 ## Open measurements

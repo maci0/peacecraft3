@@ -1,8 +1,9 @@
 # Neutral-player getter: exact Legacy target
 
-This is a bounded static native investigation. `GetPlayerNeutralPassive` remains
-unsupported in the game Host. No MapInfo value, source corpus observation or
-familiar player limit is substituted for the missing context initialization.
+This static investigation predates host support for `GetPlayerNeutralPassive`.
+[Selected campaign preparation](campaign-source-preparation.md) now admits
+source-backed neutral-player rules. The live getter metadata identity for
+arbitrary maps remains unqualified.
 
 ## Binding and retained evidence
 

@@ -71,10 +71,10 @@ after its blocker is removed. These establish the recreation contract.
 
 The selected unchanged Human03 ROC map initializes with three retained scripted
 patrol endpoints. The explicit local-file gate checks native order-name round
-trip, current orders and stored endpoints. The broader headless gate now finishes
-repeated startup, compares roster/unit state and accepts its test move order,
-then refuses the first clock tick because blight regeneration lacks terrain
-state. That gate exits 101; Human03 is not accepted as playable. No original
+trip, current orders and stored endpoints. The broader headless run finished repeated startup, compared roster/unit
+state and accepted the test move order. It exited 101 at the first clock tick
+because blight regeneration lacked terrain state. The later
+[terrain layer](terrain-blight.md) addressed that admission gap. No original
 client or rendered patrol comparison was run.
 
 Private-target checks: the complete `pcx-play` package passes 1,170 tests with 46

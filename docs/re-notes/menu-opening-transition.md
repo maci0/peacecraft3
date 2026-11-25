@@ -1,9 +1,9 @@
 # Opening and menu transition boundary
 
-The requested full-screen split plays both after the opening movie and between
-menu screens, according to the supplied observation. It remains unimplemented.
-The existing panel Birth/Stand animation does not establish that full-screen
-effect, and a once-per-launch substitute would miss the second occurrence.
+The supplied observation describes a full-screen split after the opening
+movie and between menu screens. This investigation has no reachability trace
+for either occurrence. The implemented panel Birth and Stand clips cover
+separate effects.
 
 The retained MainMenu, OptionsMenu and SinglePlayerMenu FDF owners have
 SetAllPoints relationships but no qualified split geometry, motion or timing

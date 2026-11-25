@@ -15,9 +15,8 @@ Evidence and decisions for the modifier/gate foundation and the control groups
   rizin's `fcn.<address>`; roles are assigned here. Decompiler output stayed in the
   ignored `.scratch/`. Nothing from the client is copied into the repository except
   addresses and short facts.
-- Static analysis only. No original client was run, so no row is a runtime
-  observation. The [live capture](input-live-capture.md) (runtime observations under
-  Wine, run3) settles the rows marked RO below.
+- This note adds static analysis. Rows marked RO cite run 3 of the separate
+  [original-client capture](input-live-capture.md) under Wine.
 
 Evidence tags as in the audit: SB shipped data, SS string in the executable, EX
 executable code read here, DOC widely documented behaviour not verified here, INF
@@ -90,13 +89,9 @@ A3, A4, B1, C1, C5). Decisions:
   decoded from the client's preference table by `pcx_play::options_defaults` and
   resolved once per session into `GameInput::scroll_options`, with the client
   identity recorded. Saved values override them through
-  `ScrollOptions::with_saved`. **No saved value flows today:** the settings store
-  and `menu_settings` bind only the audio controls (`validate_settings` rejects
-  other names), so the Gameplay sliders (`MouseScrollSlider`, `KeyScrollSlider`,
-  `MouseScrollDisable` in `EscMenuOptionsPanel.fdf`, range 0 to 100) do not exist
-  in the recreation. The reader of the options panel's applied values is in place
-  and returns nothing until those controls are bound. The camera does not apply the
-  values; that and edge scroll are later slices.
+  `ScrollOptions::with_saved`. At this checkpoint only audio controls were
+  bound. The later [camera preferences connection](input-camera.md#gameplay-preferences-connection-2026-11-04)
+  binds the Gameplay controls and applies their saved values to scrolling.
 
 ## Implementation
 
@@ -140,4 +135,3 @@ audio device is opened.
 - Whether the client prunes dead members from the stored group on select (D5).
 - Camera pan easing for the double press (D8) and key-repeat handling (D4).
 - Behaviour with hidden units (D6) and with units inside transports (G13).
-- Where saved Gameplay option values will be stored.

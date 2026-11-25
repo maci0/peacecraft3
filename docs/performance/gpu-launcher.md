@@ -18,7 +18,7 @@ is unresolved; input delivery and application behavior have not been separated.
 Between 14:09:00 and 14:11:00 UTC on 2026-10-21, 121 diagnostic reports give the UI
 pass GPU median as 0.044834 ms (range 0.041723–0.047772 ms). The empty 2D opaque
 pass diagnostic median is 0.000211 ms. These are development-build observations
-under current host load, not regression gates or optimization speedups.
+under the host load during that run, not regression gates or optimization speedups.
 
 RADV saved a separate 9.7 MiB RGP capture at its frame 3864. RGP 2.7.1.13 opens
 the file and displays Vulkan queue submissions, user markers, pipeline events,

@@ -36,8 +36,7 @@ cargo test -p pcx-assets --locked --offline
 cargo test -p pcx-mdl --test pose_sampling --locked --offline
 ```
 
-The simulation gate now requires zero allocations for its unchanged sorted-input
-workload and state digest. Other delivery orders retain their sorting fallback.
+Other command delivery orders retain their sorting fallback.
 
 ## Clock control
 
@@ -85,17 +84,17 @@ do not fix animation phase; timing and shader counts are report-only. The fixed
 mesh-event test isolates redundant uploads independently of graphics load.
 Capture collection alone does not establish shader occupancy/cache bottlenecks.
 
-`perf stat` user instructions/cycles work. Hardware and software stack sampling
-were denied, so no flamegraph or sampled hotspot percentages are claimed.
-Instruction counts depend on compiler, architecture and allocator. Deterministic
-work counters, not timing thresholds, decide regressions.
+This run collected user instructions and cycles through `perf stat`. The
+host denied hardware and software stack sampling. See the later
+[privileged observer run](cpu-hotpaths.md#recorded-wayland-and-bpf-profiling)
+for sampled stacks.
 
 Before/after captures and 29 timestamp reports per run retain 588 vertex-shader
 invocations and 372 clipped triangles for the native model view. Fragment work
 and timings vary with animation phase and machine load. The baseline opaque-pass
 GPU median is 0.007674 ms; its 0.039105 ms clustering median is higher. These tiny
 scene timings identify where this scene spends work, not a full-campaign bottleneck
-or an optimization speedup. CPU stack-sampling denial remains a profiling limit.
+or an optimization speedup.
 
 ## Verification
 

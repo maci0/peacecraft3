@@ -65,7 +65,8 @@ The command-card Move target path and friendly-unit right-click reach this nativ
 consumer. Hostile right-click retains Attack, and ground right-click retains Move.
 These Move/Attack identifiers and journal names now come from admitted rules and
 the inverse registry, rather than copied order names. Only accepted orders enter
-the player journal. Item pickup keeps its existing separate consumer.
+the player journal. Item pickup remains a separate action. See
+[smart orders](input-smart-order.md) for the wider right-click routing.
 
 ## Limits and verification scope
 

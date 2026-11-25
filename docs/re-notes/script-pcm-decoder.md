@@ -31,9 +31,8 @@ requires the caller to retain the original provenance beside the backend cache.
 This is a sample-decoding compatibility view. Opaque ancillary file-offset
 semantics are not interpreted or rewritten. It does not replace the original
 resource for other consumers, establish effective gain/pitch/loop/fade/channel/
-spatial settings, or prove audible/native fidelity. Browser format support,
-gesture handling, session cancellation and delivery acknowledgement remain
-separate integration boundaries.
+spatial settings, or prove audible/native fidelity. The separate [browser audio checks](script-audio-playback.md) cover output
+integration. This decoder checkpoint establishes sample handling.
 
 Synthetic core tests require no Bevy and check PCM/resource/receipt/chunk/padding
 preservation, geometry, empty data, malformed input, profile refusal and platform

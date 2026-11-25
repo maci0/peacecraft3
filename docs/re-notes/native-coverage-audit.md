@@ -61,13 +61,12 @@ and `UnitWakeUp`.
 Each one dispatches a real behaviour — `ShowUnit` and `IsUnitHidden` through
 `unit_visibility_host`, `ReviveHero` and `ReviveHeroLoc` through
 `unit_revive_host`, the sleep natives through `unit_sleep_host`, and so on —
-so the list now names all 257.
+so the supported list at the November 2, 2026 checkpoint named 257 entries.
 
 ## The gate
 
 `the_audit_lists_every_native_the_host_dispatches` reads the crate's source
-and fails when a dispatch name is absent from the list, so the list cannot
-silently fall behind again. The check reads the shapes it can see: a name that
+and fails when a dispatch name it recognizes is absent from the list. A name that
 only appears in a module's contract table, in a helper's name list
 (`is_music_name`) or through the `RealOps` trait is not seen by it, so the
 list can still fall behind those shapes. The check also asserts that it read

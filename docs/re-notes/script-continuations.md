@@ -20,9 +20,9 @@ initialization errors. It does not create a resumable startup thread.
 The borrowed and owned localized Hosts forward suspension. The selected-map
 neutral wrapper forwards only natives it does not own. The chapter trace wrapper
 also forwards the hook; its synchronous chapter driver still refuses suspension.
-The application startup factory, script session and current ObjectHost do not
-admit a suspending timer native or supply an automatic game clock. Without
-explicit timer-runtime inputs, `TimerStart` remains the qualified Human01 refusal. No duration, expiry order, native thread policy or
+At this checkpoint, the startup factory and session lacked explicit
+timer-runtime inputs. Human01 stopped at `TimerStart`. The later
+positive-timeout consumer below covers a bounded synchronous path. No duration, expiry order, native thread policy or
 `Sleep` behavior is supplied by this VM change.
 
 Each activation retains one body snapshot. Returning or resuming uses that

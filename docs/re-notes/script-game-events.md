@@ -22,6 +22,6 @@ that a UI menu has been opened.
 Synthetic regressions cover distinct subscriptions, matching, enable/destruction,
 wrong signatures/families, arena and pending-event bounds, and execution of an
 authored action in the existing VM. Registration never manufactures a game event.
-Engine/UI producers for the full game-event domain remain separate acceptance
-work; the current command card does not yet implement the hero-skill/build
-submenu interactions that produce those two tutorial events.
+Command-card input now emits `EVENT_GAME_SHOW_SKILL` for the hero-skill
+menu. The build submenu producer and the full game-event domain remain
+separate qualification work.

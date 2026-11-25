@@ -55,12 +55,10 @@ that same state; it is not a second player store or a substituted public native.
 The production startup already admits `CampaignModePolicy`, so extending that
 source-bound policy needs no separate startup option or policy module.
 
-This implements the setter's state transition. It does not implement guard-post
-population, training, resource costs or replacement waves. `FillGuardPosts` and
-other unsupported production/controller calls continue to refuse explicitly.
-The [guard-post follow-up](campaign-ai-guard-posts.md) now records matched
-original-client replacement and release controls. The production consumer is
-still unfinished; these observations do not turn the setter into unit creation.
+The setter stores the replacement limit. The later `FillGuardPosts` consumer
+uses that limit to decide which guard posts can request units through the
+production queue. See [guard-post replacement behavior](campaign-ai-guard-posts.md)
+for the implementation scope and replay evidence.
 
 ## Validation and frontier
 
@@ -75,9 +73,10 @@ before and after sleep alongside unchanged combat and other context state.
 Selected Human01 activation and the explicit-victory-stimulus Continue gate pass,
 as do strict affected native all-target and WASM library/binary Clippy checks.
 These are headless execution checks; they do not prove mission completion.
-The unchanged Human02 opening-minute test still fails, now at `GetUnitCount` at
-7.312500 seconds after passing `SetReplacementCount`. Its assertion remains
-unchanged, and its exit 101 is retained. Exact commands/results are under
+In this validation run, the unchanged Human02 opening-minute test reached
+`GetUnitCount` at 7.312500 seconds after passing `SetReplacementCount`, then
+failed with exit 101. See the [tracker](../../TRACKER.md) for later checkpoints.
+Exact commands and results are under
 `.scratch/replacement-count/gates-final/`; earlier evidence is preserved separately.
 No new original-client or rendered app run was made for this setter.
 The default desktop build and formatting also pass. The ignored build receipt

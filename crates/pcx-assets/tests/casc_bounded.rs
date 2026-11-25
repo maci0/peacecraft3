@@ -167,6 +167,7 @@ impl Drop for Fixture {
 impl Fixture {
     pub fn new(payload: &[u8], framed: bool, tag: u8, declared: u32, wrong_ckey: bool) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
+        // PCX_CASC_TEST_DIR overrides the parent of each synthetic fixture directory.
         let root = std::env::var_os("PCX_CASC_TEST_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)

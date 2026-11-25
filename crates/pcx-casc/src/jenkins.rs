@@ -1,5 +1,5 @@
-// lookup3's two-output little-endian hash. Algorithm constants are format
-// invariants; index dimensions and both rolling seeds come from the records.
+// lookup3's two-output little-endian hash. Index checks start with zero seeds
+// and feed each table entry's two outputs into the next entry.
 pub(crate) fn hash(data: &[u8], primary: u32, secondary: u32) -> (u32, u32) {
     let seed = 0xdead_beefu32
         .wrapping_add(data.len() as u32)

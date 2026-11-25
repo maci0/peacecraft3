@@ -1,7 +1,8 @@
 # The expansion menu's panel and logo
 
-The expansion main menu is missing two pieces the original shows: the top-left
-**Frozen Throne logo**, and the **chain-hung riveted panel** the buttons sit on.
+The initial expansion menu render lacked the original’s top-left
+Frozen Throne logo and chain-hung button panel. The integration below
+records how both were added.
 A reference still from the original menu is at
 `.scratch/video-reference/classic-1285-menu.jpg`.
 
@@ -104,9 +105,8 @@ That divergence is **recorded, not silently joined**: the entrance parses the
 `KMTA` block itself with the measured layout, and the crate change is left to a
 separate decision because it also moves every bone animation.
 
-Past `Birth` the entrance **holds** at the `Stand` value. Following the raw
-track would drop it back to 0 at frame 1333, in the `Birth Alternate` segment,
-which the entrance does not play.
+The logo holds its final `Birth` value after the entrance. Sampling the
+unbounded track would reset it at frame 1333 in `Birth Alternate`.
 
 ### Selection and placement evidence
 
@@ -120,7 +120,10 @@ The module is declared in `main.rs`. `launch_gui` loads the selected installatio
 
 The 500 ms entrance samples the parsed cubic Bézier and preserves fractional frame time. It resets when the menu is created and holds the final Birth value. Asset selection is supported by the shipped `MainMenuLogo_V1` skin mapping and the native glue's `MainMenuLogo_V%d` lookup. Placement is supported by the original default projection; its live model scale and global glue bias were not sampled. See [original runtime evidence](glue-coordinate-runtime.md).
 
-The background fills the display separately from the authored UI viewport, as the original background initialization explicitly sets the full-width flag. Widescreen controls follow the centered authored branch; square/5:4 displays retain the original direct conversion. Portrait browser containment is a compatibility policy, not an observed original-client mode.
+This integration interpreted the background’s full-width flag as filling
+the display independently of the UI viewport. Later
+[camera measurements](menu-camera-projection.md) qualified the centered
+viewport for wide clients. Portrait browser containment is application policy.
 
 The hanging panel is the authored `SpriteLayers` models; see [panel origin](menu-panel-origin.md). Its `MainMenu Birth` entrance, geoset alpha and sound events are rendered from shipped data; see [sprite rendering](menu-sprite-rendering.md). The visual-fidelity gate remains open.
 

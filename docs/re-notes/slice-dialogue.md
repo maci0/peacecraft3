@@ -10,6 +10,7 @@ A refused call leaves the previous flag. The call does not hide an active
 scene duration, and voiceover duration. This step does not replace those fields
 and does not claim chapter intro parity.
 
-Transmission voice still starts through the sound host (`StartSound` from
-`PlaySoundBJ`). This lane does not own that host. An existing sound record stays
-there. The subtitle flag does not start, stop, or require playback.
+Transmission voice starts through the sound host (`StartSound` from
+`PlaySoundBJ`). The subtitle flag does not start, stop or require playback.
+See [subtitle settings](subtitles-option-consumer.md) and
+[dialogue audio](campaign-dialogue-audio.md) for later consumers.

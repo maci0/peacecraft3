@@ -1,10 +1,9 @@
 # pcx-assets
 
-A source-resolution library for PLAN §3.2/§3.6/§3.9. It implements
-the filesystem override layer, explicit archive priority, per-path provenance
-and generated `override/index.json`. Concrete adapters use the checked MPQ and
-CASC readers. It does not select installs or native priorities, stage copies,
-apply gameplay fixes, or certify original behavior.
+Resolves assets from read-only MPQ and CASC sources and a local override
+directory. The caller selects the sources and their priorities. The resolver
+records each winner’s provenance and can write it to `override/index.json`.
+See the [asset strategy](../../PLAN.md#32-asset-strategy--mount-dont-convert).
 
 ## Modes
 
@@ -46,15 +45,14 @@ and chooses the relevant art/gameplay sources; this policy is not native evidenc
 
 `ContentSource` has four methods:
 
-* `info()` supplies layer ID, MPQ/CASC kind, source identity and detected version
-  or explicit unknown version. These identify the input, not the requested mode.
+* `info()` supplies layer ID, MPQ/CASC kind, source identity and a source-supplied
+  version label or `None`. The requested mode is separate.
 * `paths()` supplies the mounted logical inventory, which can be an explicitly
   selected subset. Unavailable inventories must fail rather than claim an empty
   archive or full coverage.
 * `read(member)` supplies decoded bytes, source-declared length and exact source
   locator. Adapters must validate sizes/offsets before allocating or reading.
   Missing, malformed, ambiguous and truncated input can return `SourceError`.
-
 * `read_bounded(member, decoded_byte_limit)` is an additive opt-in contract. It
   refuses known oversized content before payload allocation/read/decode. Its
   default returns `SourceError::BudgetUnsupported` without calling `read`. An
@@ -68,20 +66,26 @@ Errors retain the affected layer, path/location and underlying source failure.
 
 The override inventory is a mount-time snapshot. Existing files are read on
 demand, with sizes revalidated against that snapshot; remount after adding,
-removing or resizing files. No decoded-asset cache is maintained. Symlinks and
+removing or resizing files. Overrides bypass the preload cache. Symlinks and
 special files below the root are refused, and ancestors are checked again before
 reads. This is ordinary local filesystem access, not a transactional snapshot
 or isolation from concurrent hostile filesystem changes.
 
 ## Index and usage
 
+`Resolver::preload_bounded` can retain decoded archive winners. The retained
+cache is limited to 4,096 assets and 128 MiB, with a typed error when a ceiling
+would be exceeded. Later bounded reads still enforce their caller’s limit.
+Use `preload_cache_usage` to inspect the cache and `release_preloaded` to clear it.
+
 `Resolver::resolve` returns `ResolvedAsset { path, bytes, provenance }`.
 Provenance contains the winning `SourceInfo`, caller archive priority (null for
-override), exact locator and byte length. `layer_info` refuses unknown IDs;
-`paths` iterates the sorted union of all inventories.
+override), exact locator and byte length. `source_for` reports the winning
+source without decoding it. `layer_info` refuses unknown IDs, and `paths` iterates
+the sorted union of all inventories.
 
 `Resolver::resolve_bounded(path, decoded_byte_limit)` uses the same winning
-source and receipts as `resolve`. The override reader revalidates mounted and
+source and provenance as `resolve`. The override reader revalidates mounted and
 current file sizes and refuses an oversized file before its payload reserve or
 read. It retains the existing one-byte growth probe, so this is a decoded-content
 ceiling, not an exact allocator or process-memory ceiling. Mount inventory,
@@ -93,7 +97,8 @@ There is no fallback to another layer or to unbounded `read`. Existing `resolve`
 
 `Resolver::index` resolves every inventoried path and returns `AssetIndex`.
 `AssetIndex::to_json` encodes a deterministic schema-version-one JSON object with
-the complete mode string and a sorted path-to-winning-provenance map. It contains
+the complete mode string and a sorted path-to-winning-provenance map.
+`AssetIndex::from_json` reads and validates that schema. The index contains
 no asset payloads. Unknown versions remain null, not guessed build identities.
 
 `Resolver::write_index` generates the override root's `index.json`. It validates
@@ -144,7 +149,8 @@ errors; codec tables are supplied to the archive before mounting when required.
 
 `MpqSource::new_bounded(archive, id, version, members, ExtractionBudget,
 optional_huffman_table)` supplies explicit packed/decoded policy and owns the
-optional caller-provided Huffman table. Its `read_bounded` clamps the decoded
+optional caller-provided Huffman table. Without a caller table the adapter
+uses the table already imported into the archive. Its `read_bounded` clamps the decoded
 ceiling to the caller read limit and uses `MpqArchive::extract_bounded` before any
 packed payload read/clone or decode. Extraction errors remain typed under
 `SourceError::MpqExtraction` with archive and exact member context. The legacy
@@ -161,8 +167,8 @@ malformed metadata, budget/layout failures and decoder errors retain their typed
 causes and caller member/source context. File-backed reads recheck backing length;
 this is not a transactional filesystem snapshot.
 
-Only the supplied Huffman argument is used: the bounded API neither searches for
-executables nor falls back to a previously installed archive table. `None` refuses
+A direct `MpqArchive::extract_bounded` call uses only the table passed to it.
+It does not search executables or consult the archive table on its own. `None` refuses
 Huffman through the existing decoder. Importing/parsing that optional table and
 archive mount/table allocation are outside this per-member policy. Packed and
 decoded limits do not bound simultaneous decoder buffers or total process RSS.
@@ -193,8 +199,7 @@ native file-backed checks; WASM compile checks do not establish browser CASC I/O
 `identity(asset)` exposes the complete configuration/encoding/manifest chain.
 The returned locator also records keys, manifest links/spans and archive offset.
 
-Both adapters expose only their declared logical inventory. An inventoried winner
-that fails decoding stops resolution; a lower-priority member is not substituted.
+Both adapters expose only their declared logical inventory.
 The four adapter regressions cover actual synthetic MPQ table decoding, exact
 locator/size retention, duplicate/missing mappings, decoded budgets, locale
 ambiguity and refusal to fall through an unsupported winning member.
@@ -221,5 +226,6 @@ Consumers can add under `[dependencies]`:
 pcx-assets.workspace = true
 ```
 
-The concrete adapters are available to consumers. Application asset-mode wiring
-and native archive/module/locale precedence remain unresolved.
+The native Legacy campaign path uses the resolver in vanilla asset and
+behaviour modes. Broader HD/Reforged application wiring and native
+archive/module/locale precedence remain open.

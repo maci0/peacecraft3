@@ -8,23 +8,26 @@
 
 # PeaceCraft III
 
-A faithful reimplementation of **Warcraft III: The Frozen Throne 1.29b** in Rust on the
-Bevy engine, reading the **original game assets directly from the shipped MPQ archives**.
+PeaceCraft III targets **Warcraft III: The Frozen Throne 1.29b**
+(executable version `1.29.2.9231`). It uses Rust and Bevy and reads original
+assets from the user's MPQ archives.
 
-- **[PLAN.md](PLAN.md)** — technical plan, milestones, risks, definition of faithful
-- **[TRACKER.md](TRACKER.md)** — live task tracker, open unknowns, fidelity log
-- **[docs/re-notes/](docs/re-notes/)** — reverse-engineering notes, cited by REA evidence id
-- **[tools/rea.sh](tools/rea.sh)** — REA driver with per-target analysis snapshots
+- **[PLAN.md](PLAN.md)** for the technical plan, milestones, risks, definition of faithful
+- **[TRACKER.md](TRACKER.md)** for the live task tracker, open unknowns, fidelity log
+- **[docs/re-notes/](docs/re-notes/)** for reverse-engineering notes, cited by REA evidence id
+- **[tools/rea.sh](tools/rea.sh)** runs Reverse Engineer Anything (REA) with
+  per-target snapshots
 
-No Blizzard assets are committed. The game reads them from your own install at runtime
-(`PEACECRAFT3_INSTALL`, default `wc3/game/app`).
+No Blizzard assets are committed. The game reads them from your own install at runtime.
+Set `PEACECRAFT3_INSTALL` to choose the installation. If it is unset or
+unrecognized, the app tries `PEACECRAFT3_LEGACY_DIR`, then host-specific
+paths. The final fallback is the relative path `wc3/game/app`.
 
 ## Screenshots
 
 Captured from PeaceCraft III 0.19.0's Bevy renderer on 18 November 2026 using
-locally supplied Legacy 1.29.2.9231 game assets. Rendering and gameplay remain
-in progress. The minimap now uses source-derived live sight, occlusion heights, corrected JPEG precision and native outline coverage;
-[full-screen comparison results](docs/screenshots/README.md) track remaining differences.
+locally supplied Legacy 1.29.2.9231 game assets. These captures were not
+compared with the original client.
 
 **Main menu**
 
@@ -36,7 +39,7 @@ in progress. The minimap now uses source-derived live sight, occlusion heights, 
 
 **Campaign world and command card**
 
-![PeaceCraft III rendering the Prologue02 campaign world and command card](docs/screenshots/campaign.png)
+![Prologue02 campaign world and command card](docs/screenshots/campaign.png)
 
 **Hero skill menu**
 
@@ -46,53 +49,63 @@ in progress. The minimap now uses source-derived live sight, occlusion heights, 
 
 ![PeaceCraft III populated quest dialog](docs/screenshots/quest-log.png)
 
-[Capture details and known rendering limits](docs/screenshots/README.md).
+[Capture details and rendering limits](docs/screenshots/README.md).
 
 ## Status
 
 Current release: [0.19.0](docs/releases/0.19.0.md).
 
-Previous local scripted runs reached authored Victory in Human01 and Human02,
-and a prior startup sweep covered all 97 shipped campaign, credits and sub-maps
-against Legacy 1.29.2.9231. The 0.19.0 release validates bounded startup and diagnostic replays.
+The 0.6.0 runs reached authored Victory in Human01 and Human02. See the
+[tracker](TRACKER.md) for those run scopes. The
+[0.16.0 startup sweep](docs/releases/0.16.0.md) separately covered all 97 shipped
+campaign, credits and sub-maps against Legacy 1.29.2.9231. The 0.19.0 release
+validates bounded startup and diagnostic replays.
 Play beyond startup, continuation, full Save/Load and rendering fidelity remain
-in progress. See [TRACKER.md](TRACKER.md) for current validation and limits.
-
-```
-wc3/game/app/game.dll    71 810 procedures / 17 207 strings   (REA + Ghidra 12.1.3)
-wc3/game/app/Storm.dll    1 341 procedures /   736 strings
-```
+in progress.
 
 ## Quick start
 
+Set the path to your own Legacy 1.29.2.9231 installation, then run the app:
+
 ```sh
 export PEACECRAFT3_INSTALL="/path/to/Warcraft III (Legacy)"
-
-cargo test -p pcx-mpq          # header assertions against the four real archives
-tools/rea.sh doctor            # REA + Ghidra readiness
-tools/rea.sh search  wc3/game/app/Storm.dll "SFile"
-cargo run -p peacecraft3
+cargo run --locked -p peacecraft3
 ```
 
-PeaceCraft settings open first. Use **Main menu** to enter the original game
-menu after the skippable original startup cinematic. The menu uses shipped
-font/art data and traced original layout rules; full gameplay and exact
-visual fidelity are still in progress. Browser fullscreen is available.
-The target is the installed classic 1.29b release. Its executable reports
-`1.29.2.9231`; the earlier `9232` label was not verified. The extracted
-compatibility tree contains a `1.26.0.6401` Game.dll, so its old “1.28c” label
-is not reliable evidence of every archive’s version. See the
-[original-runtime evidence](docs/re-notes/glue-coordinate-runtime.md).
+The PeaceCraft settings screen opens first. Choose **Main menu** to play the
+skippable startup cinematic and enter the game menu. The cinematic uses
+`ffmpeg` on `PATH`. If playback cannot start, the app opens the game menu directly.
 
-[Windows and macOS builds](docs/build-desktop.md) cover Intel/x64 and ARM64.
-The [native build workflow](https://github.com/maci0/peacecraft3/actions/workflows/desktop-builds.yml)
-compiles, tests and packages each target separately.
-The [browser demo](https://maci0.github.io/peacecraft3-demo/) contains no original
-game assets. Import your own local ISO; base-only content does not enable TFT.
-See [supported imports and packaging](docs/pages-demo.md). This is a partial menu
-demo with a bounded stored-base installer profile; other installer profiles and
-full gameplay remain unsupported.
+## Builds and browser demo
 
-The optional `pcx-blp` `wasm_smoke` example requires `--features local-fixtures`
-and locally extracted `SelectionCircleLarge.blp`, `Footman.mdx` and `misc.tga`
-under `crates/pcx-blp/tests/fixtures/`. These original assets stay untracked.
+- The [Windows and macOS build guide](docs/build-desktop.md) explains the native build
+  matrix, packaging and target validation.
+- The [browser demo](https://maci0.github.io/peacecraft3-demo/) offers partial
+  menus and fullscreen. Import your own local assets. See the
+  [import and packaging guide](docs/pages-demo.md) for support limits.
+
+## Contributor notes
+
+The Legacy target and the extracted compatibility tree are separate inputs.
+The compatibility tree contains a `1.26.0.6401` Game.dll and serves parser
+cross-checks. These versions identify the executables. See the
+[artifact evidence](docs/re-notes/glue-coordinate-runtime.md#exact-artifacts)
+for archive and installer scope.
+
+Run `cargo test -p pcx-mpq` for archive tests. Local-input checks use these
+paths independently of `PEACECRAFT3_INSTALL`.
+
+- Header and table checks skip if `wc3/game/app` is absent. A present tree
+  must contain all four archives.
+- The decryption check skips if `wc3/game/app/war3.mpq` is absent.
+- The Legacy identity check skips if `PEACECRAFT3_LEGACY_DIR` is unset or
+  `War3.mpq` is missing or isn't a regular file.
+- The file-backed and in-memory archive comparison skips if
+  `PEACECRAFT3_LEGACY_DIR` is unset or doesn't name a directory. It fails if
+  `War3.mpq` can't be read from that directory.
+
+Run `tools/rea.sh doctor` to check the local analysis tools. The optional
+`pcx-blp` `wasm_smoke` example uses `--features local-fixtures` and embeds
+`SelectionCircleLarge.blp`, `Footman.mdx` and `misc.tga` from
+`crates/pcx-blp/tests/fixtures/`.
+Keep the original inputs and compiled example local.

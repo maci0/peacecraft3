@@ -74,9 +74,8 @@ pass: repeated startup/ordered-versus-control movement and profile identity/isol
 Source-field census and selected executable/script identities remain
 in ignored local receipts; original asset bytes are not committed.
 
-The unchanged Human03 ROC startup with seed one and an explicit fresh profile
-passes `SetupCreeps` and later refuses `IssuePointOrderLoc` through
-`Blizzard.j:7800`. Its setup contains a `patrol` location order at
-`Human03.j:1997`; patrol is not implemented by the current activity host.
-The startup gate exits 101. It is neither campaign acceptance nor a native sleep
+The Human03 RoC run used seed one and a fresh profile. It passed
+`SetupCreeps` and exited 101 at the then-unsupported location patrol order
+(`IssuePointOrderLoc` through `Blizzard.j:7800`, `Human03.j:1997`). The
+[patrol follow-up](unit-patrol.md) covers the later implementation. It is neither campaign acceptance nor a native sleep
 comparison. Permanent/spell sleep, presentation and native wake rules remain open.

@@ -1,6 +1,11 @@
 # Dependency order
 
-Prerequisites come first. Ties use implementation priority, then tracker line, then id. `implementation_order` is that priority by itself and is not a topological order.
+This is the dependency order for the `c2ce1d6` snapshot. See the
+[full requirements](requirements.json) for the complete gate text and the
+[live tracker](../../TRACKER.md) for current status.
+
+Prerequisites come first. Ties use implementation priority, tracker line and
+ID, in that order. The `implementation_order` field records priority alone.
 
 | Topo | Id | Priority | Depends on | Gate |
 | ---: | --- | ---: | --- | --- |

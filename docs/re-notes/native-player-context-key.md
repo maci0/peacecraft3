@@ -4,10 +4,10 @@ The existing-record lookup has a conditional byte-equality guard. When the
 comparison returns normally, both supplied pointers and all accessed regions
 are readable, contents remain stable throughout the read, and both strings
 terminate before the supplied bound, its zero result means exact byte content
-and length equality through NUL. This is not evidence of case/slash folding,
-lookup completeness, actual selected-map identity or a valid live context.
-`GetPlayerNeutralPassive` remains unsupported; no player result, metadata word
-or threshold is introduced as an implementation constant.
+and length equality through the matching first NUL. This guard does not
+establish case or slash folding, lookup completeness, selected-map identity,
+or a valid live context. The later [neutral-player admission](native-neutral-players.md)
+uses a separate rule. It does not establish this lookup’s live cache identity.
 
 ## Target and evidence boundary
 

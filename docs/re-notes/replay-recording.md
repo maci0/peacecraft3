@@ -126,12 +126,11 @@ Runbook (not run; needs a root GUI slot):
 - `pcx_net::replay::play(bytes, movement: Option<Arc<AdmittedMovement>>) -> Result<Replay, ReplayError>`.
   Verify a saved file with it before reporting success.
 
-## Evidence still needed
+## Evidence gaps at the first recording checkpoint
 
-- A recorded `LastReplay.w3g` from the selected executable, and its layout
-  checked against that file.
-- The production command and tick stream, with seed and initial-world capture,
-  so the Save control records real campaign play.
+The first recorder still needed an original replay sample and a production
+command stream with its seed and initial world snapshot. The later sections
+record sample qualification and the command log separately.
 
 ## Production command log
 

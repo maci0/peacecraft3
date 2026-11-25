@@ -1,14 +1,14 @@
 # Menu panel origin: the skin table and the sprite-layer panel
 
-Read-only record of two bounded lookups that between them settle where the
-expansion menu's logo and hanging panel come from. Nothing was rendered to write
-this; every path, size and hash below is from the shipped archives.
+The shipped skin table identifies the expansion logo and hanging panel
+models. This static check records their archive provenance, separate from
+rendering and live selector validation.
 
 Sources (all `War3x.mpq` unless noted; extracted with `target/release/mpqxtract`,
 no rebuild):
 
-- `UI\war3skins.txt` — the **art-key table**, 44,153 bytes, in `War3.mpq`,
-  `War3x.mpq` and `War3xLocal.mpq`;
+- `UI\war3skins.txt`, the art-key table, 44,153 bytes in `War3.mpq` and
+  `War3x.mpq`, and 44,353 bytes in `War3xLocal.mpq`;
 - `UI\FrameDef\Glue\MainMenu.fdf` — the expansion menu's frame tree;
 - `UI\Glues\SpriteLayers\` — the panel models and their textures.
 
@@ -34,9 +34,8 @@ consequences:
   runtime is told to use for the expansion points at that file, the table also carries a separate Beta model entry. The `%d` is the edition index — `V0` is Reign of
   Chaos, `V1` the expansion — which is why one FDF serves both.
 - The FDF's commented `BackgroundArt` line is **literally `MainMenuLogo_V0`'s
-  value**: `UI\Glues\MainMenu\WarCraftIIILogo\WarCraftIIILogo.mdl`. The line was
-  not deleted because it is correct for RoC; the edition-specific override is the
-  skin key, not the FDF.
+  value**: `UI\Glues\MainMenu\WarCraftIIILogo\WarCraftIIILogo.mdl`. The edition-specific lookup is in the skin table. The reason the old
+  line was left commented is unverified.
 
 One detail the loader must respect: the skin table names **`.mdl`**, but the
 archives ship **`.mdx`** (`WarCraftIIILogo_exp.mdx` exists; `…_exp.mdl` does
@@ -190,7 +189,7 @@ guess.
 
 ## 5. Provenance
 
-| file | bytes | sha256 (first 24) |
+| file | bytes | SHA-256 prefix (16 hex characters) |
 | --- | --- | --- |
 | `War3\UI\war3skins.txt` | 44,153 | `7b685b0d2c1129d6…` |
 | `War3x\UI\war3skins.txt` | 44,153 | `7b685b0d2c1129d6…` (identical to War3) |
@@ -217,9 +216,10 @@ identical (different digests).
 - Subsequent probes decoded the material map and retained `GEOA` geoset IDs:
   51 records address a subset of 57 geosets, so positional pairing is incorrect.
   The hierarchy is complete: 65 bones plus four event objects, no helpers, and
-  no bone parent outside the bone set. See `menu-sprite-rendering.md` for the
-  reproducible probe and its interpolation limits. Browser panel rendering and
-  native quaternion interpolation remain unverified.
+  no bone parent outside the bone set. See [sprite rendering](menu-sprite-rendering.md) for the probe and its
+  interpolation limits. [Later browser runs](menu-panel-navigation.md)
+  checked local-repack panel rendering. Native quaternion interpolation
+  remains unverified.
 - `TopLeftPanel-Expansion.mdx` (360,016 bytes) is the left-hand sprite layer;
   `menu_sprites.rs` loads it beside the right one.
 - **Panel selection: answered** — `GlueSpriteLayerTopRight_V1` (§2). **Scene

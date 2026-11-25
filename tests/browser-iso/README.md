@@ -1,16 +1,23 @@
 # Local browser import verification
 
-The frozen integration source/API is in `web/loader.js`, `web/index.html`,
-`web/menu-audio.js`, `web/iso.js`, `web/iso/import.js`, `web/iso/audio.js`, and
-`crates/peacecraft3/src/browser.rs`. Verification uses matching generated WASM
-and renderer cache invalidation. No manifest, lockfile, original assets or generated original
-content are part of these fixtures.
+These checks exercise the [browser import code](../../web/iso/import.js),
+[loader](../../web/loader.js) and [Rust bindings](../../crates/peacecraft3/src/browser.rs).
+Browser checks require matching generated WASM, offscreen display and null
+audio. See [test isolation](../../AGENTS.md#test-isolation) and the
+[build guide](../../docs/pages-demo.md#build-and-package).
 
-Run the synthetic parser/import/metadata tests:
+Stage the FreeArc JavaScript wrapper before running the synthetic
+parser, import and metadata tests. The worker imports it from the package
+path even when a test uses no codec WASM.
 
 ```sh
+mkdir -p web/pkg/freearc
+cp tools/freearc-codec/js/freearc-codec.mjs web/pkg/freearc/
 node --test tests/browser-iso/*.test.mjs
 ```
+
+The codec-artifact and original-installer tests skip unless their explicit
+inputs are configured.
 
 `audio-binding.test.mjs` checks authored empty-directory member paths and
 replacement/reset/mute/intro behavior through the actual audio modules with
@@ -73,11 +80,9 @@ identification or a completed gameplay/campaign entitlement layer.
 This proves the executable import/storage/extraction/audio pipeline. It does
 not prove the file-input UI or rendered menu fidelity: the synthetic font and
 texture bytes are placeholders, and the model is a minimal authored fixture.
-Actual renderer/F6/resolution checks are separate. Original ISO
-filesystem/installer limitations remain explicit; no executable runs and no
-remote extraction fallback exists. Edition/build/priority are never inferred
-from ISO/archive filenames. Original campaigns remain blocked on real game
-Host/native execution, including exact GetPlayerNeutralPassive behavior.
+Actual renderer/F6/resolution checks are separate. The [ISO discovery guide](../../docs/browser-iso-import.md) describes filesystem
+and installer limits. The checks cover local menu import. Campaign execution
+has separate acceptance gates.
 
 ## Public integration APIs
 
@@ -110,7 +115,8 @@ archives locally and caches extracted bytes; it has no HTTP fallback.
 ## Running-app and keyboard focus checks
 
 `app-import-runtime.mjs --run` uses a locally repacked fixture with original
-members and explicit source choices. It checks file-input import, fresh authored
+members. Set `PCX_APP_IMPORT_WASM_READY=1` after building the matching WASM
+and `PCX_APP_IMPORT_INSTALL` to the selected Legacy installation. It checks file-input import, fresh authored
 labels/scene/font aliases, click audio, resize, conflicting-member rollback and
 six captured FPS overlay visibility states. This is not retail installer ISO acceptance
 or proof of original archive precedence. Capture review remains required;

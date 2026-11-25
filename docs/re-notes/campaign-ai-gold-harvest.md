@@ -129,10 +129,9 @@ Combined verification passes 1,724 core tests, 55 app-library and 638 app-binary
 tests, the published two-program session, selected-image policy decoding,
 Human01 activation and victory Continue, strict native/WASM Clippy, formatting
 and the default desktop build.
-The unchanged Human02 opening-minute test now passes `HarvestGold` and refuses
-`HarvestWood` at 8.312500 seconds. Its complete failure is retained in
-`.scratch/harvest-gold/consumer-final-gates-r3/frontier.log`; no chapter-completion
-claim follows from this advance.
+At that checkpoint, the Human02 opening-minute test passed `HarvestGold`
+and reached the then-unsupported `HarvestWood` at 8.312500 seconds. See
+[campaign wood harvesting](campaign-ai-wood-harvest.md) for the later implementation.
 
 ## Hidden accepted mine and depot continuation (2026-10-26)
 

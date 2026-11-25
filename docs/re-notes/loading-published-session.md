@@ -55,6 +55,5 @@ screen so menu clicks register again.
 - **open.** Whether `take_game_exit` should cancel the screen directly:
   alternative placement, same observable effect as the `AwaitKey`-vanish
   check. Not decided here.
-- **open.** F10/menu-key press-clear ordering vs `advance_loading` is a
-  related in-flight fix (press consumed while the screen is up, before/after
-  the screen observes it). Described as related, not decided here.
+- This checkpoint left F10/menu-key ordering unresolved. It did not
+  establish whether input clears before or after `advance_loading` observes it.

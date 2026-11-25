@@ -31,17 +31,15 @@ VER=1014
 4=connect-eur.classic.blizzard.com
 ```
 
-Same four gateways in the same order, same zone numbers, but the realms were
-renamed from `*.battle.net` to `*.classic.blizzard.com` and the server list
-version bumped `1001 -> 1014`. The gateway count and zone set are the stable
-parts; the hostnames and version are not, which is why the test in
-`crates/pcx-net/src/bnet.rs` asserts the zones and refuses to pin the hostnames.
+Both files list four gateways in the same order and with the same zones.
+Hostnames changed from `*.battle.net` to `*.classic.blizzard.com`, and the list
+version rose from `1001` to `1014`. The test in `crates/pcx-net/src/bnet.rs`
+asserts the observed zones without fixing the hostnames.
 
-## What is not here
+## Wire protocol scope
 
-This note measures gateway data, not the wire protocol. The previous claim
-that no suitable server or observable classic protocol exists was incorrect.
-PvPGN and GHost++ publish BNCS and W3GS implementations. Exact 1.29b support,
+This note measures gateway data. PvPGN and GHost++ provide independent BNCS
+and W3GS implementations. Exact 1.29b support,
 including authentication differences and any required client modifications,
 still needs a version-specific test.
 
@@ -55,5 +53,5 @@ for primary sources, local reference testing and the open crossplay gates.
 - CRLF-terminated, as shipped.
 - Gateway display order comes from the numbered `[Server Gateways]` keys, not
   from file order within the section.
-- A gateway with no section of its own is kept with zone 0 and a display name
+- The project parser keeps a gateway without its own section with zone 0 and a display name
   equal to its hostname, rather than dropped.

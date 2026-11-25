@@ -7,9 +7,10 @@ WTG decoder; there is no duplicated WTG reader or copied stock-function mapping.
 
 This is a binding input. `[TriggerParams]`, `[TriggerTypes]` and `[TriggerTypeDefaults]` are
 exposed as `Kind::Param`, `Kind::Type` and `Kind::TypeDefault`, with `preset_code`,
-`jass_type` and `type_default` lookups. The WTG-to-JASS translator is `pcx_trig::lower`
-(see `wtg-lowering.md`). It does not merge WCT code, run the output or assert quest
-success. Those behaviors still require native evidence.
+`jass_type` and `type_default` lookups. See [WTG-to-JASS lowering](wtg-lowering.md)
+for generated GUI code and [ordered WCT compilation](wct-compilation.md) for
+authored custom text. These steps prepare scripts for execution. Quest outcomes
+require runtime validation.
 
 ## Shipped-byte observation
 

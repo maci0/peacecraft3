@@ -49,18 +49,19 @@ These are recreations where the note says so. The unit tests named below passed 
 - Lumber re-seek with an empty waypoint list stops the worker and drops the task unless it is carrying. The initial unreachable harvest order still refuses. `an_unreachable_tree_refusal_keeps_an_existing_move_route`.
 - Gold return is not limited by `Ahar.Area`. A missing depot still refuses. `gold_mine_exit_without_a_usable_depot_preserves_hidden_worker_and_mine`.
 
-## How to run the next Human06 attempt
+## Local reproduction recipe
 
-Recopy the Human05 profile first. A failed run can change it.
+This recipe uses the private runner from the 1 November checkpoint. Copy the
+retained Human05 profile into a new private directory for each attempt. A run
+may change the copy.
 
 ```bash
 src=.scratch/human05/profile
-dst=.scratch/human06/profile
-rm -rf "$dst" && mkdir -p "$dst"
-cp -a "$src"/. "$dst"/
-chmod 700 "$dst"
+dst=$(mktemp -d .scratch/human06-profile.XXXXXXXX) || exit 1
+cp -a "$src"/. "$dst"/ || exit 1
+chmod 700 "$dst" || exit 1
 PCX_HUMAN06_DECISIONS=4800 bash .scratch/human-chain/run.sh Human06 human06-next \
-  "$(pwd)/.scratch/human06/profile" \
+  "$(pwd)/$dst" \
   375e6541cba8e2d2149813cfc9afb1be1dc00b63f1668f6ca3c545173e2ea468
 ```
 

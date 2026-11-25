@@ -49,8 +49,9 @@ record the chapter's map identity and probe the harness simulation with a unit, 
 RNG draw and a timer; they assert no original-game outcome.
 `crates/pcx-play/tests/chapter_scenarios.rs` runs every one of them, requires its
 own expectations to hold and requires 100 consecutive runs to produce byte-identical
-traces. A scenario checked in under `tests/play` must be listed there, so a new
-chapter cannot be added without being executed.
+traces. Its file-list check covers the `demo`, `nightelf`, `orc`, `roc` and
+`undead` directories under `tests/play/`. A new chapter scenario in those
+directories must appear in the test inventory.
 
 The runner checks that the 64-bit tick count fits the platform's `usize` and
 `TickRecord` vector layout before creating the world. It reserves trace storage

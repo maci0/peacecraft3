@@ -2,8 +2,9 @@
 
 All menus require both complete observable behavior and pixel-perfect presentation.
 A working route, parsed asset, passing widget test or recreation-to-recreation
-screenshot match does not establish original-client pixel parity. Campaign
-progression follows menu completion; it does not replace unfinished menu work.
+screenshot match does not establish original-client pixel parity. Sign off
+menu acceptance before complete campaign progression. Existing chapter results
+retain their own scope.
 
 ## Current coverage
 
@@ -25,7 +26,7 @@ screen authored by the original. Missing screen discovery remains open.
 | Gameplay options | Scroll controls, Enhanced Tooltips and Custom Keys have applied/persisted consumers; other controls remain incomplete | Open |
 | Video options | Client-size request/confirmation exists; Texture Quality stays a read-only preview until its 16-bit storage is established; remaining quality and display behavior remains incomplete | Open |
 | Sound options | Music/effects enable and volume and Unit Responses have applied/persisted consumers; remaining category/provider behavior remains incomplete | Open |
-| In-game Main menu | Return, End Game, Help and Tips work (Tips: Next/Back/OK with retained selection); Options is disabled because the in-game `UI\FrameDef\UI\EscMenuOptionsPanel.fdf` panel is not rendered (its escape-menu route reached the front-end Options screen, which stays hidden during play); Save and Load remain incomplete; Pause is hidden in the single-player modal | Open |
+| In-game Main menu | Return, End Game, Help and Tips work. Tips retains its selection through Next, Back and OK. In-game Options is disabled, Save and Load remain incomplete, and single-player Pause is hidden. | Open |
 | In-game End Game | Back, restart, quit mission and exit route have consumers | Open |
 | In-game exit confirmation | Confirm/cancel have consumers; native/browser exit behaviors are distinct | Open |
 | Other original dialogs, popups and screens | Enumerate from selected original inputs and runtime observations; absence from current types is unfinished scope | Open |
@@ -56,6 +57,6 @@ replacement. Keep all original assets and generated copies local.
 Run all automated captures offscreen and muted. Existing evidence and unresolved
 transition questions are linked from [menu navigation](re-notes/menu-panel-navigation.md),
 [camera options](re-notes/input-camera.md),
-[tooltip options](re-notes/held-inventory-presentation.md) and
-[in-game menus](re-notes/campaign-escape-menu.md) and
+[tooltip options](re-notes/held-inventory-presentation.md),
+[in-game menus](re-notes/campaign-escape-menu.md), and
 [Help/Tips bindings](re-notes/escape-help-tips.md).

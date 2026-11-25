@@ -2,9 +2,10 @@
 
 Performance regression gates must use fixed work and deterministic counters, not "finishes in N milliseconds". FPS and elapsed time remain useful measurements, but they vary with other processes, scheduling, GPU contention, clock/thermal state and profiling overhead. They are report-only, never pass/fail thresholds.
 
-## Current audit
+## Functional deadlines
 
-The existing `crates` and `tools` tree had no performance benchmark harness or wall-clock speed assertions. The following timing checks are functional rather than performance budgets and remain separate:
+Liveness checks use deadlines to bound waits. Performance budgets measure
+fixed work. The following checks use functional deadlines or authored timing:
 
 - `intro.rs`: a locally installed decoder must eventually produce a frame, and skipping must cancel/reap it promptly. These explicitly ignored media/runtime tests use liveness deadlines, not a throughput baseline.
 - `pcx-net/transport.rs` and `src/host.rs` (run by the `session_server` binary): discovery, handshake and connection timeouts are protocol/liveness behavior.
@@ -23,7 +24,8 @@ This standalone tool calls the existing `pcx_sim::step`; it does not copy or rep
 
 The counters come from a forwarding process allocator, with no wall clock in gate mode. This catches allocation regressions in real simulation work even when background processes slow execution. The fixed tick/command/unit counts identify the workload; they are not claims about the simulator's internal instruction count. A CPU regression that adds work without allocating can pass this gate and needs instruction profiling/review. Changes to gameplay semantics require reviewing the expected digest, not automatically accepting a new baseline.
 
-The small tool has its own locked manifest and release profile; it adds no dependency to the game or workspace. Its generated binary and reports live in ignored `.scratch/perf/`. It exercises the current movement simulation only: combat, economy, map loading, asset formats, scripted campaigns, menu rendering and the GPU need their own fixed-work counters as those paths become complete.
+The small tool has its own locked manifest and release profile; it adds no dependency to the game or workspace. Its generated binary and reports live in ignored `.scratch/perf/`. This workload covers movement simulation. The separate workloads below
+cover assets, the script VM, campaign startup and rendering.
 
 The counting allocators here and in `crates/pcx-mdl/tests/pose_sampling.rs` need the unsafe `GlobalAlloc` interface to observe actual allocation calls. Both forward unchanged layouts and pointers to `System`; their counters do not allocate or unwind. The pose test uses saturating increments so counter overflow cannot unwind from an allocator callback. Each implementation carries its safety contract and the only local exception to the `unsafe_code = "deny"` policy. The game libraries and application inherit that policy from the workspace.
 
@@ -55,7 +57,10 @@ The installed Valgrind 3.25.1 could not profile this host: its decoder rejected 
 ```sh
 python3 tools/perf/assets.py list
 python3 tools/perf/assets.py run --label before --repeat 3
+# After applying the change:
+python3 tools/perf/assets.py run --label after --repeat 3
 python3 tools/perf/assets.py compare .scratch/perf-assets/results/before.json .scratch/perf-assets/results/after.json
+python3 tools/perf/assets.py check
 ```
 
 The `peacecraft-assets-perf` binary (own manifest and lockfile in `tools/perf/assets/`, built into ignored `.scratch/perf-assets/`) runs 21 versioned workloads over the real archive, texture, model, table, map and terrain code: MPQ open, extraction (unchecked, bounded and checked readers), codec table, listfile union, speech sectors, BLP JPEG and palette decode, MDX parse and pose sampling, SLK parse and lookup, object-editor catalog admission, W3M member parsing (parsed once, extracted repeatedly), terrain mesh and ground selection, and resolver mounting. Each name carries a version (`slk-parse-v1`); changing its inputs or iteration count makes a new name. Inputs are read from the Legacy install at run time (`--install` or `PEACECRAFT3_LEGACY_DIR`) and never copied into the repository.
@@ -64,7 +69,10 @@ Each run reports user-mode instructions from `perf stat -e instructions:u`, allo
 
 `python3 tools/perf/assets.py check` compares a run with the versioned budget in `tools/perf/budgets/assets.json` (exact allocation calls and requested bytes, fixed-work counters and digests per workload) and exits 1 when an allocation counter exceeds it or work or a digest differs; `lower RESULT.json` only ever lowers it. Instructions stay report-only.
 
-`compare` exits 1 when an input digest differs (not a comparison), an output digest or fixed-work counter changed (behaviour changed), allocation calls grew, or instructions grew past the tolerance (default 2%). Repeated identical runs differ by tens to thousands of instructions out of millions to billions, independent of host load. Compare only results from the same compiler, perf version and `release` profile; the result file records them. The details, baseline and optimization results are in [asset loading performance](performance/assets.md).
+Use `check` for the deterministic budget. For comparisons on the same
+environment, `compare` exits 1 if workload sets or input digests differ,
+output digests or fixed-work counters change, allocation calls grow, or
+instructions grow past the tolerance (default 2%). Repeated identical runs differ by tens to thousands of instructions out of millions to billions, independent of host load. Compare only results from the same compiler, perf version and `release` profile; the result file records them. The details, baseline and optimization results are in [asset loading performance](performance/assets.md).
 
 ## Simulation, script VM and campaign workloads
 
@@ -74,7 +82,8 @@ Each run reports user-mode instructions from `perf stat -e instructions:u`, allo
 
 ## Render and HUD workload
 
-The ignored fixture `campaign_entry_gpu_tests::mounted_campaign_render_cpu_workload` drives the production app offscreen on software Vulkan through the menu and Prologue02 and records, per 256-update phase, allocator calls and bytes, entity and asset-write counts, mesh and buffer upload bytes, and the renderer's draw, bind-group and buffer counters (the vendored `bevy_render::render_stats`). A run with `PCX_RENDER_BUDGET=tools/perf/budgets/render.json` fails when a counter exceeds its bound in that file; bounds only go down (`python3 tools/perf/render_budget.py`). Frame SHA-256 digests must stay equal across a change, instruction counts, elapsed time and FPS are reports. The workload, results, budget procedure and GPU measurement steps are in [render and HUD CPU work](performance/render-cpu.md).
+The ignored fixture `campaign_entry_gpu_tests::mounted_campaign_render_cpu_workload` drives the production app offscreen on software Vulkan through the menu and Prologue02 and records, per 256-update phase, allocator calls and bytes, entity and asset-write counts, mesh and buffer upload bytes, and the renderer's draw, bind-group and buffer counters (the vendored `bevy_render::render_stats`). A run with `PCX_RENDER_BUDGET=tools/perf/budgets/render.json` fails when a counter exceeds its bound in that file; bounds only go down (`python3 tools/perf/render_budget.py`). Compare frame SHA-256 digests across changes. The workload reports
+instruction counts, elapsed time and FPS separately. The workload, results, budget procedure and GPU measurement steps are in [render and HUD CPU work](performance/render-cpu.md).
 
 ## The budget tools' own tests
 

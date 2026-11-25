@@ -70,8 +70,9 @@ even if the adapter advertises BC. Extent excess is a typed `Extent` refusal;
 malformed/unsupported/limit/layout errors preserve source and offset through
 `dds::Error`. The only public import path obtains features and limits directly
 from `RenderDevice`. Private synthetic-capability tests are explicitly test
-policy. Actual-device tests initialize only a headless device, without building
-or launching the application and without drawing or uploading a texture.
+policy. The local import test below initializes a headless device without starting
+the application or uploading a texture. Separate upload and sampling tests
+use the device as described later.
 
 ## Explicit local fixture
 
@@ -90,9 +91,10 @@ The device test records adapter information, adapter-supported features and
 actual enabled-device features. Headless Vulkan, BC feature requests, nearest
 sampling and MAIN_WORLD residency are **test policy**. A second actual device
 deliberately omits BC to verify refusal on an adapter that advertises support.
-This establishes host device feature/import behavior only. Native binding,
-channel meanings, shader/gamma policy, GPU upload and rendered parity remain
-unverified and outside this API.
+This device-import test establishes feature admission and refusal. It does not
+upload or draw the texture. The separate checks below cover upload/readback and
+synthetic sampling. Native binding, shader/gamma policy, channel semantics and
+rendered parity remain open.
 
 Observed local device run (2026-10-14): Reforged build `3.0.0.24268`,
 AMD Radeon RX 7900 XTX (RADV NAVI31), Vulkan, driver `radv`,

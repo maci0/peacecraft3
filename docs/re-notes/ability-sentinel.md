@@ -4,11 +4,12 @@ Image: Legacy `Warcraft III.exe` 1.29.2.9231, SHA-256
 `3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`. Static disassembly only; no
 original client was run.
 
-Status: the order is accepted for the case the shipped map uses; the missile flight and the
-in-flight sight are not modeled (below). Shipped use: RoC `NightElf03` `Trig_Setup_Sentinel_Actions`
+The host accepts the scoped hidden-caster order described below. Missile flight
+and in-flight sight remain outside that admission. Shipped use: RoC `NightElf03` `Trig_Setup_Sentinel_Actions`
 orders three hidden `esen` huntresses (`ShowUnitHide`) to `sentinel` three trees through
 `IssueTargetDestructableOrder`, a Blizzard.j wrapper that calls `IssueTargetOrder`
-(`war3map.j:1236`, `1241`, `1246`). The script ignores the return value.
+(`war3map.j:1236`, `1241`, `1246`). The script ignores the return value, so
+it establishes the request only.
 
 ## Class
 

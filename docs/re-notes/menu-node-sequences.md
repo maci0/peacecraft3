@@ -1,7 +1,8 @@
 # Menu node animation sequence boundaries
 
 Local node transforms now sample only keys inside the selected authored sequence.
-A channel without keys in that interval keeps its identity transform. The menu
+A channel without keys in that interval contributes its identity value. Other
+channels retain their authored transforms. The menu
 passes the source interval through background skinning and each panel's current
 Birth, Stand or Death phase. Global channels retain their independent clocks.
 The shared borrowed sampler finds key bounds without allocations and preserves
@@ -19,7 +20,7 @@ menu caller sampled its first key from a different sequence, moving the surface
 into the sky. These source relationships identify the cause; no geoset index,
 measured coordinate, camera angle, color or screenshot fit is a production rule.
 
-The corrected native render restores the skyline and dark upper sky at both
+The corrected desktop application render restores the skyline and dark upper sky at both
 1024×768 and 3840×2160. Original PNG and Warcraft client-window extents match
 those sizes. References use isolated Wine/software rendering, not native Windows.
 Animation clocks, particle ages and RNG are uncontrolled, so this is a visible

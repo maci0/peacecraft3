@@ -1,13 +1,10 @@
-//! `blpx` — inspect a BLP file's header and raw mip payloads.
+//! Inspect BLP headers and mip data with `blpx`.
 //!
-//! The decoder deliberately refuses encodings it cannot prove, so this tool is
-//! how we look at bytes before deciding what a new encoding is.
-//!
-//! A texture can be named two ways. A path to a `.blp` on disk is read
-//! directly. A directory holding the WC3 archives is treated as an install: with
-//! no second argument `info` tallies the whole texture set into the
-//! `(magic, content)` census the decoder is measured against; with one, the
-//! named file is pulled out of the archive set.
+//! Pass a local `.blp` file or an install directory and archive member name.
+//! `info` prints header details. With only an install directory, it lists
+//! the number of `.blp` entries and groups extractable files by magic and content.
+//! `dump` inspects encoded mip bytes. `pixels` prints decoded pixels, `hash`
+//! hashes them, and `export` writes them as raw bytes.
 
 use std::process::ExitCode;
 

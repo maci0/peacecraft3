@@ -1,37 +1,23 @@
 # RE-002 — Reforged 2.0.1 Battle.net checksums
 
-Status: **recovered and verified**. The user downloaded `x86_64.zip` to Desktop.
-The complete archive is extracted into `wc3/pdbs-2.0.1/`, under the ignored
-`wc3` directory: 225 PDBs, 12,308,369,408 bytes uncompressed.
-`Warcraft III.pdb` (285,396,992 bytes) and `World Editor.pdb` (165,744,640 bytes)
-both match the requested MD5 and SHA-512 entries below, verified from the
-extracted files. Other PDBs were extracted with ZIP CRC checks and their file
-counts and sizes checked; their published hashes have not been compared.
+The 11 October 2026 checkpoint examined the locally supplied archive
+`x86_64.zip` (3,250,056,598 bytes) for Reforged 2.0.1 build 22474.
+Extraction under the ignored `wc3/pdbs-2.0.1/` directory yielded 225 PDBs
+and 12,308,369,408 uncompressed bytes.
 
-## Download leads (2026-10-11)
+| Extracted file | Bytes | Verification |
+|---|---:|---|
+| `Warcraft III.pdb` | 285,396,992 | MD5 and SHA-512 matched |
+| `World Editor.pdb` | 165,744,640 | MD5 and SHA-512 matched |
+| Remaining PDBs | Included in total above | ZIP CRC, file count and size checked |
 
-Two candidate archives were found before the user supplied the Desktop archive.
+See the [MD5](#md5) and [SHA-512](#sha-512) lists. The other published digests
+were not compared with the extracted files.
 
-Local `/home/maci/Desktop/devonly.zip` was inspected at the user's request:
-405 entries, including 109 `.w3m`, 204 `.w3x`, and 42 `.dds` files. It contains
-no PDBs, no nested archives, and neither requested filename.
+## Source and manifest
 
-- [XGM uploader's post](https://xgm.guru/p/wc3/Mozhet-li-kto-to-skinut-s-dev-versii-War3-byl--lDI/comments/view/556663):
-  konvan5 says the archive contains all `.pdb` files saved from `\retail\x86_64\`.
-  The inline download link resolves to
-  [x86_64.zip](https://xgm.guru/files/100/357991/comments/556663/x86_64.zip).
-  A reply describes the upload as approximately 3 GB. Direct network retrieval
-  was unavailable; the web reader returned a cache miss.
-- The same question's accepted answer links to
-  [Warcraft III.zip on Google Drive](https://drive.google.com/file/d/1_-QweY-80k0fQMLiDx8jNooDN8EX-8gI/view?pli=1).
-  The web reader showed only a sign-in link, so access and contents remain
-  unverified.
-
-The agent's direct XGM download attempt failed with `curl: (6) Could not resolve
-host: xgm.guru`. Browser inventory was empty and creating an in-app browser tab
-failed with `Browser is not available: iab`. The user subsequently supplied
-`/home/maci/Desktop/x86_64.zip` (3,250,056,598 bytes), resolving the retrieval
-blocker. The two requested files now match both published hashes.
+The separate local `devonly.zip` held 405 entries, including 109 `.w3m`,
+204 `.w3x` and 42 `.dds` files. It contained no PDBs or nested archives.
 
 Retera published both lists on the Hive thread
 [Wacraft III leak request](https://www.hiveworkshop.com/threads/wacraft-iii-leak-request.358103/)
@@ -40,9 +26,8 @@ obtained from Activision Blizzard with the Battle.net app Update button, for the
 Warcraft III: Reforged 2.0.1 drop (build 22474, 2024-12-17) that the following update
 removed. He added SHA-512 because he does not treat MD5 as sufficient on its own.
 
-414 files, same order in both lists: 189 `.exe`, 225 `.pdb`. No duplicate names. The
-unsuffixed name is one build; `ac`, `ae`, `d`, and `r` (and `-d` / `-r` / `-ra` on the
-ClientSdk helpers) are the other build variants of the same tool.
+Both lists have 414 files in the same order: 189 `.exe` and 225 `.pdb`.
+Filenames are unique.
 
 ## MD5
 

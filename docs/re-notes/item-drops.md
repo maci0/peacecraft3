@@ -1,9 +1,8 @@
 # Item drops and drop origins
 
-Status: campaign placed-unit drops run through the generated death trigger. The gate
-below runs that trigger's action body in the VM. The death event itself and the full
-map startup are not exercised, because the production Host cannot initialize the
-`common.j` globals yet (see Frontier).
+The historical gate ran the generated placed-unit drop action in the VM. It
+called the action directly, leaving map startup and death-event delivery
+outside the test.
 
 ## Script drop calls (selected `Blizzard.j`)
 
@@ -91,9 +90,9 @@ Harness values, not evidence:
 
 ## Frontier
 
-1. The production Host cannot run `common.j` globals. `GetPlayerNeutralPassive` remains
-   unsupported (`docs/re-notes/native-neutral-players.md`), so no campaign script,
-   including this trigger, starts end to end in the Host.
+1. At this checkpoint, `GetPlayerNeutralPassive` blocked
+   [neutral player initialization](native-neutral-players.md).
+   [Later Human01 runs](hero-experience.md) reached live campaign triggers.
 2. `EVENT_UNIT_DEATH` delivery from `KillUnit` and lethal damage to the registered
    trigger. The `ObjectHost` death path (`combat_host.rs:508`) is the hook. Delivery is
    not gated.

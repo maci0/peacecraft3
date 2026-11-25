@@ -128,9 +128,8 @@ Combined validation passed 3,048 workspace unit tests before the final shared
 combat-eligibility guard, including 619 app tests. The final source passed all
 1,670 core tests, the published two-player session fixture, strict workspace
 native Clippy, affected native/WASM Clippy and formatting. Explicit selected
-image readers and selected Human01 startup/Continue passed. The unchanged
-Human02 opening-minute test still fails, now at `SetCampaignAI`; the test was
-not changed to accept that refusal. Logs remain local under
+image readers and selected Human01 startup/Continue passed. At this checkpoint, the unchanged
+Human02 opening-minute test reached the then-unsupported `SetCampaignAI`. Logs remain local under
 `.scratch/group-timed-life-integration/`, including the initial missing-install
 test failure and its corrected explicit asset paths. No new original-client
 run or rendered comparison was made for this host integration.

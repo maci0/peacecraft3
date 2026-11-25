@@ -51,9 +51,9 @@ Null location operations retain argument-count, type, finite-coordinate and
 handle-family validation. A live location snapshot retains its own lifetime.
 The case without an admitted game clock has no transient-location window.
 
-The post-intro Human01 callback failure motivated this change. Exact callback
-identity and unchanged rendered continuation require separate verification;
-these diagnostic maps alone do not establish that the campaign now continues.
+The post-intro Human01 callback failure motivated this change. The diagnostic
+maps qualify the tombstone rule. The later menu retest below covers rendered
+control restoration. The second EnterRect callback remains a separate case.
 
 ## Checks on the implementation
 

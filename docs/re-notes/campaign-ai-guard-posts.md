@@ -1,9 +1,9 @@
 # Guard-post replacement behavior
 
 `FillGuardPosts()` uses the same canonical units, owners, resources and production
-lifecycle as the rest of the game. The ordinary replacement consumer is now
-implemented. The unchanged Human02 opening-minute test advances past this call
-to `ReturnGuardPosts` at 8.312500 seconds and remains incomplete there.
+lifecycle as the rest of the game. This note covers ordinary replacement.
+See [guard return](campaign-ai-return-guard-posts.md) for the separate
+`ReturnGuardPosts` call.
 
 ## Selected-code evidence
 
@@ -137,8 +137,9 @@ artifacts remain ignored under `.scratch/fill-guard-posts/`.
 
 ## Runtime implementation and remaining work
 
-The existing per-player AI registry now retains ordinary guard posts after death.
-Fill checks the source-derived signed assignment limit and submits one pending
+The per-player AI registry retains ordinary guard posts after death. Fill
+checks the signed replacement limit, using the source-derived default before
+`SetReplacementCount` is called. It submits one pending
 job to an eligible idle producer from its authored `Trains` profile. Source
 costs, build duration and food usage drive shared player resources and pending
 food. Repeated fill calls do not duplicate the job. Training start and finish

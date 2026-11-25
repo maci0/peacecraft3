@@ -69,7 +69,8 @@ regular starts, while forwarding the original argument to a current regular
 handle. The thematic constructor instead supplies its own full volume. Applying
 the script regular-music volume to every `CampaignMusic` entity would change
 thematic behavior. This change preserves the existing user music bus and does
-not admit regular volume or seek, ordinary play/stop/resume, or fades.
+not cover regular playback. The later [regular controller](script-regular-music-controller.md)
+and [volume policy](script-regular-music-volume.md) qualify separate paths.
 
 Music-disabled call admission, negative Miles positions other than the
 sentinel, decoder seek errors/beyond-end behavior, exact fade curves and

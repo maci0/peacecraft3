@@ -443,5 +443,7 @@ the trigger, player, copied message and match flag under one arena identity. A
 zero-budget or full registration refuses before allocation. No chat is delivered:
 the host has no typed-chat source, so nothing fires. `GetEventPlayerChatString` and
 `GetEventPlayerChatStringMatched` stay unsupported. `HumanX01.w3x` (`war3map.j:7343`,
-message `"A"`) registers and never calls them; its next first refusal is
-`UnitSetUsesAltIcon` (`Scripts\Blizzard.j:4270`), which has no repo evidence yet.
+message `"A"`) registered and called neither getter in this run. The next
+refusal was `UnitSetUsesAltIcon` (`Scripts\Blizzard.j:4270`). See the later
+[alternate icon note](unit-alt-icon.md) for the supported unit state and
+remaining presentation gap.

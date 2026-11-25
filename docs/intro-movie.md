@@ -10,14 +10,19 @@ The supplied legacy installation's `Movies/IntroX.mpq` is the TFT opening: its e
 
 `Movies/TutorialOp.mpq` is the base-game cinematic selected for RoC: locally decoded frames show the sunlit field and Thrall's prophetic vision, distinct from Illidan's TFT cinematic. It is also MPEG-4 plus MP3, 800×368, approximately 173.45 seconds. SHA-256: `a3e47b9f86f01f0b5d2a2f6289af103a70013ca7535543d32693bcaa44847346`. The native startup call selecting this name has not been traced; this selection is based on the original file's inspected cinematic content.
 
-Browsers receive supported local H.264/AAC copies, with the original image and soundtrack rather than replacement art. Set the installation path and convert only files you already have:
+The local development page can play H.264/AAC copies from `web/assets`.
+Set `PEACECRAFT3_INSTALL` to your own installation and keep the results local.
 
 ```sh
+mkdir -p web/assets
 ffmpeg -i "$PEACECRAFT3_INSTALL/Movies/IntroX.mpq" -map 0:v:0 -map 0:a:0 -c:v libx264 -preset fast -crf 19 -pix_fmt yuv420p -c:a aac -b:a 160k -movflags +faststart web/assets/intro-tft.mp4
 ffmpeg -i "$PEACECRAFT3_INSTALL/Movies/TutorialOp.mpq" -map 0:v:0 -map 0:a:0 -c:v libx264 -preset fast -crf 19 -pix_fmt yuv420p -c:a aac -b:a 160k -movflags +faststart web/assets/intro-roc.mp4
 ```
 
-The generated `web/assets` movie files and analysis frames are ignored by Git. They are not downloaded, included in source publication, or uploaded to a remote service. Browser playback currently reads these staged local URLs; direct ISO/movie import into browser memory is a separate asset-import requirement, not implemented by this player.
+The generated movies and analysis frames are ignored by Git. The
+[public Pages package](pages-demo.md#build-and-package) excludes `web/assets`.
+The video player reads staged local URLs. Direct ISO/movie import is outside
+this player’s scope.
 
 ## Playback
 
@@ -28,6 +33,9 @@ The native player decodes through an installed `ffmpeg` executable, with no buil
 FFmpeg is a runtime requirement for native cinematic playback; if it is missing, the menu still opens. This is separate from compiling and running the game. The FFmpeg input clock starts before the first decoded frame starts the Bevy soundtrack, so decoder/render/audio-output latency still permits a small A/V offset. Native image/audio output has not been compared against an original client for frame-perfect A/V synchronization or original skip-key timing. The extra visible skip control is the requested accessible control.
 
 ## Verification scope
+
+Verify isolated display and null audio before running the media checks. See
+[test isolation](../AGENTS.md#test-isolation).
 
 The state-machine regression checks that completion is consumed once and subsequent requests cannot replay the movie. The ignored `original_movie_decodes_and_skip_reaps_the_process` test requires local media and FFmpeg: it checks decoded frame size, nonempty soundtrack, prompt cancellation, child reaping and worker joining. Browser checks play the actual converted local movie, verify aspect containment, and exercise Escape, skip button, natural ending after seeking near the end, and missing-media fallback. The browser fixture uses the real menu-audio module and verifies that music pauses during playback and resumes with a progressing clock after all four finish paths; this is distinct from end-to-end launcher input and scene verification.
 

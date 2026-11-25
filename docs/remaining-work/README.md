@@ -10,10 +10,9 @@ implementation priority is a separate ordering. The
 This is a source and evidence audit, not gameplay acceptance. Record identifiers
 and line numbers refer to that pinned snapshot, whose SHA-256 is recorded in the
 JSON. The accompanying tracker corrections change those lines; subsequent
-implementation must update the live tracker rather than treating this snapshot
-as current completion state.
+implementation updates the [live tracker](../../TRACKER.md).
 
-The campaign critical path is source-backed startup dependencies, terrain and
+At this checkpoint the campaign critical path was source-backed startup dependencies, terrain and
 camera initialization, a rendered HUD, persistent selection and orders, then
 associated gameplay stats. Chapter progression, transmissions, quest state and
 AI each require their own application consumers. Private prototypes and parser

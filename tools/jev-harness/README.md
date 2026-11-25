@@ -31,13 +31,20 @@ TypeSafe AI System One contract verified in `.scratch/jev-research/report.md`
   requests). HTTP errors surface as `jev HTTP error status=<code>` only —
   raw error bodies (which may echo state) are never logged.
 
-### Live status (honest)
+### November 5, 2026 verification
 
-- **Real-API status 2026-11-05:** no live call was made. Credential location is user-confirmed pending: explicit path > `TYPESAFE_API_KEY` env > default file; until the user confirms the exact location, no live call is made and tests use fake fixtures only (injected `environ` / tmp `path`). No provisioning/payment/account action was taken.
-- **Synthetic ≠ PeaceCraft play:** all runs here drive `SyntheticBackend` (in-memory fixture) or fully mocked transports. Default candidate coordinates are synthetic fixtures, not PeaceCraft targets. Nothing observed here is PeaceCraft gameplay or the original WC3 client.
-- **Bridge lane note (2ecd48b, integrated in 1ac7c02):** the lane03 structured observation bridge (`gameplay_observation.rs`, `#[cfg(feature="test-fixtures")]` only) is a structured real canonical state/order proof over `ObjectHost` (own/visible units, hex `HandleId`, live position, vitals, current order, camera `world_to_viewport` projection). It is `screen: Option` — when projection is unavailable `screen` is null, so no graphical-play claim follows; it proves state/order visibility, not rendered gameplay. Hidden-unit guard: upstream `observe()` already filters to own-or-visible; the provider only fails closed on an explicit per-unit `visible=False`/`hidden=True`, and does not ban mere field names.
+- Provider tests used injected credentials and did not call the live API.
+- Early provider-loop checks used `SyntheticBackend` or mocked transports.
+  Their candidate coordinates belong to the fixtures.
+- **Structured observation (2ecd48b, integrated in 1ac7c02):** the bridge in
+  `gameplay_observation.rs` uses `ObjectHost` state under `test-fixtures`. It
+  reports owned or visible units, hexadecimal handles, positions, vitals,
+  current orders and viewport coordinates. The `screen` field is null when
+  projection is unavailable. This check covers observable state and orders.
+  The upstream `observe()` filters for owned or visible units. The provider
+  rejects explicit per-unit `visible=False` or `hidden=True` values.
 
-## Canonical fixture client and decision adapter (pc3-menu-03)
+## Canonical fixture client and decision adapter
 
 The canonical gameplay-fixture client (`jev_harness.canonical_fixture.FixtureClient`,
 protocol 1) speaks the file protocol in `crates/peacecraft3/src/gameplay_fixture.rs`:
@@ -82,7 +89,7 @@ print(action, p.last_summary)  # sanitized: model/choice/usage only
 |---|---|---|
 | `SyntheticBackend` | In-memory state machine | Smoke test only — **not** PeaceCraft gameplay |
 | `OriginalReferenceBackend` | Original WC3 via Docker/Wine/Xvfb (`tools/original-game-reference/reference.py`) | Explicitly **NOT** PeaceCraft gameplay; needs a prepared+launched owned run_dir |
-| PeaceCraft browser | Existing `browser-adapter.mjs` + Bevy WASM build | **Not wired** — needs integrator; see below |
+| `PeaceCraftBrowserBackend` | Local browser adapter and WASM canvas | Wired with geometry checks. Live gameplay acceptance remains open. |
 
 ## Bounds
 
@@ -99,103 +106,23 @@ Credential selection is explicit (no search, no shell sourcing): explicit `path`
 ## Live-contract blockers (exact)
 
 1. **Key location pending** (see Live status above) — no live Jev call until the user confirms the exact `TYPESAFE_API_KEY` path or env location. Adapter, schema validation, and mock-transport tests are complete without it; credential selection is now configurable by explicit path or documented env (fake fixtures only in tests).
-2. **PeaceCraft browser backend unwired** — needs integrator to drive the
-   existing `browser-adapter.mjs` (`createBrowserAdapter`) against a locally
-   built WASM launcher; this harness defines the `GameBackend` protocol it
-   must satisfy (isolated `#launcher-canvas` viewport capture only).
+2. **PeaceCraft browser live acceptance remains open.** The backend checks
+   the clipped canvas and PNG geometry before input with the local WASM app.
 3. **Original-client backend** needs a prepared run_dir (game install +
    `docker build`); container `12a9ce5eacfdab02` is stopped — do not reopen
    unowned clients.
 
-## Review note: `OriginalReferenceBackend` full-root capture risk (lane09-owned `backend.py`)
+## Capture scope
 
-**Do NOT treat current `OriginalReferenceBackend` captures as live-game evidence.**
-This section is a precise review for the lane that owns `tools/jev-harness/jev_harness/backend.py`
-and the actual PeaceCraft driver, so this lane does not make conflicting edits there.
+The original reference backend uses a root capture from its owned Xvfb
+display. It verifies PNG dimensions and the sidecar’s reported screen and
+window geometry. Input requires a successful capture. These checks can reject
+a mismatched viewport, but they do not prove the frame still represents the
+same state when input arrives.
 
-### What the current code does
-
-`OriginalReferenceBackend.capture()` (in `backend.py`) shells out to:
-
-```
-tools/original-game-reference/reference.py capture --run-dir <run_dir> --label jev-N
-```
-
-and `tools/original-game-reference/reference.py:capture()` runs, inside the
-owned Docker/Wine/Xvfb container:
-
-```
-import -window root /run/reference/captures/<label>.png
-```
-
-i.e. a **full-root (whole X framebuffer) capture**, not a game-viewport-clipped
-capture. It then records `xwininfo -root -tree`, `xdpyinfo`, and a Wine video
-registry dump into `<label>.json` beside the PNG.
-
-### Why this is a risk / not yet verified
-
-1. **Full-root != game viewport.** `import -window root` captures every pixel of
-   the Xvfb root window: game client plus any other root-window content
-   (Wine desktop, explorer chrome, black bars, other windows). There is **no
-   step in the JEV path** that verifies the captured PNG is the Warcraft client
-   viewport, that it occupies the full framebuffer, or that it matches the
-   backend's declared `width`/`height` (default 1024×768).
-2. **No viewport verification exists in `OriginalReferenceBackend`.** It only
-   checks the subprocess exit code, then `read_bytes()`s the PNG and returns it
-   with a sha256. It never:
-   - parses the PNG header to confirm dimensions == `self.width × self.height`;
-   - checks the capture receipt/label existed and is fresh;
-   - verifies via the receipt's `xwininfo`/`xdpyinfo` dump (already written by
-     `reference.py:capture()` but discarded by the backend — only `receipt`,
-     `label`, `sha256` are returned) that exactly one original game window
-     occupies the full framebuffer at origin at the expected extent/DPI.
-3. **Correct pattern already exists, but only in `replay.py` (native targets).**
-   `tools/original-game-reference/replay.py:native_window()` (used by `compare`,
-   not by the JEV backend) verifies, before any input:
-   - `xdpyinfo`: exactly one screen (#0, default), dimensions and DPI equal the
-     scenario extent/DPI;
-   - `xrandr --current`: exactly one connected output at that extent at `+0+0`;
-   - `xdotool search --onlyvisible --name <title>`: exactly one visible window;
-   - `xdotool getwindowgeometry --shell`: that window is `WIDTH×HEIGHT` at
-     `X=0,Y=0,SCREEN=0`;
-   - `xdotool windowfocus --sync` + `getwindowfocus` round-trip, and
-     `check_native_pointer()` confirms the pointer after every move.
-   The JEV `OriginalReferenceBackend` applies **none** of these checks, and
-   `reference.py:capture()` itself only asserts the label pattern and that the
-   label is unused before capturing.
-4. **Therefore a live claim is unavailable today.** A full-root PNG could be a
-   black framebuffer, a Wine desktop, a launcher/menu, or a window at the wrong
-   extent, and the loop would still feed it to the provider and apply clicks at
-   coordinates validated only against the backend's *declared* `width`/`height`,
-   not the *actual* captured extent. No test in `tools/jev-harness/tests/`
-   exercises this backend (by design: fake backend only, no live native client).
-
-### What lane09 / the PeaceCraft driver must do before any live use
-
-- In `OriginalReferenceBackend.capture()` (and `apply()` for clicks), verify
-  **before returning/applying** that the capture is the game viewport:
-  e.g. reuse/extend the `replay.py:native_window()` checks (single screen +
-  RandR output + exactly one visible window at full extent at origin + focus),
-  and confirm the PNG header extent equals the declared `width × height`.
-  Refuse (raise `BackendError`, redacted) on any mismatch — never rescale or
-  crop to fit.
-- Until that verification lands and is proven against a real prepared+launched
-  owned `run_dir`, keep the backend labelled and gated as **NOT PeaceCraft
-  gameplay / unavailable for live runs**, exactly as the table above states.
-- The PeaceCraft browser/WASM driver (integrator wiring, below) must satisfy
-  the same rule via its own path: capture clipped to `#launcher-canvas` only,
-  with actual canvas geometry checked before/after (as `browser-worker.mjs` /
-  `browser-adapter.mjs` already do for `compare`).
-
-No change was made to `backend.py`, `reference.py`, or `replay.py` in this lane.
-
-## Integrator wiring (PeaceCraft browser, one function)
-
-```python
-# Adapter satisfying GameBackend: capture() -> CDP Page.captureScreenshot
-# clipped to #launcher-canvas; apply() -> existing validated input path
-# (browser-adapter.mjs input/capture). No new infrastructure.
-```
+The browser backend checks its canvas bounds and clipped capture before
+mapping input. Mock tests exercise both backends, including geometry failures
+and invalidated capture state. These tests provide no live gameplay receipt.
 
 ## Observation bridge integration (2ecd48b, pc3-menu-10)
 

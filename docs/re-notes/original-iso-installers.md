@@ -1,8 +1,8 @@
 # Original ISO installer payload
 
 The locally supplied image has valid ISO9660/Joliet directories containing an
-ElAmigos Inno Setup installer and six encrypted FreeArc archives. The browser
-now discovers its files locally, but cannot yet unpack its installer payload.
+ElAmigos Inno Setup installer and six encrypted FreeArc archives. The first browser checkpoint discovered the files locally. Later codec and
+import coverage is documented in the [Pages demo guide](../pages-demo.md).
 Checked static script parsing supplies the archive password arguments; both the
 base and English archive control directories decrypt, LZMA-decode and match
 their stored CRCs. The base MPQs still require solid-block codecs, and the
@@ -27,7 +27,7 @@ Neither the volume label nor the installer title establishes a Warcraft III
 release. The installer metadata's `1.27b` label does not establish its archives'
 release identity.
 
-## Current browser discovery
+## Browser discovery at `fd4a6e0`
 
 At source `fd4a6e0`, `discoverIso` selects the single recognized Joliet namespace,
 decodes its big-endian UCS-2 identifiers and follows its own directory extents.

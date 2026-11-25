@@ -1,5 +1,5 @@
 //! Bounded local CASC reader. See the crate README for source-byte measurements,
-//! format references, supported branches and explicit residuals.
+//! format references, supported layouts and unverified fields.
 #![deny(warnings)]
 
 pub mod blte;
@@ -11,7 +11,10 @@ pub mod tvfs;
 
 pub type Key = [u8; 16];
 
-/// Build identity is read from .build.info, never inferred from a directory name.
+/// Source identity attached to a parsed artifact.
+///
+/// `Storage::open` reads the build identity from `.build.info`. Standalone
+/// parsers accept caller-supplied provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     pub install: String,

@@ -37,8 +37,7 @@ existing request with the retained identity, label and shared bytes, and reports
 read/parse failures using their Display diagnostics. Missing configuration is
 reported to the user. The detailed typed requirements remain available to
 configuration callers. This action does not change the game edition or enable
-extensions. Default native/browser source mounting remains unimplemented; a
-caller must configure bindings explicitly.
+extensions. This initial import path required explicit source bindings.
 
 `MapRequests::replace_selected` uses `bind_map_bounded`. Its selected Resolver
 sources must enforce caller limits before payload reads and decoding. Unsupported
@@ -77,7 +76,7 @@ refused because it lacked the map's `GetChangingUnit` declaration. The compatibl
 candidate compiled; its host-free script probe then refused an unsupported
 native. No gameplay started and no original bytes were saved or included here.
 
-There is no production gameplay Host connecting this parsed context to player,
-unit, handle and event state. Persistent VM ownership and source diagnostics
-exist, but original initialization, game entities, scheduling, rendering and
-campaign/community-map execution remain open.
+This probe ended at binding and parsing. The later
+[campaign source preparation](campaign-source-preparation.md) path supplies
+inputs for a persistent gameplay session. The LostTemple probe above did not
+exercise initialization, game entities, scheduling or rendering.

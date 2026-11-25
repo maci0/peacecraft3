@@ -27,8 +27,8 @@ declarations must match the selected source and exact signature. Only zero force
 duration is currently admitted. An application snapshots the executed fields and
 destination; subsequent edits to that setup do not move the view. Non-panning
 application retains the prior applied target and refuses if none exists. Timed
-applications refuse before changing that snapshot. This does not implement the
-other camera-application or location-returning natives. Finite-input refusal and
+applications refuse before changing that snapshot. Other camera-application paths remain outside this slice. The destination
+location query is described in the follow-up below. Finite-input refusal and
 resource budgets are recreation policies; native exceptional-input behavior is
 not established.
 

@@ -26,10 +26,10 @@ and edition are not substituted for the selected executable.
 
 ## Recreation
 
-Unit admission validates the declarations and their source. A set call validates
-live unit handles, finite offsets, an admitted model and one matching authored
-BONE name before changing the retained request. Missing or ambiguous bones refuse
-with model context. Reset restores the ordinary sampled animation. Removing a
+The initial slice validated live unit handles, finite offsets, an admitted
+model and a unique authored bone name before recording the request. Later
+[look-at admission](script-unit-look-at.md) covers both BONE and HELP names
+and rejects ambiguous matches. Reset restores the ordinary sampled animation. Removing a
 target clears references from remaining units.
 
 The campaign actor resolves the target's current world position each frame using
@@ -47,7 +47,7 @@ height semantics and case matching remain unqualified. Multi-name/wildcard bone
 selection is unsupported and refuses rather than inventing a selection. Synthetic
 pose tests establish geometry, not rendered or original-client parity.
 
-## Validation
+## Validation (2026-10-21)
 
 Worktree-private target, stable Rust, `CARGO_BUILD_JOBS=1 --locked --offline`:
 
@@ -67,9 +67,8 @@ The ignored local longer-run diagnostic uses unchanged Human03 (SHA-256
 `a62e36a1825a2edb0e2259d36db0c44fb50cb877a457014ed568168045559b82`),
 seed 1, and the same initial player move as the preceding movement audit. At tick
 257 it records Arthas handle 1430, model `units\human\Arthas\Arthas.mdx`, looking
-at handle 744 with the script's `bone_head` and `[0,0,80]`. Execution next refuses
+at handle 744 with the script's `bone_head` and `[0,0,80]`. That run stopped at
 `IssueImmediateOrder` through `IssueImmediateOrderBJ` at Blizzard.j:7817, tick
 980. The diagnostic exits 101 at that separate frontier; it does not finish its
-4,096-tick window. No cinematic-skip input is sent. The temporary test source
-was moved back to ignored scratch after the run. No whole-map, rendered or
-original-client aiming parity claim follows from this headless result.
+4,096-tick window. The test sent no cinematic-skip input. Whole-map, rendered
+and original-client aiming parity remain outside this result.

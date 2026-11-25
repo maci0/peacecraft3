@@ -1,5 +1,10 @@
 # Launcher assets
 
-`launcher-landscape.png` is original project artwork for the custom launcher. It contains no extracted game artwork, logos or characters, and does not represent a game map. It uses the project's MIT OR Apache-2.0 license.
+`launcher-landscape.png` is project artwork for the launcher. It contains no
+extracted game artwork, logos or characters and depicts no game map. It
+uses the `MIT OR Apache-2.0` license declared in the
+[workspace manifest](../../../Cargo.toml).
 
-`DejaVuSans.ttf` is an unmodified, redistributable launcher font. Its copyright and permission notices are in `FONT-LICENSE.txt`. Imported game menus continue to use their source-defined fonts.
+`DejaVuSans.ttf` serves as the launcher font and a test fixture. See the
+[font license and notices](FONT-LICENSE.txt). Imported game menus use the
+fonts their source files define.

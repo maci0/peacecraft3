@@ -110,8 +110,8 @@ name, the room table, and the two window call sites (`68 88 13 00 00`, then `cal
 - **Window source.** The value is gate-verified at its two call sites, not derived at
   runtime. Deriving it needs call-site analysis.
 - **Provider identity.** `ProviderId` is an opaque number the audio owner supplies. The
-  identity and lifecycle contract with the audio worker (02) is pending root
-  coordination.
+  sound environment keeps this identifier for the selected provider.
+  Backend lifecycle and application of these values remain unqualified.
 - **Audio.** No audio consumer applies these values. `TRACKER.md` still lists EAX as an
   explicit refusal.
 

@@ -1,7 +1,9 @@
 use std::{fmt, str::FromStr};
 
-/// Project-layer path identity: slash separators and ASCII lowercase.
-/// Non-ASCII characters are retained; no Unicode or native CASC case rule is inferred.
+/// A relative asset path with slash separators and ASCII lowercase.
+///
+/// Construction and deserialization reject empty or traversal components,
+/// control characters and colons. Non-ASCII characters remain unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct AssetPath(String);

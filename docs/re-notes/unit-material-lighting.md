@@ -1,7 +1,8 @@
 # Campaign unit material culling and lighting
 
-Status: culling is implemented in source and not yet compiled against Bevy. Rendered
-acceptance is open. Missing sun inputs are reported as a gap, not replaced.
+The Bevy material path applies source-derived culling, with focused checks
+for the one-sided, two-sided and menu cases. Native render parity remains
+open. Missing sun inputs remain explicit.
 
 ## Culling
 
@@ -115,7 +116,6 @@ These need the root Bevy slot. Both use the explicit Legacy install.
 
 ## Pending
 
-- Items 1 and 2 above, not yet built.
 - The rendered fidelity of minority triangles, `Unfogged` (`0x20`) and `TwoSided` (`0x10`)
   on units, and the opaque, cutout and blend pass order.
 - The sun-less fallback (gap, above).

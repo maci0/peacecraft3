@@ -60,9 +60,9 @@ side effects. Native xrefs/implementation investigation continues separately.
 
 The older extracted `Game.dll` reporting `1.26.0.6401` is not an identity oracle for the
 Legacy archives. Native behavior, original event ordering, stock campaigns, DotA,
-Athena and Footman Frenzy remain open. The next native investigation should start from
-the observed neutral-player getter and establish the target's registration and return
-path; any runtime comparison must be recorded separately from this VM-source probe.
+Athena and Footman Frenzy remain open. The later [neutral-player getter investigation](native-neutral-players.md)
+traces the target’s registration and return path. That evidence is separate
+from this VM-source probe.
 
 ## Host handle transport
 

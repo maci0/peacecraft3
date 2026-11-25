@@ -1,10 +1,10 @@
 # Input behaviour, live capture from the original client
 
 Measurements of the open facts in the [input behaviour audit](input-behaviour-audit.md)
-(slice 1). Every value below is a **runtime observation (RO)** of the original client
-under Wine in the isolated reference container. It is not native Windows ground truth.
-Decompiler-based facts keep the audit's tags (EX, SB); where a debugger read decides a
-question it is marked RO-dbg.
+(slice 1). **RO** marks original-client observations from Wine in the isolated
+reference container. **RO-dbg** marks debugger reads. Executable and shipped
+data findings keep the audit’s **EX** and **SB** tags. Threshold estimates
+are specific to the measured runs.
 
 ## Method
 
@@ -70,9 +70,9 @@ World units per second were not read; the figures above are screen pixels at zoo
 
 | Fact | Value | Evidence |
 | --- | --- | --- |
-| Click on empty ground | Keeps the selection. This contradicts the audit's DOC entry for A2 | RO, run3 |
+| Click on empty ground | Keeps the selection. This corrected the original audit’s A2 entry. | RO, run3 |
 | Drag box on empty ground (1 to 100 px) | Keeps the selection | RO, run3 |
-| Drag threshold | None. A 1 px diagonal press-move-release already acts as a box: a box whose edge touches a unit's pick region selects it while a plain click at the same point does not. The green rectangle is visible from 2 px diagonal. A drag below some threshold counting as a click is therefore not present; a release with no movement is a click | RO, run3 |
+| Drag threshold | A 1 px diagonal drag selected a unit when the box edge touched its pick region. A click at the same point did not. The box outline first appeared at 2 px diagonal. A release without movement counted as a click. | RO, run3 |
 | Pick region | Click and box use the same unit region: for a footman at 1280x960 the upper boundary is y 350 for both a click and a box edge, and x within 20 px of the centre selects while 40 px away does not | RO, run3 |
 | Double-click | Second left press within 500 ms of the first press selects all visible units of the clicked type (4 of 4 footmen). Yes at 493.5 ms, no at 506.2 ms; with a 200 ms hold, yes at 487.6, no at 510.3, so the window runs press to press. The exe imports no `GetDoubleClickTime` (`imports.txt`), so the value is not the OS setting | RO, run3 |
 | Shift+click | Toggles: adds a unit, a second Shift+click removes it | RO, run3 |

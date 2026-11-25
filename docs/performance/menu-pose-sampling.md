@@ -23,7 +23,7 @@ cargo test --locked -p peacecraft3 borrowed_tracks_preserve
 
 ## Original fixtures
 
-A source-leaf measurement extracts the current app function and compares it
+The sampling-function benchmark extracts the app function from that checkpoint and compares it
 with the previous body at `70446c4`. Parsing and fixture loading happen outside
 the counted window. Eight frames span each authored looping Stand clip, with
 elapsed times spanning the longest stored GLBS duration. Three internal

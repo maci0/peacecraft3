@@ -22,9 +22,9 @@ does not restore capacity. This is an explicit recreation/resource policy, not
 a claim about native allocation or recycling. Tokens are scoped to the owning
 session; a raw `HandleId` is not cross-session authentication.
 
-This slice implements only creation and destruction. It does not assign timeout,
-clock, period, elapsed values or callbacks. Scheduling and time-query natives
-remain unsupported, and no timer can expire through this wrapper yet. Invalid,
+The initial arena slice implemented creation and destruction. Later
+[TimerStart checks](legacy-timer-start.md) qualify timing, queries and callback
+delivery separately. Invalid,
 null and wrong-family timer arguments refuse contextually;
 that refusal policy is not native exceptional-input parity. The native scheduler
 findings in [legacy-simulation-clock.md](legacy-simulation-clock.md) are unchanged;

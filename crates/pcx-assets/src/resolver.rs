@@ -286,12 +286,20 @@ impl Resolver {
     pub fn resolve(&self, value: &str) -> Result<ResolvedAsset, Error> {
         self.resolve_with_budget(value, None)
     }
-    /// Select the same winner as resolve, requiring a preallocation read contract.
-    /// No lower layer or unbounded read is used when the winner cannot honor it.
+    /// Resolve the winning source with a decoded-payload byte limit.
+    ///
+    /// Check cached bytes before cloning. For uncached data, the winning source
+    /// must enforce the decoded limit before allocation. Return its error if
+    /// it cannot do so.
     pub fn resolve_bounded(&self, value: &str, limit: u64) -> Result<ResolvedAsset, Error> {
         self.resolve_with_budget(value, Some(limit))
     }
-    /// Warm an immutable archive winner for subsequent ordinary reads. Loose overrides stay live.
+    /// Return the decoded byte count and retain archive winners for later reads.
+    ///
+    /// Overrides are read on demand at their mounted length. Cached archive
+    /// winners must fit each subsequent bounded read before being cloned.
+    /// A new archive entry is refused if it would exceed the shared cache limit
+    /// of 4,096 entries or 128 MiB of decoded bytes.
     pub fn preload_bounded(&self, value: &str, limit: u64) -> Result<usize, Error> {
         let asset = self.resolve_bounded(value, limit)?;
         let bytes = asset.bytes.len();
@@ -331,8 +339,7 @@ impl Resolver {
             cache.values().map(|asset| asset.bytes.len()).sum(),
         ))
     }
-    /// Release retained preload winners without touching loose overrides.
-    /// Asset-derived presentation timing owns when this runs; no bytes are invented.
+    /// Release retained archive winners and return their prior count and byte total.
     pub fn release_preloaded(&self) -> Result<(usize, usize), Error> {
         let mut cache = self
             .preloaded
@@ -416,8 +423,10 @@ impl Resolver {
         })
     }
 
-    /// Generate override/index.json, replacing the prior index only after all
-    /// paths have resolved and a complete temporary file has been written.
+    /// Write `index.json` in the mounted override directory.
+    ///
+    /// Resolve every path, then write and sync a temporary file before
+    /// replacing the previous index.
     pub fn write_index(&self) -> Result<PathBuf, Error> {
         let overrides = self.overrides.as_ref().ok_or_else(|| Error::MissingLayer {
             layer: "override directory".into(),

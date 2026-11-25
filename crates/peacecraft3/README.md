@@ -1,52 +1,59 @@
 # peacecraft3
 
-The launcher. Two front-ends over one mode model ([`launch`](src/launch.rs)) — a CLI
-for CI and scripts, and a GUI ([`launch_gui`](src/launch_gui.rs)) rendered on the
-engine it stages for — plus the wasm entry point that runs the same GUI in a
-browser ([`browser`](src/browser.rs)).
+This crate runs the native application, including its launcher, campaign and
+HUD, staging CLI and model viewer. It also provides the browser entry point
+for the launcher and local menu demo.
 
+Run the applicable command from the repository root. Replace the example
+paths with your local paths.
+
+```sh
+cargo run --locked -p peacecraft3
+cargo run --locked -p peacecraft3 -- launch sources "/path/to/install"
+cargo run --locked -p peacecraft3 -- launch plan 1.29b-tft-hd-vanilla
+cargo run --locked -p peacecraft3 -- launch stage 1.29b-tft-vanilla-vanilla "/path/to/install" "/path/to/destination"
+cargo run --locked -p peacecraft3 -- view "/path/to/install" "path/to/model.mdx"
 ```
-cargo run -p peacecraft3                        # launcher window
-cargo run -p peacecraft3 launch sources <path>  # classify a source
-cargo run -p peacecraft3 launch plan 1.29b-tft-hd-vanilla
-cargo run -p peacecraft3 launch stage 1.29b-tft-vanilla-vanilla <src> <dst>
-cargo run -p peacecraft3 -- view [install] <model> [--tile FOURCC] # explicit model/texture preview
-```
 
-## Building for the browser
+With no arguments, the native executable opens the launcher. See the
+[desktop build guide](../../docs/build-desktop.md) for packaged executables and
+the [root README](../../README.md) for local asset selection.
 
-The module needs wasm-bindgen glue — it imports wgpu's WebGL2 and winit's DOM
-functions through the wbindgen shim, so a bare `.wasm` is not instantiable. The
-crate is a binary target, so `cargo build` plus `wasm-bindgen` is enough; no
-`wasm-pack`, no bundler. Run these from the repository root:
+## Browser builds
 
-```
-cargo build -p peacecraft3 --target wasm32-unknown-unknown --release
+Follow the [Pages demo build guide](../../docs/pages-demo.md#build-and-package) to package and
+check the public demo. Publish the allowlisted package output. The development
+page is `web/index.html`. The public package uses `web/demo.html` as its
+`index.html`.
+
+For the local launcher with direct MPQ import, build the module and serve
+only the web directory on loopback. Use the `wasm-bindgen` CLI version listed
+in `Cargo.lock`. For installer import, also build the codec as shown in the
+Pages guide.
+
+```sh
+cargo build --locked --release -p peacecraft3 --target wasm32-unknown-unknown
 wasm-bindgen --target web --out-dir web/pkg \
-    target/wasm32-unknown-unknown/release/peacecraft3.wasm
-
-python3 -m http.server 8765            # from the repository root
-# open http://127.0.0.1:8765/web/index.html
+  target/wasm32-unknown-unknown/release/peacecraft3.wasm
+python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Both build commands were run to produce this file; the `python3 -m http.server`
-line is the same server the verification below used. Serve the repository root
-(not `web/`) so that `pkg/` is fetchable alongside the page.
+Open `http://127.0.0.1:8765/`.
 
-`web/` holds the shell: `index.html` provides `#launcher-canvas`, which is what
-winit attaches the window to, and `loader.js` instantiates the module and wires
-the archive picker. `web/pkg/` is generated — it is gitignored.
+The workspace enables WebGL2. In a browser window, the
+[entry point](src/browser.rs) starts Bevy on the configured
+`#launcher-canvas`. A worker has no window and runs only the asset API. The browser
+uses an in-memory asset reader for user-selected data. The separate ISO import
+path runs the installer decoder in a worker. Native directory staging stays on
+desktop.
 
-`cargo build` produces the module for `wasm32-unknown-unknown`; `wasm-bindgen
---target web` then emits the glue and a `.wasm` with the wbindgen imports
-resolved. The renderer is the WebGL2 backend that `bevy`'s default features
-select on wasm32 (Chrome, Edge, recent Firefox). `bevy`'s `webgpu` feature would
-select the WebGPU backend instead and is deliberately not enabled here — an
-unstable API on most browsers as of this writing.
+<details>
+<summary>October 2026 launcher measurements</summary>
 
-## How big the release wasm is
+## WASM size measurements
 
-Measured on the release build produced by the commands above, 2026-10-12:
+Measured on 12 October 2026 with the earlier development launcher build.
+The current Pages package uses the separate release recipe.
 
 | Artifact | Size |
 |---|---|
@@ -67,26 +74,10 @@ Section breakdown of `web/pkg/peacecraft3_bg.wasm` (75,887,489 B total):
 | `export` | 2,070 | 0.00 | 0.00% |
 | `target_features`, `producers` (custom) | 289 | 0.00 | 0.00% |
 
-It is still very large, and **the `name` custom section is 38.7% of it** — 28 MiB
-of symbol names for 106,791 functions. That section exists only to make stack
-traces readable; dropping it changes no behaviour. A debug build is far worse —
-975,009,181 B (929.84 MiB) — because DWARF dominates it: `.debug_str` 311 MiB,
-`.debug_info` 293 MiB, `.debug_loc` 125 MiB, `.debug_line` 55 MiB,
-`.debug_ranges` 33 MiB.
-
-### Making it smaller yourself
-
-`wasm-bindgen` removes the section without touching the build profile:
-
-```
-wasm-bindgen --target web --remove-name-section --out-dir web/pkg \
-    target/wasm32-unknown-unknown/release/peacecraft3.wasm
-```
-
-That yields `web/pkg/peacecraft3_bg.wasm` at **46,520,408 B (44.37 MiB)**, a
-38.7% reduction. Verified: the stripped module boots, the launcher GUI renders
-all four mode axes, the JS API answers, and `war3.mpq` opens in 96.8 ms — the
-same numbers as the unstripped build. The only loss is readable stack traces.
+The name section held 28.01 MiB of symbols for 106,791 functions. Removing it
+reduced the measured module to 46,520,408 bytes. The stripped module still
+started, drew the four mode axes, and opened the local MPQ in 96.8 ms. The
+development artifact was 975,009,181 bytes, dominated by DWARF and names.
 
 If the server compresses responses, the win is smaller than the raw percentage
 suggests, because the `name` section is highly repetitive text:
@@ -99,31 +90,17 @@ suggests, because the `name` section is highly repetitive text:
 `python3 -m http.server` does not compress, so the numbers above measure the
 module itself, not what a compressing host would send.
 
-The workspace `[profile.release]` does not set `strip`, so every build keeps the
-names. Changing that would edit the workspace `Cargo.toml`, which this crate does
-not own; the flag above is the user's own lever.
+The same profile attributed 7.78 MB across 49,302 functions to
+`bevy_reflect`. The next largest measured contributions were `web_sys`
+(4.24 MB, 660 functions), `serde_core` (2.36 MB, 6,459), `bevy_ecs`
+(2.11 MB, 3,313) and `bevy_render` (1.92 MB, 4,243).
 
-What *still* blocks a smaller binary, and cannot be fixed by stripping:
+## Earlier launcher browser check
 
-* **`code` is 39.2 MiB and is the real floor.** Attributing the code section by
-  the `name` entries across the 106,791 functions puts **`bevy_reflect` at
-  7.78 MB over 49,302 functions** — by far the largest single contributor, ahead
-  of `web_sys` (4.24 MB / 660), `serde_core` (2.36 MB / 6,459), `bevy_ecs`
-  (2.11 MB / 3,313) and `bevy_render` (1.92 MB / 4,243). The whole Bevy engine
-  is linked, monomorphised, and generic; nothing is tree-shaken at the Cargo
-  level. Dropping `bevy_reflect`'s unwrap-through-`Any` paths, or Bevy's
-  default features, is the only way below this, and that is a Bevy-side decision.
-* **`data` is 4.78 MiB** — read-only constant tables, which is the price of the
-  engine's built-in font, palette and geometry staying inside the module.
-* The release profile already emits no DWARF (`b".debug_"` is absent from the
-  release artifact), so there is nothing further to strip on that axis.
-
-## What runs in a browser
-
-Verified in headless Chromium 153 against the real 440,825,847-byte
+The October prototype check used headless Chromium 153 and the local 440,825,847-byte
 `wc3/game/app/war3.mpq`:
 
-| Feature | In a browser |
+| Feature | Prototype observation |
 |---|---|
 | The launcher GUI, all four mode axes, the log | works — rendered on WebGL2 via the `#launcher-canvas` element |
 | Mode summary, `1.29b-tft-vanilla-vanilla` | works — shown as `staged as 1.29b-tft-vanilla-vanilla` |
@@ -137,46 +114,4 @@ Verified in headless Chromium 153 against the real 440,825,847-byte
 | `pcx_gfx`'s viewer and cache | **does not work** — the cache is still synchronous, per PLAN.md §3.8 |
 | Audio | initialises an `AudioContext` and warns that it needs a user gesture; nothing plays |
 
-The wasm API the page can call is `add_archive(name, bytes)`,
-`add_asset(path, bytes)`, `stored_assets()`, `drop_assets()` and `selftest()`,
-plus the `#[wasm_bindgen(start)]` entry point that runs the launcher. `web/loader.js`
-exposes them on `window.peacecraft3` for the console.
-
-How the table above was established: the page was served with
-`python3 -m http.server` from the repository root and driven over the Chrome
-DevTools Protocol in headless Chromium 153, so the log contents and timings
-quoted are observed values from that run, not claims from reading the source.
-The mode axes, the log, and the archive summary in the screenshots are what the
-`#launcher-canvas` element actually rendered.
-
-## Why the entry point is not `main`
-
-`main` ends in `std::process::exit`, and wasm has no process to exit. The browser
-boots from `browser::start`, a `#[wasm_bindgen(start)]` function that runs the
-Bevy app and returns. `start` checks for a DOM first: without one there is
-nothing for winit to attach a window to, and the module still answers its asset
-API rather than trapping mid-initialisation.
-
-## Two things that only bite on wasm
-
-* **A re-entrant `std::sync::Mutex` panics.** On `wasm32-unknown-unknown` `std`'s
-  mutex is single-threaded and turns a second lock on the same thread into an
-  `assert!` rather than a deadlock, so the same mistake that hangs a desktop build
-  traps here. `browser::held()` documents it; hold the guard in a binding.
-* **No cross-thread work.** Nothing in the browser path spawns a task, so the
-  launcher runs on the main thread and a long decode blocks the page. A 440 MB
-  archive takes ~90 ms cold and ~27 ms once the page is warm, which is fine; a
-  real staging pass would not be.
-
-## Caveats
-
-* **`pcx-net`'s UDP transport is compiled out on wasm.** `transport` is behind
-  `#[cfg(not(target_arch = "wasm32"))]` (`crates/pcx-net/src/lib.rs`), because a
-  browser has no UDP to bind and a build that fails to link on `std::net` is worse
-  than one that simply has no transport. `pcx-net` is not currently a dependency
-  of this crate, so the launcher does not link it; the gate matters for whatever
-  eventually adds multiplayer.
-* **The renderer needs a GPU that speaks WebGL2.** A software adapter (SwiftShader
-  under headless Chromium) works but logs `GPU preprocessing is not supported`,
-  and disables SSAO, atmosphere, order-independent transparency and depth of field.
-  On such a device the GUI still renders and the API still answers.
+</details>

@@ -76,9 +76,8 @@ open. No native game process was launched.
 
 
 The later [source-bounded player setup](script-player-setup.md) executes those
-player assignments in the same retained context. The next actual config boundary
-is `SetStartLocPrioCount` at map-script line 7765. Completed placement, config/main
-and launcher wiring remain open.
+player assignments in the same retained context. That probe stopped at `SetStartLocPrioCount` at map-script line 7765. The
+follow-up below records when `config` completed.
 
 
 The [start-priority slice](script-start-priorities.md) retains declared lists and

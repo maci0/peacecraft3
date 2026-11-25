@@ -37,9 +37,9 @@ Output growth checks the byte ceiling, platform array layout and fallible
 reservation before each append. Errors return no generated source. The CLI
 prints source only after successful generation, so a refusal does not print a
 partial RPL. Its unit/action ceilings are resource policy (1,024/16,384), not
-native limits. Its tenth argument is a work budget, not a tick limit, so the
-tick ceiling is the request itself and a refusal the budget cannot afford
-names the work it costs (`work requires 132, limit is 131`) rather than a tick
+native limits. `MAX_WORK` caps the work estimate and `MAX_BYTES` caps emitted source bytes.
+The tick ceiling is the requested count. A work-budget refusal reports the
+required work (`work requires 132, limit is 131`) rather than a tick
 limit the caller never set. These limits do not bound all runner/oracle
 allocations, validation time or wall-clock work. In particular, fix-ID duplicate
 checking is quadratic in the explicitly capped fix-row count.
