@@ -53,7 +53,7 @@ compared with the original client.
 
 ## Status
 
-Current release: [0.19.0](docs/releases/0.19.0.md).
+Current release: [0.20.0](docs/releases/0.20.0.md).
 
 The 0.6.0 runs reached authored Victory in Human01 and Human02. See the
 [tracker](TRACKER.md) for those run scopes. The
