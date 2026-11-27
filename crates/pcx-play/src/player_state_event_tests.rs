@@ -1179,3 +1179,228 @@ fn lumber_credit_reserves_pending_and_both_state_events_together() {
     }
     assert!(h.take_fired_event().is_none());
 }
+
+#[test]
+fn synchronous_condition_mutations_and_action_selection_match_selected_client() {
+    let mut common = common(0);
+    let at = common.find("type playerstate extends handle").unwrap();
+    common.insert_str(at, &format!("{CONDITIONS}{}", "native TriggerRemoveCondition takes trigger t, triggercondition c returns nothing\nnative TriggerClearConditions takes trigger t returns nothing\nnative TriggerClearActions takes trigger t returns nothing\n"));
+    for &(setup, trace, actions) in super::CONDITION_MUTATION_CASES {
+        let map = format!(
+            "{}\nfunction main takes nothing returns integer\nlocal player p = Player(0)\ncall SetPlayerState(p, PLAYER_STATE_RESOURCE_GOLD, 0)\nset T = CreateTrigger()\ncall TriggerAddAction(T, function action)\n{setup}\ncall TriggerRegisterPlayerStateEvent(T, p, PLAYER_STATE_RESOURCE_GOLD, GREATER_THAN, 1.0)\ncall SetPlayerState(p, PLAYER_STATE_RESOURCE_GOLD, 2)\nreturn trace * 100 + actions\nendfunction\n",
+            super::CONDITION_MUTATION_FUNCTIONS
+        );
+        let (ctx, host) = base_map(&common, &map);
+        let host = host
+            .with_conditions(crate::playercolor_host::ConditionBudget { max_records: 16 })
+            .unwrap()
+            .with_trigger_conditions(16)
+            .unwrap()
+            .with_player_state_events(4)
+            .unwrap();
+        let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+        vm.init_globals().unwrap();
+        assert_eq!(
+            vm.call("main", &[]).unwrap(),
+            Value::Int(trace * 100 + actions),
+            "{setup}"
+        );
+        assert_eq!(vm.global("trace"), Value::Int(trace), "{setup}");
+        assert_eq!(vm.global("actions"), Value::Int(actions), "{setup}");
+        assert!(vm.host().inner.take_fired_event().is_none());
+        assert_eq!(
+            vm.host().inner.native("GetTriggeringTrigger", &[]).unwrap(),
+            Value::Null
+        );
+        assert_eq!(vm.host().inner.synchronous_frame_depth(), 0);
+    }
+}
+
+#[test]
+fn synchronous_filter_rejection_remains_separate_from_condition_folding() {
+    let mut common = common(0);
+    let at = common.find("type playerstate extends handle").unwrap();
+    common.insert_str(at, CONDITIONS);
+    for (allowed, trace) in [(false, 1), (true, 11)] {
+        let map = format!(
+            "globals
+trigger T = null
+integer trace = 0
+endglobals
+function gate takes nothing returns boolean
+set trace = trace + 1
+return {allowed}
+endfunction
+function predicate takes nothing returns boolean
+set trace = trace + 10
+return false
+endfunction
+function action takes nothing returns nothing
+set trace = trace + 100
+endfunction
+function main takes nothing returns nothing
+set T = CreateTrigger()
+call TriggerAddCondition(T, Condition(function predicate))
+call TriggerAddAction(T, function action)
+call TriggerRegisterPlayerStateEvent(T, Player(0), PLAYER_STATE_RESOURCE_GOLD, GREATER_THAN, 1.0)
+endfunction
+"
+        );
+        let (ctx, host) = base_map(&common, &map);
+        let host = host
+            .with_conditions(crate::playercolor_host::ConditionBudget { max_records: 1 })
+            .unwrap()
+            .with_trigger_conditions(1)
+            .unwrap()
+            .with_player_state_events(1)
+            .unwrap();
+        let mut vm = Arc::clone(&ctx.scripts).owned_vm(host);
+        vm.init_globals().unwrap();
+        vm.call("main", &[]).unwrap();
+        let p = vm.host().inner.native("Player", &[Value::Int(0)]).unwrap();
+        let gold = vm.global("PLAYER_STATE_RESOURCE_GOLD");
+        vm.host()
+            .inner
+            .native("SetPlayerState", &[p, gold, Value::Int(2)])
+            .unwrap();
+        let mut event = vm.host().inner.take_fired_event().unwrap();
+        // Synthetic filter injection exercises the shared delivery gate, not a player-state ABI.
+        event.filter = Some(ctx.scripts.program().function_id("gate").unwrap());
+        let mut call = vm
+            .host()
+            .inner
+            .begin_synchronous_events([event].into())
+            .unwrap();
+        loop {
+            match call {
+                pcx_script::ScriptCall::Call(id) => {
+                    let name = &ctx.scripts.program().functions()[id.index()].name;
+                    let value = vm.call(name, &[]).unwrap();
+                    call = vm.host().inner.continue_script_call(value).unwrap();
+                }
+                pcx_script::ScriptCall::Return(Value::Null) => break,
+                _ => panic!("a rejected filter or false predicate must not run actions"),
+            }
+        }
+        assert_eq!(vm.global("trace"), Value::Int(trace));
+        assert_eq!(vm.host().inner.synchronous_frame_depth(), 0);
+        assert_eq!(
+            vm.host().inner.native("GetTriggeringTrigger", &[]).unwrap(),
+            Value::Null
+        );
+    }
+}
+
+fn queued_condition_session(
+    setup: &str,
+) -> crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost> {
+    let mut common = common(0);
+    let at = common.find("type playerstate extends handle").unwrap();
+    common.insert_str(at, &format!("{CONDITIONS}{}{}", super::CONDITION_SESSION_NEUTRAL_DECLARATIONS, "native TriggerRemoveCondition takes trigger t, triggercondition c returns nothing\nnative TriggerClearConditions takes trigger t returns nothing\nnative TriggerClearActions takes trigger t returns nothing\n"));
+    let map = format!(
+        "{}\nfunction main takes nothing returns nothing\ncall SetPlayerState(Player(0), PLAYER_STATE_RESOURCE_GOLD, 0)\nset T = CreateTrigger()\ncall TriggerAddAction(T, function action)\n{setup}\ncall TriggerRegisterPlayerStateEvent(T, Player(0), PLAYER_STATE_RESOURCE_GOLD, GREATER_THAN, 1.0)\nendfunction\n",
+        super::CONDITION_MUTATION_FUNCTIONS
+    );
+    let (ctx, host) = base_map(&common, &map);
+    let host = host
+        .with_conditions(crate::playercolor_host::ConditionBudget { max_records: 16 })
+        .unwrap()
+        .with_trigger_conditions(16)
+        .unwrap()
+        .with_player_state_events(4)
+        .unwrap();
+    let mut session = super::publish_condition_session(ctx, host);
+    let gold = session.global("PLAYER_STATE_RESOURCE_GOLD").unwrap();
+    let host = session.host().unwrap().objects_mut();
+    let p = host.native("Player", &[Value::Int(0)]).unwrap();
+    // A projection-style host mutation queues delivery outside a script native call.
+    host.native("SetPlayerState", &[p, gold, Value::Int(2)])
+        .unwrap();
+    session
+}
+
+#[test]
+fn queued_state_event_conditions_and_actions_follow_live_registrations() {
+    for &(setup, trace, actions) in super::CONDITION_MUTATION_CASES {
+        let mut session = queued_condition_session(setup);
+        assert_eq!(session.global("trace"), Some(Value::Int(0)));
+        assert_eq!(session.global("actions"), Some(Value::Int(0)));
+        session.advance_queued_events(128).unwrap();
+        assert_eq!(session.global("trace"), Some(Value::Int(trace)), "{setup}");
+        assert_eq!(
+            session.global("actions"),
+            Some(Value::Int(actions)),
+            "{setup}"
+        );
+        let host = session.host().unwrap().objects_mut();
+        assert!(host.take_fired_event().is_none());
+        assert_eq!(
+            host.native("GetTriggeringTrigger", &[]).unwrap(),
+            Value::Null
+        );
+    }
+}
+
+#[test]
+fn queued_delivery_charges_live_callbacks_and_actions_before_running_the_action_thread() {
+    use crate::map_script_session::TimerSessionError;
+    for (setup, work, exhausted, trace, actions) in [
+        (
+            "call TriggerAddCondition(T, Condition(function appendAction))",
+            2,
+            true,
+            3,
+            0,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function appendAction))",
+            3,
+            false,
+            3,
+            11,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function no))\ncall TriggerAddCondition(T, Condition(function yes))",
+            2,
+            true,
+            5,
+            0,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function no))\ncall TriggerAddCondition(T, Condition(function yes))",
+            3,
+            false,
+            57,
+            0,
+        ),
+        ("", 0, true, 0, 0),
+        ("", 1, false, 0, 1),
+    ] {
+        let mut session = queued_condition_session(setup);
+        let result = session.advance_queued_events(work);
+        if exhausted {
+            assert!(
+                matches!(result, Err(TimerSessionError::RangeBudget)),
+                "{setup}: {result:?}"
+            );
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(session.global("trace"), Some(Value::Int(trace)), "{setup}");
+        assert_eq!(
+            session.global("actions"),
+            Some(Value::Int(actions)),
+            "{setup}"
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native("GetTriggeringTrigger", &[])
+                .unwrap(),
+            Value::Null
+        );
+        assert_eq!(session.advance_queued_events(128).unwrap(), 0);
+    }
+}

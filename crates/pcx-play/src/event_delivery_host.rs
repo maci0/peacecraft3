@@ -6,8 +6,8 @@
 //! including nested mutations inside trigger callbacks. Other events defer to
 //! the next boundary. Player-state callback ordering is covered by the native
 //! nested-mutation and sleeping-action observations.
-use super::{Entry, Error, Failure, ObjectHost, TriggerDelivery};
-use pcx_script::{HandleId, Value, value::FunctionId};
+use super::{Entry, Error, Failure, NativeCallback, ObjectHost, TriggerDelivery};
+use pcx_script::{HandleId, ScriptCall, Value, value::FunctionId};
 use std::collections::{BTreeSet, VecDeque};
 
 /// Event responses readable by the delivered thread.
@@ -69,6 +69,7 @@ pub struct FiredEvent {
     pub filter: Option<FunctionId>,
     pub subject: EventSubject,
     event: Option<HandleId>,
+    pub(crate) region: bool,
 }
 
 #[derive(Default)]
@@ -81,8 +82,15 @@ pub(super) struct Delivery {
     previous: Vec<DeliveryContext>,
     /// Region registrations by arena event handle, with the units inside.
     region_members: BTreeSet<(HandleId, HandleId)>,
-    /// Registrations whose membership was initialized without firing.
-    region_known: BTreeSet<HandleId>,
+    /// Timer-observed movement waits for its physical notification boundary.
+    region_interpolated: BTreeSet<HandleId>,
+    region_mutation: Option<VecDeque<FiredEvent>>,
+}
+
+pub(super) struct RegionFilterFrame {
+    result: Value,
+    events: VecDeque<FiredEvent>,
+    pub(super) active: Option<FiredEvent>,
 }
 
 struct DeliveryContext {
@@ -131,12 +139,30 @@ impl ObjectHost {
     pub(crate) fn event_callback_depth(&self) -> usize {
         self.events.previous.len()
     }
+    fn pending_region_filters(&self) -> usize {
+        self.events
+            .region_mutation
+            .as_ref()
+            .map_or(0, VecDeque::len)
+            + self
+                .callbacks
+                .iter()
+                .map(|frame| match frame {
+                    NativeCallback::Region(frame) => {
+                        frame.events.len() + usize::from(frame.active.is_some())
+                    }
+                    _ => 0,
+                })
+                .sum::<usize>()
+    }
+
     pub(super) fn reserve_game_event_delivery(&mut self, count: usize) -> Result<(), Error> {
         let pending = self
             .events
             .queue
             .len()
-            .checked_add(self.events.synchronous.as_ref().map_or(0, |q| q.len()));
+            .checked_add(self.events.synchronous.as_ref().map_or(0, |q| q.len()))
+            .and_then(|n| n.checked_add(self.pending_region_filters()));
         if pending
             .and_then(|n| n.checked_add(count))
             .is_none_or(|n| n > self.inner.max_handles)
@@ -147,6 +173,10 @@ impl ObjectHost {
             ));
         }
         self.reserve_event_delivery(count)
+    }
+
+    pub(crate) fn has_queued_region_events(&self) -> bool {
+        self.events.queue.iter().any(|event| event.region)
     }
 
     pub(crate) fn has_queued_training_events(&self) -> bool {
@@ -258,6 +288,7 @@ impl ObjectHost {
             filter,
             subject,
             event,
+            region: false,
         };
         match &mut self.events.synchronous {
             Some(queue) => queue.push_back(fired),
@@ -289,8 +320,53 @@ impl ObjectHost {
             filter,
             subject,
             event,
+            region: false,
         });
         Ok(())
+    }
+
+    pub(crate) fn begin_queued_region_filter(
+        &mut self,
+        fired: FiredEvent,
+    ) -> Result<FunctionId, Error> {
+        if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error("region filter", Failure::Budget("nested native callbacks")));
+        }
+        self.callbacks
+            .try_reserve(1)
+            .map_err(|_| self.inner.error("region filter", Failure::Capacity))?;
+        let function = fired.filter.expect("queued region predicate");
+        self.callbacks
+            .push(NativeCallback::Region(Box::new(RegionFilterFrame {
+                result: Value::Null,
+                events: VecDeque::new(),
+                active: Some(fired),
+            })));
+        Ok(function)
+    }
+
+    pub(crate) fn finish_queued_region_filter(&mut self) -> Option<FiredEvent> {
+        if !matches!(self.callbacks.last(), Some(NativeCallback::Region(_))) {
+            return None;
+        }
+        let Some(NativeCallback::Region(frame)) = self.callbacks.pop() else {
+            unreachable!()
+        };
+        frame.active
+    }
+
+    pub(crate) fn restore_fired_event(&mut self, event: FiredEvent) {
+        self.events.queue.push_front(event);
+    }
+
+    pub(crate) fn take_region_event(&mut self) -> Option<FiredEvent> {
+        if self.events.queue.front().is_some_and(|event| event.region) {
+            self.events.queue.pop_front()
+        } else {
+            None
+        }
     }
 
     pub fn take_fired_event(&mut self) -> Option<FiredEvent> {
@@ -662,9 +738,309 @@ impl ObjectHost {
         Some(Ok(value.map_or(Value::Null, Value::Handle)))
     }
 
-    /// Fire enter/leave events from current membership of shown, live units in
-    /// each registered region. A region contains a point inside any of its
-    /// rectangles (native cell cover unqualified).
+    pub(crate) fn has_region_subscriptions(&self) -> bool {
+        !self.inner.region_event_slots.is_empty()
+    }
+
+    pub(super) fn region_unit_mutator(name: &str) -> bool {
+        matches!(
+            name,
+            "CreateUnit"
+                | "CreateUnitAtLoc"
+                | "CreateCorpse"
+                | "CreateBlightedGoldmine"
+                | "SetUnitPosition"
+                | "SetUnitPositionLoc"
+                | "ShowUnit"
+                | "ReviveHero"
+                | "ReviveHeroLoc"
+        )
+    }
+
+    /// Owned-VM mutations run filters before returning, without installing the
+    /// later condition/action thread's event context.
+    pub(super) fn begin_region_unit_call(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<ScriptCall>, String> {
+        if !Self::region_unit_mutator(name) || !self.has_region_subscriptions() {
+            return Ok(None);
+        }
+        if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
+            return Err(self
+                .inner
+                .error(name, Failure::Budget("nested native callbacks"))
+                .to_string());
+        }
+        self.callbacks
+            .try_reserve(1)
+            .map_err(|_| self.inner.error(name, Failure::Capacity).to_string())?;
+        self.events.region_mutation = Some(VecDeque::new());
+        let result = pcx_script::Host::native(self, name, args);
+        let events = self
+            .events
+            .region_mutation
+            .take()
+            .expect("region mutation batch");
+        let result = result?;
+        if events.is_empty() {
+            return Ok(Some(ScriptCall::Return(result)));
+        }
+        self.callbacks
+            .push(NativeCallback::Region(Box::new(RegionFilterFrame {
+                result,
+                events,
+                active: None,
+            })));
+        self.next_region_filter()
+            .map(Some)
+            .map_err(|e| e.to_string())
+    }
+
+    fn next_region_filter(&mut self) -> Result<ScriptCall, Error> {
+        loop {
+            let Some(NativeCallback::Region(frame)) = self.callbacks.last_mut() else {
+                return Err(self.inner.error("region filter", Failure::Identity));
+            };
+            let Some(event) = frame.events.pop_front() else {
+                let Some(NativeCallback::Region(frame)) = self.callbacks.pop() else {
+                    unreachable!()
+                };
+                return Ok(ScriptCall::Return(frame.result));
+            };
+            if let Some(function) = event.filter {
+                frame.active = Some(event);
+                return Ok(ScriptCall::Call(function));
+            }
+            self.events.queue.push_back(event);
+        }
+    }
+
+    pub(super) fn continue_region_filter(&mut self, value: Value) -> Result<ScriptCall, Error> {
+        let Value::Bool(accepted) = value else {
+            return Err(self.inner.error(
+                "region filter",
+                Failure::RegionState("filter did not return boolean"),
+            ));
+        };
+        let Some(NativeCallback::Region(frame)) = self.callbacks.last_mut() else {
+            return Err(self.inner.error("region filter", Failure::Identity));
+        };
+        let mut event = frame.active.take().expect("active region filter");
+        if accepted {
+            event.filter = None;
+            self.events.queue.push_back(event);
+        }
+        self.next_region_filter()
+    }
+
+    pub(super) fn current_region_units(&self, region: HandleId) -> Result<Vec<HandleId>, Error> {
+        let mut members = Vec::new();
+        for (unit, record) in self.executed_units() {
+            if let Some(point) = record.position
+                && self.region_contains_point(region, point, "region registration")?
+            {
+                members.push(unit);
+            }
+        }
+        Ok(members)
+    }
+
+    pub(super) fn seed_region_event(&mut self, event: HandleId, units: Vec<HandleId>) {
+        self.events.region_members.retain(|(id, _)| *id != event);
+        self.events
+            .region_members
+            .extend(units.into_iter().map(|unit| (event, unit)));
+    }
+
+    pub(super) fn observe_region_mutation(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        result: &Value,
+    ) -> Result<(), Error> {
+        if !self.has_region_subscriptions() {
+            return Ok(());
+        }
+        if name == "RemoveUnit" {
+            if let Some(Value::Handle(unit)) = args.first() {
+                self.events.region_interpolated.remove(unit);
+            }
+            return Ok(());
+        }
+        if matches!(
+            name,
+            "RegionAddRect"
+                | "RegionClearRect"
+                | "RegionAddCell"
+                | "RegionAddCellAtLoc"
+                | "RegionClearCell"
+                | "RegionClearCellAtLoc"
+        ) {
+            if let Some(Value::Handle(region)) = args.first() {
+                let events: Vec<_> = self
+                    .inner
+                    .region_event_slots
+                    .iter()
+                    .filter_map(|&slot| {
+                        if let Entry::RegisteredRegionEvent(record) = &self.inner.arena[slot]
+                            && record.region == *region
+                        {
+                            Some(self.inner.id(slot, name).map(|id| (id, record.region)))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
+                for (event, region) in events {
+                    let units = self.current_region_units(region)?;
+                    self.seed_region_event(event, units);
+                }
+            }
+            return Ok(());
+        }
+        if !Self::region_unit_mutator(name) {
+            return Ok(());
+        }
+        let unit = if matches!(
+            name,
+            "CreateUnit" | "CreateUnitAtLoc" | "CreateCorpse" | "CreateBlightedGoldmine"
+        ) {
+            result
+        } else {
+            args.first().unwrap_or(&Value::Null)
+        };
+        let Value::Handle(unit) = unit else {
+            return Ok(());
+        };
+        let Entry::Unit { record } = self.inner.entry(*unit)? else {
+            return Ok(());
+        };
+        let Some(point) = record.position else {
+            return Ok(());
+        };
+        self.capture_region_position(*unit, point, name, None)
+    }
+
+    pub(super) fn capture_region_motion(
+        &mut self,
+        unit: HandleId,
+        from: [f32; 2],
+        to: [f32; 2],
+        work: &mut usize,
+    ) -> Result<(), Error> {
+        if from == to || !self.has_region_subscriptions() {
+            return Ok(());
+        }
+        if self.region_motion_is_interpolated() {
+            self.events.region_interpolated.insert(unit);
+            return Ok(());
+        }
+        self.capture_region_position(unit, to, "region motion", Some(work))
+    }
+
+    pub(super) fn flush_region_motion_positions(&mut self, work: &mut usize) -> Result<(), Error> {
+        let units: Vec<_> = self.events.region_interpolated.iter().copied().collect();
+        for unit in units {
+            *work = work.checked_sub(1).ok_or_else(|| {
+                self.inner
+                    .error("region motion", Failure::Budget("pending region positions"))
+            })?;
+            let point = match self.inner.entry(unit)? {
+                Entry::Unit { record } => record.position,
+                _ => None,
+            };
+            if let Some(point) = point {
+                self.capture_region_position(unit, point, "region motion", Some(work))?;
+            } else {
+                self.events.region_interpolated.remove(&unit);
+            }
+        }
+        Ok(())
+    }
+
+    fn capture_region_position(
+        &mut self,
+        unit: HandleId,
+        point: [f32; 2],
+        name: &str,
+        mut work: Option<&mut usize>,
+    ) -> Result<(), Error> {
+        self.events.region_interpolated.remove(&unit);
+        let mut changed = Vec::new();
+        for &slot in &self.inner.region_event_slots {
+            if let Some(work) = work.as_deref_mut() {
+                *work = work.checked_sub(1).ok_or_else(|| {
+                    self.inner
+                        .error(name, Failure::Budget("region motion scan"))
+                })?;
+            }
+            let Entry::RegisteredRegionEvent(record) = &self.inner.arena[slot] else {
+                continue;
+            };
+            if matches!(self.inner.entry(record.trigger)?, Entry::DeadTrigger)
+                || matches!(
+                    self.inner.entry(record.region)?,
+                    Entry::RemovedRegion { .. }
+                )
+            {
+                continue;
+            }
+            let event = self.inner.id(slot, name)?;
+            let before = self.events.region_members.contains(&(event, unit));
+            let inside = self.region_contains_point(record.region, point, name)?;
+            changed.push((event, *record, before, inside));
+        }
+        let count = changed
+            .iter()
+            .filter(|(_, record, before, inside)| {
+                before != inside && (*inside == (record.kind == super::RegionEventKind::Enter))
+            })
+            .count();
+        self.reserve_game_event_delivery(count)?;
+        self.events
+            .queue
+            .try_reserve(self.pending_region_filters() + count)
+            .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        if let Some(events) = &mut self.events.region_mutation {
+            events
+                .try_reserve(count)
+                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+        }
+        for (id, record, before, inside) in changed {
+            if inside {
+                self.events.region_members.insert((id, unit));
+            } else {
+                self.events.region_members.remove(&(id, unit));
+            }
+            if before == inside || inside != (record.kind == super::RegionEventKind::Enter) {
+                continue;
+            }
+            self.queue_event(
+                record.trigger,
+                record.filter,
+                EventSubject {
+                    unit: Some(unit),
+                    ..EventSubject::default()
+                },
+                self.region_event_id(record.kind),
+            )?;
+            self.events
+                .queue
+                .back_mut()
+                .expect("captured region event")
+                .region = true;
+            if let Some(events) = &mut self.events.region_mutation {
+                events.push_back(self.events.queue.pop_back().expect("captured region event"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Sample fallback crossings from current membership of retained units in
+    /// each registered region, using the same selected cell or fallback predicate
+    /// as point and location queries.
     pub fn poll_region_events(&mut self, work: &mut usize) -> Result<usize, Error> {
         let name = "region delivery";
         if self.regions.is_none() || self.trigger_runtime.is_none() {
@@ -672,7 +1048,13 @@ impl ObjectHost {
         }
         let mut registrations = Vec::new();
         for &index in &self.inner.region_event_slots {
-            if let Entry::RegisteredRegionEvent(record) = &self.inner.arena[index] {
+            if let Entry::RegisteredRegionEvent(record) = &self.inner.arena[index]
+                && !matches!(self.inner.entry(record.trigger)?, Entry::DeadTrigger)
+                && !matches!(
+                    self.inner.entry(record.region)?,
+                    Entry::RemovedRegion { .. }
+                )
+            {
                 let id = self.inner.id(index, name)?;
                 registrations.push((id, *record));
             }
@@ -682,38 +1064,32 @@ impl ObjectHost {
         }
         let mut units = Vec::new();
         for (id, unit) in self.executed_units() {
-            if let (true, Some(position)) = (unit.shown, unit.position)
-                && unit.vitals.is_none_or(|v| v.life > 0.0)
-            {
+            if let Some(position) = unit.position {
                 units.push((id, position));
             }
         }
         let mut members = BTreeSet::new();
         let mut fired = Vec::new();
         for (event, record) in &registrations {
-            let Entry::Region { additions } = self.inner.entry(record.region)? else {
-                return Err(self.inner.error(name, Failure::WrongFamily));
-            };
             for &(unit, [x, y]) in &units {
                 *work = work
                     .checked_sub(1)
                     .ok_or_else(|| self.inner.error(name, Failure::Budget("region scan")))?;
-                let inside = additions.iter().any(|r| {
-                    let [min_x, min_y, max_x, max_y] = r.bounds;
-                    (min_x..=max_x).contains(&x) && (min_y..=max_y).contains(&y)
-                });
+                if self.events.region_interpolated.contains(&unit) {
+                    if self.events.region_members.contains(&(*event, unit)) {
+                        members.insert((*event, unit));
+                    }
+                    continue;
+                }
+                let inside = self.region_contains_point(record.region, [x, y], name)?;
                 if inside {
                     members.insert((*event, unit));
                 }
             }
         }
         for (event, record) in &registrations {
-            // ponytail: membership seeds silently at a registration's first poll,
-            // so units already inside at registration do not fire; units created
-            // between registration and that poll are missed (none in Human01's main).
-            if self.events.region_known.insert(*event) {
-                continue;
-            }
+            // shortcut: changes outside script mutators and activity movement
+            // still rely on boundary sampling.
             let changed: Vec<HandleId> = match record.kind {
                 super::RegionEventKind::Enter => members
                     .iter()
@@ -724,22 +1100,36 @@ impl ObjectHost {
                     .events
                     .region_members
                     .iter()
-                    .filter(|m| m.0 == *event && !members.contains(m))
+                    .filter(|m| {
+                        m.0 == *event
+                            && !members.contains(m)
+                            && matches!(self.inner.entry(m.1), Ok(Entry::Unit { .. }))
+                    })
                     .map(|m| m.1)
                     .collect(),
             };
             for unit in changed {
-                fired.push((record.trigger, record.filter, unit));
+                fired.push((
+                    record.trigger,
+                    record.filter,
+                    unit,
+                    self.region_event_id(record.kind),
+                ));
             }
         }
         self.events.region_members = members;
         let count = fired.len();
-        for (trigger, filter, unit) in fired {
+        for (trigger, filter, unit, event) in fired {
             let subject = EventSubject {
                 unit: Some(unit),
                 ..EventSubject::default()
             };
-            self.queue_event(trigger, filter, subject, None)?;
+            self.queue_event(trigger, filter, subject, event)?;
+            self.events
+                .queue
+                .back_mut()
+                .expect("polled region event")
+                .region = true;
         }
         Ok(count)
     }

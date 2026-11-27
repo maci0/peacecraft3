@@ -2694,6 +2694,7 @@ impl ObjectHost {
                             })?;
                     }
                 }
+                self.capture_region_motion(unit, from, point, work)?;
                 moved += 1;
                 motion.last_distance = if end {
                     motion.prefix + length
@@ -2772,6 +2773,7 @@ impl ObjectHost {
                             Self::commit_native_unit_facing(record, facing, heading);
                         }
                     }
+                    self.capture_region_motion(unit, from, stop, work)?;
                     origin = stop;
                 }
                 // Stationary from the stop to this tick. A pause rebases `started` below, so this must come first.
@@ -2856,6 +2858,7 @@ impl ObjectHost {
                     .inner
                     .error("unit activity", Failure::UnitAnimation(error)));
             }
+            self.capture_region_motion(unit, from, point, work)?;
             moved += 1;
             motion.last_distance = if end {
                 motion.prefix + length

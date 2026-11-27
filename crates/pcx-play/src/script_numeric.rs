@@ -10,6 +10,12 @@ use pcx_script::{RealOps, Value, ast::BinOp};
 #[path = "script_numeric_format.rs"]
 mod formatting;
 pub use formatting::Binding as FormatBinding;
+#[path = "rectangle_clamp_rules.rs"]
+pub mod rectangle_clamp;
+#[path = "rectangle_motion_rules.rs"]
+pub mod rectangle_motion;
+#[path = "region_cell_rules.rs"]
+pub mod region_cells;
 #[path = "timer_query_rules.rs"]
 pub mod timer_query;
 
@@ -63,6 +69,9 @@ pub struct NumericPolicy {
     formatting: Option<formatting::Formatter>,
     timer_queries: Option<timer_query::Rules>,
     native_clock: Option<crate::native_game_clock::Rules>,
+    rectangle_clamp: Option<rectangle_clamp::Rules>,
+    rectangle_motion: Option<rectangle_motion::Rules>,
+    region_cells: Option<region_cells::Rules>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<u32> {
@@ -213,6 +222,9 @@ impl NumericPolicy {
             formatting: None,
             timer_queries: None,
             native_clock: None,
+            rectangle_clamp: None,
+            rectangle_motion: None,
+            region_cells: None,
         })
     }
 

@@ -1346,6 +1346,7 @@ impl Host for MapStartupHost {
                 "StartCampaignAI: requires its owning map VM after global initialization".into(),
             );
         }
+        self.prepare_region_creation(name)?;
         self.world_mut().begin_script_call(name, args)
     }
     fn begin_initialized_script_call(
@@ -1377,6 +1378,7 @@ impl Host for MapStartupHost {
                 .begin_pending_ai_bridge(player, false)
                 .map(|call| Some(call.unwrap_or(pcx_script::ScriptCall::Return(Value::Null))));
         }
+        self.prepare_region_creation(name)?;
         self.world_mut()
             .begin_initialized_script_call(name, args, owner)
     }
@@ -1446,6 +1448,47 @@ impl Host for MapStartupHost {
 }
 
 impl MapStartupHost {
+    fn prepare_unit_creation(&mut self, name: &str) -> Result<(), String> {
+        if name == "CreateUnit"
+            && let Some(rules) = &self.placement_rules
+        {
+            let mut loader = self
+                .placement_loader
+                .take()
+                .ok_or("CreateUnit: fresh placement source loader is missing")?;
+            let result = loader(
+                self.objects(),
+                rules,
+                self.placement_tables
+                    .as_deref()
+                    .ok_or("CreateUnit: placement catalog is missing")?,
+            );
+            self.placement_loader = Some(loader);
+            self.objects_mut()
+                .admit_unit_placement(result?)
+                .map_err(|e| e.to_string())?;
+            self.objects_mut()
+                .admit_shared_vision()
+                .map_err(|e| e.to_string())?;
+            self.placement_rules = None;
+            self.placement_tables = None;
+            self.placement_loader = None;
+        }
+        Ok(())
+    }
+
+    fn prepare_region_creation(&mut self, name: &str) -> Result<(), String> {
+        if self.objects().has_region_subscriptions()
+            && matches!(
+                name,
+                "CreateUnit" | "CreateUnitAtLoc" | "CreateCorpse" | "CreateBlightedGoldmine"
+            )
+        {
+            self.prepare_unit_creation("CreateUnit")?;
+        }
+        Ok(())
+    }
+
     fn native_call_with_strings(
         &mut self,
         name: &str,
@@ -1541,31 +1584,7 @@ impl MapStartupHost {
                 .map_err(|e| e.to_string())?;
             return Ok(Value::Null);
         }
-        if name == "CreateUnit"
-            && let Some(rules) = &self.placement_rules
-        {
-            let mut loader = self
-                .placement_loader
-                .take()
-                .ok_or("CreateUnit: fresh placement source loader is missing")?;
-            let result = loader(
-                self.objects(),
-                rules,
-                self.placement_tables
-                    .as_deref()
-                    .ok_or("CreateUnit: placement catalog is missing")?,
-            );
-            self.placement_loader = Some(loader);
-            self.objects_mut()
-                .admit_unit_placement(result?)
-                .map_err(|e| e.to_string())?;
-            self.objects_mut()
-                .admit_shared_vision()
-                .map_err(|e| e.to_string())?;
-            self.placement_rules = None;
-            self.placement_tables = None;
-            self.placement_loader = None;
-        }
+        self.prepare_unit_creation(name)?;
         if name == "SetDayNightModels"
             && let [Value::Str(terrain), Value::Str(unit)] = args
         {

@@ -1,11 +1,8 @@
-//! Region requests, removal and continuous-rectangle membership on the
-//! existing arena. Regions store rectangle identities and their call-time
-//! bounds; there is no cell raster. Enter/leave delivery and point queries
-//! use inclusive continuous containment over those bounds. Native cell-cover
-//! equivalence stays unestablished (see `docs/re-notes/slice-regions.md`).
+//! Region rectangle history and membership. Selected-image cell rules apply
+//! ordered geometric additions/clears; unqualified hosts retain continuous bounds.
 use super::super::{Entry, Error, Failure};
 use super::{ObjectHost, trigger_admission::loaded_type};
-use pcx_script::{HandleId, Value};
+use pcx_script::{HandleId, Value, ast::Expr};
 use std::num::NonZeroU64;
 
 const CREATE: &str = "CreateRegion";
@@ -13,13 +10,19 @@ const ADD: &str = "RegionAddRect";
 const REMOVE: &str = "RemoveRegion";
 const CLEAR: &str = "RegionClearRect";
 const POINT: &str = "IsPointInRegion";
+const LOCATION: &str = "IsLocationInRegion";
+const UNIT: &str = "IsUnitInRegion";
+const ADD_CELL: &str = "RegionAddCell";
+const ADD_CELL_LOCATION: &str = "RegionAddCellAtLoc";
+const CLEAR_CELL: &str = "RegionClearCell";
+const CLEAR_CELL_LOCATION: &str = "RegionClearCellAtLoc";
 const ENTER: &str = "TriggerRegisterEnterRegion";
 const LEAVE: &str = "TriggerRegisterLeaveRegion";
 
 #[derive(Clone, Copy, Debug)]
 pub struct RegionBudget {
     pub max_regions: usize,
-    /// Aggregate call records across all regions, including repeated additions.
+    /// Aggregate rectangle additions; selected cell geometry also bounds all edits.
     pub max_rect_additions: usize,
     pub max_events: usize,
 }
@@ -72,6 +75,14 @@ impl RegistrationOrder {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CellEdit {
+    region: HandleId,
+    bounds: [f32; 4],
+    cells: [i32; 4],
+    added: bool,
+}
+
 pub(super) struct Admission {
     budget: RegionBudget,
     regions: usize,
@@ -79,11 +90,14 @@ pub(super) struct Admission {
     events: usize,
     retain_registration_order: bool,
     registration_order: Option<Box<RegistrationOrder>>,
+    cell_edits: Vec<CellEdit>,
+    event_ids: [Option<HandleId>; 2],
 }
 
 impl ObjectHost {
     /// Admit selected creation, rectangle-addition, removal, clearing,
-    /// point-membership and enter-region contracts. Leave-region registration
+    /// point-membership, optional cell edits and enter-region contracts. Cell
+    /// edits require selected numeric cell rules at execution. Leave-region registration
     /// needs its own loaded declaration. Removal, clearing and point queries
     /// are optional: a map that does not declare them keeps the older
     /// admission, like the existing leave-event rule.
@@ -99,6 +113,7 @@ impl ObjectHost {
         }
         std::alloc::Layout::array::<Vec<RegionRectRequest>>(budget.max_regions)
             .and_then(|_| std::alloc::Layout::array::<RegionRectRequest>(budget.max_rect_additions))
+            .and_then(|_| std::alloc::Layout::array::<CellEdit>(budget.max_rect_additions))
             .and_then(|_| std::alloc::Layout::array::<RegionEventRegistration>(budget.max_events))
             .map_err(|_| fail(Failure::Capacity))?;
         let source = &self
@@ -114,6 +129,32 @@ impl ObjectHost {
             (REMOVE, &["region"][..], "nothing", "region"),
             (CLEAR, &["region", "rect"][..], "nothing", "region"),
             (POINT, &["region", "real", "real"][..], "boolean", "region"),
+            (LOCATION, &["region", "location"][..], "boolean", "region"),
+            (UNIT, &["region", "unit"][..], "boolean", "region"),
+            (
+                ADD_CELL,
+                &["region", "real", "real"][..],
+                "nothing",
+                "region",
+            ),
+            (
+                CLEAR_CELL,
+                &["region", "real", "real"][..],
+                "nothing",
+                "region",
+            ),
+            (
+                ADD_CELL_LOCATION,
+                &["region", "location"][..],
+                "nothing",
+                "region",
+            ),
+            (
+                CLEAR_CELL_LOCATION,
+                &["region", "location"][..],
+                "nothing",
+                "region",
+            ),
             (
                 ENTER,
                 &["trigger", "region", "boolexpr"][..],
@@ -127,8 +168,19 @@ impl ObjectHost {
                 "event",
             ),
         ] {
-            if (name == LEAVE || name == REMOVE || name == CLEAR || name == POINT)
-                && self.inner.program.natives().get(name).is_none()
+            if matches!(
+                name,
+                LEAVE
+                    | REMOVE
+                    | CLEAR
+                    | POINT
+                    | LOCATION
+                    | UNIT
+                    | ADD_CELL
+                    | CLEAR_CELL
+                    | ADD_CELL_LOCATION
+                    | CLEAR_CELL_LOCATION
+            ) && self.inner.program.natives().get(name).is_none()
             {
                 continue;
             }
@@ -141,6 +193,14 @@ impl ObjectHost {
                 .is_none_or(|n| &n.source != source)
             {
                 return Err(self.inner.error(name, Failure::Source));
+            }
+        }
+        if self.inner.program.natives().get(UNIT).is_some() {
+            loaded_type(&self.inner, UNIT, "unit", "widget", source)?;
+        }
+        for name in [LOCATION, ADD_CELL_LOCATION, CLEAR_CELL_LOCATION] {
+            if self.inner.program.natives().get(name).is_some() {
+                loaded_type(&self.inner, name, "location", "agent", source)?;
             }
         }
         for name in ["Rect", "CreateTrigger"] {
@@ -157,6 +217,14 @@ impl ObjectHost {
         for name in ["region", "rect", "boolexpr"] {
             loaded_type(&self.inner, CREATE, name, "agent", source)?;
         }
+        let event_ids = [
+            self.read_region_event_id(ENTER, "EVENT_GAME_ENTER_REGION")?,
+            if self.inner.program.natives().get(LEAVE).is_some() {
+                self.read_region_event_id(LEAVE, "EVENT_GAME_LEAVE_REGION")?
+            } else {
+                None
+            },
+        ];
         self.regions = Some(Admission {
             budget,
             regions: 0,
@@ -164,8 +232,83 @@ impl ObjectHost {
             events: 0,
             retain_registration_order: false,
             registration_order: None,
+            cell_edits: Vec::new(),
+            event_ids,
         });
         Ok(self)
+    }
+
+    fn read_region_event_id(
+        &mut self,
+        native: &str,
+        global_name: &str,
+    ) -> Result<Option<HandleId>, Error> {
+        let fail = |reason| self.inner.error(native, reason);
+        let Some(global) = self
+            .inner
+            .program
+            .globals()
+            .iter()
+            .find(|g| g.name == global_name)
+        else {
+            return Ok(None);
+        };
+        let source = &self
+            .inner
+            .program
+            .natives()
+            .get(native)
+            .expect("checked region declaration")
+            .source;
+        if !global.is_constant
+            || global.array
+            || global.ty.array
+            || global.ty.kind.name() != "gameevent"
+            || global.source != *source
+        {
+            return Err(fail(Failure::Initializer(global_name.into())));
+        }
+        Self::contract_in(
+            &self.inner,
+            "ConvertGameEvent",
+            &["integer"],
+            "gameevent",
+            true,
+            None,
+            false,
+        )?;
+        if self
+            .inner
+            .program
+            .natives()
+            .get("ConvertGameEvent")
+            .is_none_or(|n| n.source != *source)
+        {
+            return Err(fail(Failure::Source));
+        }
+        loaded_type(&self.inner, native, "gameevent", "eventid", source)?;
+        let Some(Expr::Call { callee, args, .. }) = &global.init else {
+            return Err(fail(Failure::Initializer(global_name.into())));
+        };
+        if !matches!(callee.as_ref(), Expr::Ident(name, _) if name.as_str() == "ConvertGameEvent")
+            || args.len() != 1
+        {
+            return Err(fail(Failure::Initializer(global_name.into())));
+        }
+        let number = super::super::integer(&args[0], 64, &mut 4096).map_err(fail)?;
+        let Value::Handle(event) = self
+            .inner
+            .convert_for("ConvertGameEvent", &[Value::Int(number)])?
+        else {
+            unreachable!("converted game event")
+        };
+        Ok(Some(event))
+    }
+
+    pub(super) fn region_event_id(&self, kind: RegionEventKind) -> Option<HandleId> {
+        self.regions
+            .as_ref()
+            .and_then(|r| r.event_ids[usize::from(kind == RegionEventKind::Leave)])
     }
 
     /// Retain the global order of rectangle additions from before map initialization.
@@ -195,7 +338,7 @@ impl ObjectHost {
     /// Enumerate additions in execution order, retaining their call-time bounds.
     /// Additions of removed regions are skipped: removal keeps their bounds
     /// for the retained counts but they no longer describe a live region.
-    /// Clearing rewrites this history so surviving indices stay dense.
+    /// Unqualified clearing rewrites indices; selected cell edits retain the history.
     pub fn region_registrations(
         &self,
     ) -> Result<impl Iterator<Item = Result<(HandleId, RegionRectRequest), Error>> + '_, Error>
@@ -249,7 +392,7 @@ impl ObjectHost {
 
     /// Enumerate retained live regions and the rectangle additions executed
     /// for each. Removed regions are skipped; cleared rectangles were
-    /// physically removed from the retained lists.
+    /// physically removed only by unqualified handle-identity clearing.
     pub fn executed_regions(
         &self,
     ) -> Result<impl Iterator<Item = (HandleId, &[RegionRectRequest])> + '_, Error> {
@@ -315,6 +458,17 @@ impl ObjectHost {
             POINT if self.inner.program.natives().get(POINT).is_some() => {
                 Some(self.is_point_in_region(args))
             }
+            LOCATION if self.inner.program.natives().get(LOCATION).is_some() => {
+                Some(self.is_location_in_region(args))
+            }
+            UNIT if self.inner.program.natives().get(UNIT).is_some() => {
+                Some(self.is_unit_in_region(args))
+            }
+            ADD_CELL | CLEAR_CELL | ADD_CELL_LOCATION | CLEAR_CELL_LOCATION
+                if self.inner.program.natives().get(name).is_some() =>
+            {
+                Some(self.edit_region_cell(name, args))
+            }
             ENTER => Some(self.register_region_event(name, args)),
             LEAVE if self.inner.program.natives().get(LEAVE).is_some() => {
                 Some(self.register_region_event(name, args))
@@ -340,6 +494,170 @@ impl ObjectHost {
         self.regions.as_mut().expect("checked admission").regions += 1;
         Ok(Value::Handle(id))
     }
+    fn edit_region_cell(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let [Value::Handle(region), rest @ ..] = args else {
+            return Err(self.inner.error(
+                name,
+                Failure::RegionState("expected region and cell coordinates or location"),
+            ));
+        };
+        self.region_rect_requests(*region)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        let [x, y] = if matches!(name, ADD_CELL_LOCATION | CLEAR_CELL_LOCATION) {
+            let [location] = rest else {
+                return Err(self
+                    .inner
+                    .error(name, Failure::RegionState("expected region and location")));
+            };
+            self.location_point(location, name)?
+        } else {
+            let [x, y] = rest else {
+                return Err(self.inner.error(
+                    name,
+                    Failure::RegionState("expected region and two finite coordinates"),
+                ));
+            };
+            let (Some(x), Some(y)) = (x.as_real(), y.as_real()) else {
+                return Err(self.inner.error(
+                    name,
+                    Failure::RegionState("expected region and two finite coordinates"),
+                ));
+            };
+            if !x.is_finite() || !y.is_finite() {
+                return Err(self.inner.error(
+                    name,
+                    Failure::RegionState("expected region and two finite coordinates"),
+                ));
+            }
+            [x, y]
+        };
+        let added = matches!(name, ADD_CELL | ADD_CELL_LOCATION);
+        let bounds = [x, y, x, y];
+        let edit = self
+            .prepare_region_cell_edit(*region, bounds, added, name)?
+            .ok_or_else(|| {
+                self.inner.error(
+                    name,
+                    Failure::RegionState("source-backed region cell rules required"),
+                )
+            })?;
+        self.regions
+            .as_mut()
+            .expect("admitted region")
+            .cell_edits
+            .push(edit);
+        if let Some(pool) = self
+            .unit_placement
+            .as_mut()
+            .and_then(crate::unit_placement::Placement::spatial_mut)
+        {
+            if added {
+                pool.region_added(*region, bounds);
+            } else {
+                pool.region_cells_cleared(*region, bounds);
+            }
+        }
+        Ok(Value::Null)
+    }
+
+    fn prepare_region_cell_edit(
+        &mut self,
+        region: HandleId,
+        bounds: [f32; 4],
+        added: bool,
+        name: &str,
+    ) -> Result<Option<CellEdit>, Error> {
+        let Some(rules) = self.numeric.as_ref().and_then(|n| n.region_cells()) else {
+            return Ok(None);
+        };
+        let world = self.world_bounds.ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::RegionState("source world extent required for cell geometry"),
+            )
+        })?;
+        let cells = rules
+            .cover(bounds, [world[0], world[1]])
+            .map_err(|why| self.inner.error(name, Failure::ScriptMath(why)))?;
+        let admission = self.regions.as_mut().expect("admitted region");
+        if admission.cell_edits.len() >= admission.budget.max_rect_additions {
+            return Err(self.inner.error(name, Failure::Budget("region cell edits")));
+        }
+        if admission.cell_edits.try_reserve(1).is_err() {
+            return Err(self.inner.error(name, Failure::Capacity));
+        }
+        Ok(Some(CellEdit {
+            region,
+            bounds,
+            cells,
+            added,
+        }))
+    }
+
+    pub(crate) fn region_cell_edits(
+        &self,
+    ) -> Option<impl Iterator<Item = (HandleId, [f32; 4], bool)> + '_> {
+        self.numeric.as_ref()?.region_cells()?;
+        Some(
+            self.regions
+                .as_ref()?
+                .cell_edits
+                .iter()
+                .filter(|e| matches!(self.inner.entry(e.region), Ok(Entry::Region { .. })))
+                .map(|e| (e.region, e.bounds, e.added)),
+        )
+    }
+
+    pub(super) fn region_contains_point(
+        &self,
+        region: HandleId,
+        point: [f32; 2],
+        name: &str,
+    ) -> Result<bool, Error> {
+        let additions = self
+            .region_rect_requests(region)
+            .map_err(|e| self.inner.error(name, e.failure))?;
+        if let Some(rules) = self.numeric.as_ref().and_then(|n| n.region_cells()) {
+            let world = self.world_bounds.ok_or_else(|| {
+                self.inner.error(
+                    name,
+                    Failure::RegionState("source world extent required for cell geometry"),
+                )
+            })?;
+            if point[0] < world[0]
+                || point[1] < world[1]
+                || point[0] >= world[2]
+                || point[1] >= world[3]
+            {
+                return Ok(false);
+            }
+            let [x, y] = rules
+                .point(point, [world[0], world[1]])
+                .map_err(|why| self.inner.error(name, Failure::ScriptMath(why)))?;
+            return Ok(self
+                .regions
+                .as_ref()
+                .expect("admitted region")
+                .cell_edits
+                .iter()
+                .rev()
+                .find(|e| {
+                    e.region == region
+                        && x >= e.cells[0]
+                        && y >= e.cells[1]
+                        && x <= e.cells[2]
+                        && y <= e.cells[3]
+                })
+                .is_some_and(|e| e.added));
+        }
+        Ok(additions.iter().any(|r| {
+            point[0] >= r.bounds[0]
+                && point[1] >= r.bounds[1]
+                && point[0] <= r.bounds[2]
+                && point[1] <= r.bounds[3]
+        }))
+    }
+
     fn region_add_rect(&mut self, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(ADD, reason);
         let [Value::Handle(region), Value::Handle(rectangle)] = args else {
@@ -366,6 +684,7 @@ impl ObjectHost {
         } else {
             None
         };
+        let edit = self.prepare_region_cell_edit(*region, bounds, true, ADD)?;
         if retain {
             let admission = self.regions.as_mut().expect("checked admission");
             let order = admission.registration_order.get_or_insert_with(|| {
@@ -401,6 +720,9 @@ impl ObjectHost {
             None => {}
         }
         admission.additions += 1;
+        if let Some(edit) = edit {
+            admission.cell_edits.push(edit);
+        }
         // Additions before the placement cache exists are replayed when it is built.
         if let Some(pool) = self
             .unit_placement
@@ -432,6 +754,13 @@ impl ObjectHost {
             _ => unreachable!("checked region"),
         };
         self.inner.arena[at] = Entry::RemovedRegion { additions: taken };
+        for &index in &self.inner.region_event_slots {
+            if let Entry::RegisteredRegionEvent(record) = &mut self.inner.arena[index]
+                && record.region == *region
+            {
+                record.filter = None;
+            }
+        }
         if let Some(pool) = self
             .unit_placement
             .as_mut()
@@ -441,13 +770,8 @@ impl ObjectHost {
         }
         Ok(Value::Null)
     }
-    /// Drop every stored addition that references the given rectangle handle.
-    /// This is handle-identity removal, not a geometric subtraction: the
-    /// native cell cover of an arbitrary clear rectangle is unmeasured (see
-    /// `docs/re-notes/slice-regions.md`), so only the exact rectangle passed
-    /// to `RegionAddRect` is withdrawn. A region with no such addition is a
-    /// silent no-op. The registration history is rewritten so surviving
-    /// indices stay dense.
+    /// Selected cells are cleared using current bounds, independent of identity.
+    /// Unqualified hosts retain their earlier handle-identity withdrawal behavior.
     fn clear_region_rect(&mut self, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(CLEAR, reason);
         let [Value::Handle(region), Value::Handle(rectangle)] = args else {
@@ -459,8 +783,24 @@ impl ObjectHost {
             _ => return Err(fail(Failure::WrongFamily)),
         }
         // Both handles are validated before any retained list changes.
-        self.rectangle_bounds(*rectangle)
+        let bounds = self
+            .rectangle_bounds(*rectangle)
             .map_err(|e| fail(e.failure))?;
+        if let Some(edit) = self.prepare_region_cell_edit(*region, bounds, false, CLEAR)? {
+            self.regions
+                .as_mut()
+                .expect("admitted region")
+                .cell_edits
+                .push(edit);
+            if let Some(pool) = self
+                .unit_placement
+                .as_mut()
+                .and_then(crate::unit_placement::Placement::spatial_mut)
+            {
+                pool.region_cells_cleared(*region, bounds);
+            }
+            return Ok(Value::Null);
+        }
         let len = self
             .region_rect_requests(*region)
             .expect("checked region")
@@ -522,9 +862,7 @@ impl ObjectHost {
             }
         }
     }
-    /// Inclusive continuous containment over the retained call-time bounds,
-    /// the same predicate the enter/leave delivery uses. Whether the native
-    /// tests this rectangle or its unmeasured cell cover stays open.
+    /// Share membership with location queries and event polling.
     fn is_point_in_region(&self, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(POINT, reason);
         let [Value::Handle(region), x, y] = args else {
@@ -542,15 +880,69 @@ impl ObjectHost {
                 "expected region and two finite coordinates",
             )));
         }
-        let additions = self
-            .region_rect_requests(*region)
-            .map_err(|e| fail(e.failure))?;
-        let inside = additions.iter().any(|request| {
-            let [min_x, min_y, max_x, max_y] = request.bounds;
-            x >= min_x && x <= max_x && y >= min_y && y <= max_y
-        });
-        Ok(Value::Bool(inside))
+        self.region_contains_point(*region, [x, y], POINT)
+            .map(Value::Bool)
     }
+    fn is_unit_in_region(&self, args: &[Value]) -> Result<Value, Error> {
+        let (region, unit) = match args {
+            [Value::Handle(region), Value::Handle(unit)] => (*region, *unit),
+            [Value::Null, Value::Null | Value::Handle(_)] | [Value::Handle(_), Value::Null] => {
+                return Ok(Value::Bool(false));
+            }
+            _ => {
+                return Err(self.inner.error(
+                    UNIT,
+                    Failure::RegionState("expected region and nullable unit"),
+                ));
+            }
+        };
+        self.region_rect_requests(region)
+            .map_err(|e| self.inner.error(UNIT, e.failure))?;
+        let point = match self
+            .inner
+            .entry(unit)
+            .map_err(|e| self.inner.error(UNIT, e.failure))?
+        {
+            Entry::Unit { record } => record.position.ok_or_else(|| {
+                self.inner.error(
+                    UNIT,
+                    Failure::RegionState("accepted unit position required"),
+                )
+            })?,
+            Entry::RemovedUnit {
+                location: Some((at, point)),
+                ..
+            } if self.timer_game_time() == Some(*at) => *point,
+            Entry::RemovedUnit {
+                removed_at: Some(at),
+                ..
+            } if self.timer_game_time().is_some_and(|now| now > *at) => {
+                return Ok(Value::Bool(false));
+            }
+            Entry::RemovedUnit { .. } => {
+                return Err(self.inner.error(
+                    UNIT,
+                    Failure::RegionState("accepted removal clock and position required"),
+                ));
+            }
+            _ => return Err(self.inner.error(UNIT, Failure::WrongFamily)),
+        };
+        self.region_contains_point(region, point, UNIT)
+            .map(Value::Bool)
+    }
+
+    fn is_location_in_region(&self, args: &[Value]) -> Result<Value, Error> {
+        let [Value::Handle(region), location] = args else {
+            return Err(self.inner.error(
+                LOCATION,
+                Failure::RegionState("expected region and location"),
+            ));
+        };
+        let [x, y] = self.location_point(location, LOCATION)?;
+        self.is_point_in_region(&[Value::Handle(*region), Value::Real(x), Value::Real(y)])
+            .map_err(|error| self.inner.error(LOCATION, error.failure))
+    }
+
     fn register_region_event(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
         let fail = |reason| self.inner.error(name, reason);
         let [Value::Handle(trigger), Value::Handle(region), filter] = args else {
@@ -592,10 +984,12 @@ impl ObjectHost {
                 RegionEventKind::Leave
             },
         };
+        let members = self.current_region_units(*region)?;
         let id = self
             .inner
             .allocate(Entry::RegisteredRegionEvent(record), name)?;
         self.regions.as_mut().expect("checked admission").events += 1;
+        self.seed_region_event(id, members);
         Ok(Value::Handle(id))
     }
 }

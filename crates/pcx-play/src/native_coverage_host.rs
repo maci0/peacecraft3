@@ -222,8 +222,17 @@ impl ObjectHost {
             "MoveRectTo",
             "MoveRectToLoc",
             "Rect",
+            "RectFromLoc",
             "RemoveRect",
             "SetRect",
+            "SetRectFromLoc",
+            // region_host.rs
+            "IsLocationInRegion",
+            "IsUnitInRegion",
+            "RegionAddCell",
+            "RegionAddCellAtLoc",
+            "RegionClearCell",
+            "RegionClearCellAtLoc",
             // script_random_host.rs
             "GetRandomInt",
             "GetRandomReal",
@@ -353,6 +362,12 @@ impl ObjectHost {
             "GroupEnumUnitsInRange",
             "GroupEnumUnitsInRangeOfLoc",
             "GroupEnumUnitsOfPlayer",
+            // trigger_condition_host.rs
+            "TriggerRemoveCondition",
+            "TriggerClearConditions",
+            // trigger_host.rs
+            "TriggerRemoveAction",
+            "TriggerClearActions",
             // unit_range_runtime_host.rs
             "GetEnteringUnit",
             "GetTriggerUnit",

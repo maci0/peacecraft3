@@ -3,6 +3,8 @@ use super::{Entry, Error, Failure, ObjectHost, loaded_type};
 use pcx_script::{HandleId, Value};
 
 pub(super) const ADD: &str = "TriggerAddCondition";
+pub(super) const REMOVE: &str = "TriggerRemoveCondition";
+pub(super) const CLEAR: &str = "TriggerClearConditions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TriggerConditionRegistration {
@@ -53,6 +55,17 @@ impl ObjectHost {
         for (name, parent) in [("triggercondition", "agent"), ("boolexpr", "agent")] {
             loaded_type(&self.inner, ADD, name, parent, source)?;
         }
+        for (name, arguments) in [
+            (REMOVE, &["trigger", "triggercondition"][..]),
+            (CLEAR, &["trigger"][..]),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, arguments, "nothing", false, None)?;
+                if &native.source != source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+            }
+        }
         self.triggers
             .as_mut()
             .expect("admitted above")
@@ -84,6 +97,52 @@ impl ObjectHost {
             Entry::TriggerCondition(record) => Ok(*record),
             _ => Err(self.inner.error(ADD, Failure::WrongFamily)),
         }
+    }
+
+    pub(super) fn remove_trigger_conditions(
+        &mut self,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, Error> {
+        let fail = |failure| self.inner.error(name, failure);
+        let trigger = match (name, args) {
+            (CLEAR, [Value::Handle(trigger)])
+            | (REMOVE, [Value::Handle(trigger), Value::Handle(_)]) => *trigger,
+            _ => return Err(fail(Failure::Arguments)),
+        };
+        if !matches!(self.inner.entry(trigger)?, Entry::Trigger { .. }) {
+            return Err(fail(Failure::WrongFamily));
+        }
+        if let [_, Value::Handle(condition)] = args {
+            match self.inner.entry(*condition)? {
+                Entry::TriggerCondition(record) if record.trigger == trigger => {}
+                Entry::TriggerCondition(_) => {
+                    return Err(fail(Failure::TriggerState(
+                        "condition belongs to another trigger",
+                    )));
+                }
+                Entry::DeadTriggerCondition => return Err(fail(Failure::Identity)),
+                _ => return Err(fail(Failure::WrongFamily)),
+            }
+            *self.inner.entry_mut(*condition)? = Entry::DeadTriggerCondition;
+            self.triggers
+                .as_mut()
+                .expect("admitted dispatch")
+                .retained_conditions -= 1;
+        } else {
+            let mut removed = 0;
+            for entry in &mut self.inner.arena {
+                if matches!(entry, Entry::TriggerCondition(record) if record.trigger == trigger) {
+                    *entry = Entry::DeadTriggerCondition;
+                    removed += 1;
+                }
+            }
+            self.triggers
+                .as_mut()
+                .expect("admitted dispatch")
+                .retained_conditions -= removed;
+        }
+        Ok(Value::Null)
     }
 
     pub(super) fn add_trigger_condition(&mut self, args: &[Value]) -> Result<Value, Error> {

@@ -718,6 +718,15 @@ impl ObjectHost {
         Ok(())
     }
 
+    pub(crate) fn region_motion_is_interpolated(&self) -> bool {
+        self.native_clock_driving()
+            && self
+                .unit_activity
+                .as_ref()
+                .is_some_and(|state| state.physics.is_some())
+            && self.pending_native_physics().is_none()
+    }
+
     pub(crate) fn native_physics_seconds(&self, point: Point) -> f64 {
         self.native_game_clock
             .as_ref()
@@ -766,6 +775,7 @@ impl ObjectHost {
         let result = (|| {
             self.set_timer_game_time(now)?;
             self.advance_unit_activity_mandatory(now, work)?;
+            self.flush_region_motion_positions(work)?;
             let mut updates = Vec::new();
             for (unit, record) in self.executed_units() {
                 *work = work

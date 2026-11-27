@@ -46,7 +46,9 @@ struct Expired {
 /// One prepared expiry. Finish it even when its callback fails.
 ///
 /// `triggers` holds every live subscription snapshot in arena (registration)
-/// order. The session delivers each trigger's conditions and actions before
+/// order. Published map sessions select current conditions when an owner starts
+/// and current actions after those conditions finish; the retained callback
+/// vectors are diagnostic snapshots on that path. Trigger actions precede
 /// the direct `callback`: expiry-trigger actions observe the expired timer
 /// first, and the direct handler runs with cleared trigger/event context.
 /// Subscription snapshots are prepared before the deadline is consumed, so

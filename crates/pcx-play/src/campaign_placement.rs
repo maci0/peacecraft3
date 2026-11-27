@@ -384,9 +384,19 @@ pub fn assemble(
         });
     }
     if let Some(pool) = &mut pool {
-        for addition in objects.region_registrations().map_err(|e| e.to_string())? {
-            let (region, request) = addition.map_err(|e| e.to_string())?;
-            pool.region_added(region, request.bounds);
+        if let Some(edits) = objects.region_cell_edits() {
+            for (region, bounds, added) in edits {
+                if added {
+                    pool.region_added(region, bounds);
+                } else {
+                    pool.region_cells_cleared(region, bounds);
+                }
+            }
+        } else {
+            for addition in objects.region_registrations().map_err(|e| e.to_string())? {
+                let (region, request) = addition.map_err(|e| e.to_string())?;
+                pool.region_added(region, request.bounds);
+            }
         }
     }
     let base = grid.pathing.clone();

@@ -2,7 +2,7 @@
 //! value. The central player-state mutation path queues qualifying changes as
 //! they happen; a boundary poll catches effective changes computed outside that
 //! path, such as live food.
-use super::super::{SynchronousDelivery, SynchronousFrame};
+use super::super::{ConditionEvaluation, SynchronousDelivery, SynchronousFrame};
 use super::{Entry, Error, Failure, ObjectHost};
 use pcx_script::{HandleId, ScriptCall, Value};
 pub(super) const REGISTER: &str = "TriggerRegisterPlayerStateEvent";
@@ -102,90 +102,62 @@ impl ObjectHost {
                 .last_mut()
                 .expect("active state call")
                 .active = true;
-            let mut conditions = Vec::new();
-            let count = usize::from(filter.is_some()) + delivery.conditions.len();
-            conditions.try_reserve_exact(count).map_err(|_| {
-                self.inner
-                    .error("synchronous event delivery", Failure::Capacity)
-            })?;
-            conditions.extend(filter);
-            conditions.extend(delivery.conditions);
-            if conditions.is_empty() {
-                if delivery.actions.is_empty() {
-                    self.finish_fired_event();
-                    self.synchronous_frames
-                        .last_mut()
-                        .expect("active state call")
-                        .active = false;
-                    continue;
-                }
-                let depth = self.spawned_thread_depth();
-                self.synchronous_frames
+            if let Some(filter) = filter {
+                let frame = self
+                    .synchronous_frames
                     .last_mut()
-                    .expect("active state call")
-                    .spawn_depth = depth;
-                self.enter_spawned_thread();
-                return Ok(ScriptCall::Spawn(delivery.actions));
+                    .expect("active state call");
+                frame.callback_depth = self.callbacks.len();
+                frame.conditions = Some(SynchronousDelivery::Filter {
+                    trigger: delivery.trigger,
+                });
+                return Ok(ScriptCall::Call(filter));
             }
-            let first = conditions[0];
+            let evaluation = self.trigger_condition_evaluation(delivery.trigger)?;
+            if let Some(call) = self.advance_synchronous_conditions(evaluation, true)? {
+                return Ok(call);
+            }
+        }
+    }
+
+    fn advance_synchronous_conditions(
+        &mut self,
+        mut evaluation: ConditionEvaluation,
+        value: bool,
+    ) -> Result<Option<ScriptCall>, Error> {
+        if let Some(function) = evaluation.advance(self, value)? {
             let frame = self
                 .synchronous_frames
                 .last_mut()
                 .expect("active state call");
             frame.callback_depth = self.callbacks.len();
-            frame.conditions = Some(SynchronousDelivery {
-                conditions,
-                actions: delivery.actions,
-                next: 1,
-            });
-            return Ok(ScriptCall::Call(first));
+            frame.conditions = Some(SynchronousDelivery::Conditions(evaluation));
+            return Ok(Some(ScriptCall::Call(function)));
         }
+        self.finish_synchronous_conditions(evaluation.trigger(), evaluation.accepted)
     }
 
-    pub(crate) fn continue_synchronous_call(&mut self, value: Value) -> Result<ScriptCall, Error> {
-        let fail = |reason| self.inner.error("synchronous event delivery", reason);
-        let Value::Bool(accepted) = value else {
-            return Err(fail(Failure::TriggerState(
-                "player state condition did not return boolean",
-            )));
-        };
-        let Some(frame) = self
-            .synchronous_frames
-            .last_mut()
-            .and_then(|frame| frame.conditions.as_mut())
-        else {
-            return Err(fail(Failure::TriggerState("no active delivery")));
-        };
-        if !accepted {
-            self.synchronous_frames
-                .last_mut()
-                .expect("active state call")
-                .conditions = None;
-            self.finish_fired_event();
-            self.synchronous_frames
-                .last_mut()
-                .expect("active state call")
-                .active = false;
-            return self.begin_next_synchronous_event();
-        }
-        if let Some(&next) = frame.conditions.get(frame.next) {
-            frame.next += 1;
-            return Ok(ScriptCall::Call(next));
-        }
-        let frame = self
-            .synchronous_frames
+    fn finish_synchronous_conditions(
+        &mut self,
+        trigger: HandleId,
+        accepted: bool,
+    ) -> Result<Option<ScriptCall>, Error> {
+        self.synchronous_frames
             .last_mut()
             .expect("active state call")
-            .conditions
-            .take()
-            .expect("checked active delivery");
-        if frame.actions.is_empty() {
+            .conditions = None;
+        let actions = if accepted {
+            self.trigger_actions(trigger, "synchronous event actions")?
+        } else {
+            Vec::new()
+        };
+        if actions.is_empty() {
             self.finish_fired_event();
             self.synchronous_frames
                 .last_mut()
                 .expect("active state call")
                 .active = false;
-            self.begin_next_synchronous_event()
+            Ok(None)
         } else {
             let depth = self.spawned_thread_depth();
             self.synchronous_frames
@@ -193,7 +165,42 @@ impl ObjectHost {
                 .expect("active state call")
                 .spawn_depth = depth;
             self.enter_spawned_thread();
-            Ok(ScriptCall::Spawn(frame.actions))
+            Ok(Some(ScriptCall::Spawn(actions)))
+        }
+    }
+
+    pub(crate) fn continue_synchronous_call(&mut self, value: Value) -> Result<ScriptCall, Error> {
+        let fail = |reason| self.inner.error("synchronous event delivery", reason);
+        let Value::Bool(accepted) = value else {
+            return Err(fail(Failure::TriggerState(
+                "event filter or condition did not return boolean",
+            )));
+        };
+        let frame = self
+            .synchronous_frames
+            .last_mut()
+            .and_then(|frame| frame.conditions.take())
+            .ok_or_else(|| {
+                self.inner.error(
+                    "synchronous event delivery",
+                    Failure::TriggerState("no active delivery"),
+                )
+            })?;
+        let call = match frame {
+            SynchronousDelivery::Filter { trigger } if !accepted => {
+                self.finish_synchronous_conditions(trigger, false)?
+            }
+            SynchronousDelivery::Filter { trigger } => {
+                let evaluation = self.trigger_condition_evaluation(trigger)?;
+                self.advance_synchronous_conditions(evaluation, true)?
+            }
+            SynchronousDelivery::Conditions(evaluation) => {
+                self.advance_synchronous_conditions(evaluation, accepted)?
+            }
+        };
+        match call {
+            Some(call) => Ok(call),
+            None => self.begin_next_synchronous_event(),
         }
     }
 

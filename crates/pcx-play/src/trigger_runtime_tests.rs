@@ -564,3 +564,590 @@ fn variable_event_queues_when_the_real_changes_across_the_limit() {
         .unwrap();
     assert!(h.take_fired_event().is_none());
 }
+
+#[test]
+fn condition_edits_change_subsequent_owned_vm_evaluations() {
+    let common = format!(
+        "{COMMON}\n\
+type boolexpr extends agent
+ type conditionfunc extends boolexpr
+ type triggercondition extends agent
+ native Condition takes code f returns conditionfunc
+ native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+ native TriggerRemoveCondition takes trigger t, triggercondition c returns nothing
+ native TriggerClearConditions takes trigger t returns nothing
+ native TriggerEvaluate takes trigger t returns boolean
+"
+    );
+    let map = "\
+function predicate takes nothing returns boolean
+return false
+endfunction
+function main takes nothing returns boolean
+local trigger t = CreateTrigger()
+local boolexpr c = Condition(function predicate)
+local triggercondition r = TriggerAddCondition(t, c)
+if TriggerEvaluate(t) then
+return false
+endif
+call TriggerRemoveCondition(t, r)
+if not TriggerEvaluate(t) then
+return false
+endif
+set r = TriggerAddCondition(t, c)
+call TriggerClearConditions(t)
+return TriggerEvaluate(t)
+endfunction
+";
+    let h = host_map(&common, map, 32, 0)
+        .with_conditions(super::ConditionBudget { max_records: 1 })
+        .unwrap()
+        .with_trigger_conditions(1)
+        .unwrap()
+        .with_trigger_runtime(input(0))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let mut vm = pcx_script::Vm::new(&program, h);
+    vm.init_globals().unwrap();
+    assert_eq!(vm.call("main", &[]).unwrap(), Value::Bool(true));
+    let coverage = vm.host().native_coverage();
+    for name in ["TriggerRemoveCondition", "TriggerClearConditions"] {
+        assert!(coverage.supported.iter().any(|entry| entry == name));
+        assert!(!coverage.unsupported.iter().any(|entry| entry == name));
+    }
+}
+
+const ACTION_EDIT_COMMON: &str = "\
+type triggeraction extends handle
+native TriggerAddAction takes trigger t, code f returns triggeraction
+native TriggerRemoveAction takes trigger t, triggeraction a returns nothing
+native TriggerClearActions takes trigger t returns nothing
+native TriggerExecute takes trigger t returns nothing
+";
+const ACTION_EDIT_MAP: &str = "\
+globals
+trigger T = null
+trigger other = null
+triggeraction A = null
+triggeraction B = null
+triggeraction C = null
+integer trace = 0
+endglobals
+function first takes nothing returns nothing
+set trace = trace * 10 + 1
+endfunction
+function second takes nothing returns nothing
+set trace = trace * 10 + 2
+endfunction
+function third takes nothing returns nothing
+set trace = trace * 10 + 3
+endfunction
+function prepare takes nothing returns nothing
+set T = CreateTrigger()
+set other = CreateTrigger()
+set A = TriggerAddAction(T, function first)
+set B = TriggerAddAction(T, function second)
+set C = TriggerAddAction(other, function third)
+endfunction
+function main takes nothing returns nothing
+call prepare()
+call TriggerRemoveAction(T, A)
+call TriggerExecute(T)
+call TriggerExecute(other)
+set A = TriggerAddAction(T, function first)
+call TriggerExecute(T)
+call TriggerClearActions(T)
+call TriggerClearActions(T)
+call TriggerExecute(T)
+call TriggerExecute(other)
+endfunction
+";
+
+#[test]
+fn action_removal_and_clear_change_later_owned_vm_execution() {
+    let common = format!("{COMMON}{ACTION_EDIT_COMMON}");
+    let h = host_map(&common, ACTION_EDIT_MAP, 32, 3)
+        .with_trigger_runtime(input(2))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(program, h);
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.global("trace"), Value::Int(23213));
+    let coverage = vm.host().native_coverage();
+    for name in ["TriggerRemoveAction", "TriggerClearActions"] {
+        assert!(coverage.supported.iter().any(|entry| entry == name));
+        assert!(!coverage.unsupported.iter().any(|entry| entry == name));
+    }
+
+    let Value::Handle(a) = vm.global("A") else {
+        panic!("action")
+    };
+    let Value::Handle(c) = vm.global("C") else {
+        panic!("action")
+    };
+    assert!(a.token() > c.token());
+    assert!(vm.host().trigger_action(a).is_err());
+    assert!(vm.host().trigger_action(c).is_ok());
+}
+
+#[test]
+fn removed_actions_are_absent_from_future_timed_delivery() {
+    let common = format!("{COMMON}{ACTION_EDIT_COMMON}");
+    let h = host_map(&common, ACTION_EDIT_MAP, 32, 3)
+        .with_trigger_runtime(input(2))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(program, h);
+    vm.call("prepare", &[]).unwrap();
+    let t = vm.global("T");
+    let a = vm.global("A");
+    vm.host()
+        .native("TriggerRemoveAction", &[t.clone(), a])
+        .unwrap();
+    register(vm.host(), &t, 1.0, true).unwrap();
+    let expiry = vm.host().next_timer_expiry(21.0, &mut 1).unwrap().unwrap();
+    assert_eq!(expiry.triggers()[0].actions.len(), 1);
+    assert!(vm.host().begin_timer_trigger(&expiry, 0).unwrap());
+    vm.run_thread(&expiry.triggers()[0].actions).unwrap();
+    vm.host().finish_timer_expiry(expiry).unwrap();
+    assert_eq!(vm.global("trace"), Value::Int(2));
+    vm.host()
+        .native("TriggerClearActions", std::slice::from_ref(&t))
+        .unwrap();
+    let expiry = vm.host().next_timer_expiry(22.0, &mut 1).unwrap().unwrap();
+    assert!(expiry.triggers()[0].actions.is_empty());
+    vm.host().finish_timer_expiry(expiry).unwrap();
+    assert_eq!(vm.global("trace"), Value::Int(2));
+}
+
+#[test]
+fn invalid_action_removal_preserves_registrations_and_capacity() {
+    let common = format!("{COMMON}{ACTION_EDIT_COMMON}");
+    let h = host_map(&common, ACTION_EDIT_MAP, 32, 3)
+        .with_trigger_runtime(input(2))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(program, h);
+    vm.call("prepare", &[]).unwrap();
+    let t = vm.global("T");
+    let other = vm.global("other");
+    let a = vm.global("A");
+    let before = vm.host().inner().handles();
+    for (name, args) in [
+        ("TriggerRemoveAction", vec![]),
+        ("TriggerRemoveAction", vec![other, a.clone()]),
+        ("TriggerRemoveAction", vec![t.clone(), t.clone()]),
+        ("TriggerRemoveAction", vec![t.clone(), Value::Null]),
+        ("TriggerClearActions", vec![Value::Null]),
+        ("TriggerClearActions", vec![a.clone()]),
+        ("TriggerClearActions", vec![t.clone(), a.clone()]),
+    ] {
+        let error = vm.host().native(name, &args).unwrap_err();
+        assert!(error.contains(name), "{error}");
+        assert_eq!(vm.host().inner().handles(), before);
+    }
+    let callback = vm.host().inner().program.function_id("first").unwrap();
+    assert!(
+        vm.host()
+            .native("TriggerAddAction", &[t.clone(), Value::Code(callback)])
+            .unwrap_err()
+            .contains("trigger action policy exceeded")
+    );
+    let Value::Handle(a_id) = a else {
+        panic!("action")
+    };
+    assert!(vm.host().trigger_action(a_id).is_ok());
+    vm.host()
+        .native("TriggerRemoveAction", &[t.clone(), a.clone()])
+        .unwrap();
+    assert!(
+        vm.host()
+            .native("TriggerRemoveAction", &[t, a])
+            .unwrap_err()
+            .contains("identity")
+    );
+    let dead = vm.global("other");
+    vm.host()
+        .native("DestroyTrigger", std::slice::from_ref(&dead))
+        .unwrap();
+    assert!(vm.host().native("TriggerClearActions", &[dead]).is_err());
+}
+
+#[test]
+fn trigger_destruction_releases_registrations_but_preserves_dispatched_tail() {
+    let common = format!(
+        "{COMMON}{ACTION_EDIT_COMMON}\n\
+type boolexpr extends agent
+type conditionfunc extends boolexpr
+type filterfunc extends boolexpr
+type triggercondition extends agent
+native Condition takes code f returns conditionfunc
+native Filter takes code f returns filterfunc
+native DestroyBoolExpr takes boolexpr c returns nothing
+native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+"
+    );
+    let map = "\
+globals
+trigger T = null
+trigger other = null
+boolexpr C = null
+triggercondition old_condition = null
+triggeraction old_action = null
+triggeraction old_second = null
+integer trace = 0
+endglobals
+function predicate takes nothing returns boolean
+return true
+endfunction
+function first takes nothing returns nothing
+call DestroyTrigger(T)
+set trace = trace * 10 + 1
+endfunction
+function second takes nothing returns nothing
+set trace = trace * 10 + 2
+endfunction
+function third takes nothing returns nothing
+set trace = trace * 10 + 3
+endfunction
+function main takes nothing returns nothing
+set T = CreateTrigger()
+set other = CreateTrigger()
+set C = Condition(function predicate)
+set old_condition = TriggerAddCondition(T, C)
+set old_action = TriggerAddAction(T, function first)
+set old_second = TriggerAddAction(T, function second)
+call TriggerExecute(T)
+call DestroyBoolExpr(C)
+set C = Condition(function predicate)
+call TriggerAddCondition(other, C)
+call TriggerAddAction(other, function third)
+call TriggerAddAction(other, function third)
+call TriggerExecute(other)
+endfunction
+";
+    let h = host_map(&common, map, 32, 2)
+        .with_filters(super::FilterBudget { max_records: 0 })
+        .unwrap()
+        .with_conditions(super::ConditionBudget { max_records: 2 })
+        .unwrap()
+        .with_trigger_conditions(1)
+        .unwrap()
+        .with_trigger_runtime(input(0))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(program, h);
+    vm.call("main", &[]).unwrap();
+    assert_eq!(vm.global("trace"), Value::Int(1233));
+    assert_eq!(vm.host().retained_trigger_conditions().unwrap(), 1);
+    let Value::Handle(action) = vm.global("old_action") else {
+        panic!("action")
+    };
+    let Value::Handle(condition) = vm.global("old_condition") else {
+        panic!("condition")
+    };
+    assert!(vm.host().trigger_action(action).is_err());
+    let Value::Handle(second) = vm.global("old_second") else {
+        panic!("action")
+    };
+    assert!(vm.host().trigger_action(second).is_err());
+    assert!(vm.host().trigger_condition_registration(condition).is_err());
+}
+
+#[test]
+fn trigger_destruction_detaches_each_event_filter_only_from_its_owner() {
+    let common = format!(
+        "{COMMON}\n\
+type player extends agent
+type region extends agent
+type playerunitevent extends eventid
+type boolexpr extends agent
+type filterfunc extends boolexpr
+native Filter takes code f returns filterfunc
+native DestroyBoolExpr takes boolexpr f returns nothing
+"
+    );
+    let map = "function predicate takes nothing returns boolean\nreturn true\nendfunction\n";
+    let mut h = host_map(&common, map, 32, 0)
+        .with_filters(super::FilterBudget { max_records: 1 })
+        .unwrap()
+        .with_trigger_runtime(input(0))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let first = h.native("CreateTrigger", &[]).unwrap();
+    let second = h.native("CreateTrigger", &[]).unwrap();
+    let filter = h
+        .native(
+            "Filter",
+            &[Value::Code(program.function_id("predicate").unwrap())],
+        )
+        .unwrap();
+    let Value::Handle(f) = filter else {
+        panic!("filter")
+    };
+    let player = h.inner.reserve_identity("player").unwrap();
+    let unit = h.inner.reserve_identity("unit").unwrap();
+    let region = h.inner.reserve_identity("region").unwrap();
+    let event = h.inner.reserve_identity("playerunitevent").unwrap();
+    let mut subscriptions = Vec::new();
+    // The family constructors have separate contract tests; these fixtures isolate shared ownership.
+    for owner in [&first, &second] {
+        let Value::Handle(trigger) = owner else {
+            panic!("trigger")
+        };
+        for entry in [
+            super::Entry::RegisteredPlayerUnitEvent(super::PlayerUnitEventRegistration {
+                trigger: *trigger,
+                player,
+                playerunitevent: event,
+                enumerand: 0,
+                filter: Some(f),
+            }),
+            super::Entry::RegisteredUnitInRange(super::UnitInRangeRegistration {
+                trigger: *trigger,
+                unit,
+                range: 1.0,
+                filter: Some(f),
+            }),
+            super::Entry::RegisteredRegionEvent(super::RegionEventRegistration {
+                trigger: *trigger,
+                region,
+                filter: Some(f),
+                kind: super::RegionEventKind::Enter,
+            }),
+        ] {
+            subscriptions.push(
+                h.inner
+                    .allocate(entry, "synthetic event ownership")
+                    .unwrap(),
+            );
+        }
+    }
+    let before = h.inner().handles();
+    h.native("DestroyTrigger", &[first]).unwrap();
+    assert!(
+        h.native("DestroyBoolExpr", std::slice::from_ref(&filter))
+            .is_err()
+    );
+    for (index, id) in subscriptions.iter().enumerate() {
+        let retained = match h.inner.entry(*id).unwrap() {
+            super::Entry::RegisteredPlayerUnitEvent(r) => r.filter,
+            super::Entry::RegisteredUnitInRange(r) => r.filter,
+            super::Entry::RegisteredRegionEvent(r) => r.filter,
+            _ => panic!("subscription identity changed"),
+        };
+        assert_eq!(retained, if index < 3 { None } else { Some(f) });
+    }
+    h.native("DestroyTrigger", &[second]).unwrap();
+    h.native("DestroyBoolExpr", &[filter]).unwrap();
+    assert_eq!(h.inner().handles(), before);
+}
+
+const CONDITION_EDIT_COMMON: &str = "
+type boolexpr extends agent
+type conditionfunc extends boolexpr
+type triggercondition extends agent
+native Condition takes code f returns conditionfunc
+native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+native TriggerRemoveCondition takes trigger t, triggercondition c returns nothing
+native TriggerClearConditions takes trigger t returns nothing
+native TriggerEvaluate takes trigger t returns boolean
+";
+
+#[test]
+fn explicit_condition_traversal_matches_selected_runtime_mutation_probes() {
+    let common = format!("{COMMON}{CONDITION_EDIT_COMMON}");
+    let functions = r"
+globals
+trigger T = null
+triggercondition pending = null
+triggercondition current = null
+integer trace = 0
+boolean nested = false
+boolean nestedResult = false
+endglobals
+function yes takes nothing returns boolean
+set trace = trace * 10 + 7
+return true
+endfunction
+function no takes nothing returns boolean
+set trace = trace * 10 + 5
+return false
+endfunction
+function clear takes nothing returns boolean
+set trace = trace * 10 + 4
+call TriggerClearConditions(T)
+return true
+endfunction
+function removeNext takes nothing returns boolean
+set trace = trace * 10 + 6
+call TriggerRemoveCondition(T, pending)
+return true
+endfunction
+function removeSelf takes nothing returns boolean
+set trace = trace * 10 + 8
+call TriggerRemoveCondition(T, current)
+return true
+endfunction
+function append takes nothing returns boolean
+set trace = trace * 10 + 9
+call TriggerAddCondition(T, Condition(function yes))
+return true
+endfunction
+function clearAppend takes nothing returns boolean
+set trace = trace * 10 + 3
+call TriggerClearConditions(T)
+call TriggerAddCondition(T, Condition(function yes))
+return true
+endfunction
+function reenter takes nothing returns boolean
+set trace = trace * 10 + 1
+if not nested then
+set nested = true
+set nestedResult = TriggerEvaluate(T)
+set nested = false
+endif
+return true
+endfunction
+";
+    for (setup, result, trace) in [
+        ("", true, 0),
+        (
+            "call TriggerAddCondition(T, Condition(function yes))",
+            true,
+            7,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function no))\ncall TriggerAddCondition(T, Condition(function yes))",
+            false,
+            57,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function clear))\ncall TriggerAddCondition(T, Condition(function no))",
+            false,
+            4,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function removeNext))\nset pending = TriggerAddCondition(T, Condition(function no))",
+            false,
+            6,
+        ),
+        (
+            "set current = TriggerAddCondition(T, Condition(function removeSelf))\ncall TriggerAddCondition(T, Condition(function yes))",
+            true,
+            87,
+        ),
+        (
+            "set current = TriggerAddCondition(T, Condition(function removeSelf))",
+            true,
+            8,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function append))\ncall TriggerAddCondition(T, Condition(function no))",
+            false,
+            957,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function append))",
+            true,
+            9,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function clearAppend))\ncall TriggerAddCondition(T, Condition(function no))",
+            false,
+            3,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function removeNext))\nset pending = TriggerAddCondition(T, Condition(function no))\ncall TriggerAddCondition(T, Condition(function yes))",
+            false,
+            6,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function removeNext))\ncall TriggerAddCondition(T, Condition(function yes))\nset pending = TriggerAddCondition(T, Condition(function no))",
+            true,
+            67,
+        ),
+        (
+            "call TriggerAddCondition(T, Condition(function reenter))\ncall TriggerAddCondition(T, Condition(function yes))",
+            true,
+            1177,
+        ),
+    ] {
+        let map = format!(
+            "{functions}\nfunction main takes nothing returns boolean\nset T = CreateTrigger()\n{setup}\nreturn TriggerEvaluate(T)\nendfunction\n"
+        );
+        let h = host_map(&common, &map, 128, 0)
+            .with_conditions(super::ConditionBudget { max_records: 16 })
+            .unwrap()
+            .with_trigger_conditions(16)
+            .unwrap()
+            .with_trigger_runtime(input(0))
+            .unwrap();
+        let program = Arc::clone(&h.inner().program);
+        let mut vm = pcx_script::OwnedVm::new_owned(program, h);
+        vm.init_globals().unwrap();
+        assert_eq!(
+            vm.call("main", &[]).unwrap(),
+            Value::Bool(result),
+            "{setup}"
+        );
+        assert_eq!(vm.global("trace"), Value::Int(trace), "{setup}");
+        if trace == 1177 {
+            assert_eq!(vm.global("nestedResult"), Value::Bool(true));
+        }
+        assert_eq!(
+            vm.host().native("GetTriggeringTrigger", &[]).unwrap(),
+            Value::Null
+        );
+    }
+}
+
+#[test]
+fn growing_condition_traversal_hits_registration_budget_and_unwinds_context() {
+    let common = format!("{COMMON}{CONDITION_EDIT_COMMON}");
+    let map = "globals
+trigger T = null
+boolexpr C = null
+integer hits = 0
+endglobals
+function grow takes nothing returns boolean
+set hits = hits + 1
+call TriggerAddCondition(T, C)
+return true
+endfunction
+function main takes nothing returns boolean
+set T = CreateTrigger()
+set C = Condition(function grow)
+call TriggerAddCondition(T, C)
+call TriggerAddCondition(T, C)
+return TriggerEvaluate(T)
+endfunction
+function recover takes nothing returns boolean
+call TriggerClearConditions(T)
+return TriggerEvaluate(T)
+endfunction
+";
+    let h = host_map(&common, map, 32, 0)
+        .with_conditions(super::ConditionBudget { max_records: 1 })
+        .unwrap()
+        .with_trigger_conditions(4)
+        .unwrap()
+        .with_trigger_runtime(input(0))
+        .unwrap();
+    let program = Arc::clone(&h.inner().program);
+    let mut vm = pcx_script::OwnedVm::new_owned(program, h);
+    vm.init_globals().unwrap();
+    let error = vm.call("main", &[]).unwrap_err();
+    assert!(
+        error.message.contains("trigger condition registration"),
+        "{error:?}"
+    );
+    assert_eq!(vm.global("hits"), Value::Int(3));
+    assert_eq!(vm.host().retained_trigger_conditions().unwrap(), 4);
+    assert_eq!(
+        vm.host().native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+    assert_eq!(vm.call("recover", &[]).unwrap(), Value::Bool(true));
+    assert_eq!(vm.host().retained_trigger_conditions().unwrap(), 0);
+}

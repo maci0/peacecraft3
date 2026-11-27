@@ -12,6 +12,8 @@ type triggercondition extends agent
 native Condition takes code f returns conditionfunc
 native Filter takes code f returns filterfunc
 native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+native TriggerRemoveCondition takes trigger t, triggercondition c returns nothing
+native TriggerClearConditions takes trigger t returns nothing
 native DestroyBoolExpr takes boolexpr e returns nothing
 ";
 const MAP: &str = "\
@@ -233,4 +235,99 @@ fn a_wrapper_retained_by_a_trigger_condition_refuses_destruction_and_stays_live(
         vm.host().inner.condition_callback(c).is_ok(),
         "the wrapper stays live"
     );
+}
+
+#[test]
+fn removal_and_clear_release_only_the_owning_triggers_associations() {
+    let (ctx, h) = host(4);
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let t = vm.global("T");
+    let a = vm.global("A");
+    let c = vm.global("C");
+    let f = vm.global("F");
+    let h = &mut vm.host().inner;
+    let other = h.native("CreateTrigger", &[]).unwrap();
+    let other_condition = h.native(ADD, &[other.clone(), c.clone()]).unwrap();
+    let before = h.inner().handles();
+    assert!(
+        h.native("TriggerRemoveCondition", &[other.clone(), a.clone()])
+            .is_err()
+    );
+    assert_eq!(h.retained_trigger_conditions().unwrap(), 4);
+    h.native("TriggerRemoveCondition", &[t.clone(), a.clone()])
+        .unwrap();
+    assert!(h.trigger_condition_registration(id(&a)).is_err());
+    assert!(h.native("TriggerRemoveCondition", &[t.clone(), a]).is_err());
+    assert_eq!(h.retained_trigger_conditions().unwrap(), 3);
+    h.native("TriggerClearConditions", std::slice::from_ref(&t))
+        .unwrap();
+    h.native("TriggerClearConditions", std::slice::from_ref(&t))
+        .unwrap();
+    assert_eq!(h.retained_trigger_conditions().unwrap(), 1);
+    assert!(
+        h.trigger_condition_registration(id(&other_condition))
+            .is_ok()
+    );
+    h.native("DestroyBoolExpr", &[f]).unwrap();
+    assert!(
+        h.native("DestroyBoolExpr", std::slice::from_ref(&c))
+            .is_err()
+    );
+    let replacement = h.native(ADD, &[t, c.clone()]).unwrap();
+    assert!(id(&replacement).token() > id(&other_condition).token());
+    assert_eq!(h.inner().handles(), before + 1);
+    h.native("TriggerClearConditions", &[other]).unwrap();
+    assert!(
+        h.native("DestroyBoolExpr", std::slice::from_ref(&c))
+            .is_err()
+    );
+    let owner = h
+        .trigger_condition_registration(id(&replacement))
+        .unwrap()
+        .trigger;
+    h.native("TriggerClearConditions", &[Value::Handle(owner)])
+        .unwrap();
+    h.native("DestroyBoolExpr", &[c]).unwrap();
+    assert_eq!(h.retained_trigger_conditions().unwrap(), 0);
+}
+
+#[test]
+fn condition_removal_validates_declarations_and_arguments_before_mutating() {
+    for bad in [
+        common().replace(
+            "native TriggerClearConditions",
+            "constant native TriggerClearConditions",
+        ),
+        common().replace(
+            "native TriggerRemoveCondition takes trigger t, triggercondition c",
+            "native TriggerRemoveCondition takes trigger t, boolexpr c",
+        ),
+    ] {
+        let (_, h) = enumerated(&bad, MAP, 64);
+        assert!(
+            h.with_trigger_admission(trigger_limits(4, 0))
+                .unwrap()
+                .with_trigger_conditions(4)
+                .is_err()
+        );
+    }
+    let (ctx, h) = host(3);
+    let mut vm = Arc::clone(&ctx.scripts).owned_vm(h);
+    vm.init_globals().unwrap();
+    vm.call("main", &[]).unwrap();
+    let t = vm.global("T");
+    let c = vm.global("C");
+    let h = &mut vm.host().inner;
+    for (name, args) in [
+        ("TriggerClearConditions", vec![]),
+        ("TriggerClearConditions", vec![Value::Null]),
+        ("TriggerClearConditions", vec![c.clone()]),
+        ("TriggerRemoveCondition", vec![t.clone()]),
+        ("TriggerRemoveCondition", vec![t, c]),
+    ] {
+        assert!(h.native(name, &args).is_err());
+        assert_eq!(h.retained_trigger_conditions().unwrap(), 3);
+    }
 }

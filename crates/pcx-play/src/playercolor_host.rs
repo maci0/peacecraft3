@@ -345,6 +345,8 @@ enum Entry {
     },
     DeadTrigger,
     DeadBoolExpr,
+    DeadTriggerCondition,
+    DeadTriggerAction,
     RegisteredTimedEvent {
         trigger: HandleId,
         run: objects::timers::Run,
@@ -869,8 +871,8 @@ impl EnumHost {
             | Entry::RegisteredUnitStateEvent(_)
             | Entry::RegisteredGameStateEvent { .. }
             | Entry::RegisteredVariableEvent { .. } => "event",
-            Entry::TriggerAction { .. } => "triggeraction",
-            Entry::TriggerCondition(_) => "triggercondition",
+            Entry::TriggerAction { .. } | Entry::DeadTriggerAction => "triggeraction",
+            Entry::TriggerCondition(_) | Entry::DeadTriggerCondition => "triggercondition",
             Entry::Force { .. } => self
                 .program
                 .natives()
@@ -1030,3 +1032,5 @@ pub use objects::{
     RegularMusicCommand, RegularMusicController, RegularMusicEffect, RegularMusicOperation,
     RegularMusicRules,
 };
+
+pub(crate) use objects::ConditionEvaluation;

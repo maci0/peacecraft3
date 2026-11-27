@@ -699,3 +699,322 @@ mod death_event_tests;
 
 #[path = "range_event_tests.rs"]
 mod range_event_tests;
+
+#[test]
+fn action_cleanup_admission_checks_optional_contracts_and_sources() {
+    let map = "function main takes nothing returns nothing\nendfunction\n";
+    let declarations = "\
+native TriggerRemoveAction takes trigger t, triggeraction a returns nothing
+native TriggerClearActions takes trigger t returns nothing
+";
+    let common = common_source(&format!("{EXTRAS}{declarations}"));
+    for bad in [
+        common.replace(
+            "native TriggerClearActions",
+            "constant native TriggerClearActions",
+        ),
+        common.replace(
+            "triggeraction a returns nothing",
+            "trigger a returns nothing",
+        ),
+        common.replace(
+            "native TriggerClearActions takes trigger t returns nothing",
+            "native TriggerClearActions takes trigger t returns integer",
+        ),
+    ] {
+        let (_, h) = enumerated(&bad, map, 32);
+        assert!(h.with_trigger_admission(action_limits(2, 0, 2)).is_err());
+    }
+    for declaration in declarations.lines() {
+        let (_, h) = enumerated(
+            &common.replace(declaration, ""),
+            &format!("{declaration}\n{map}"),
+            32,
+        );
+        let Err(error) = h.with_trigger_admission(action_limits(2, 0, 2)) else {
+            panic!("foreign cleanup source admitted")
+        };
+        assert_eq!(error.failure, Failure::Source);
+    }
+    let common = common_source(EXTRAS);
+    let (_, mut h) = enumerated(&common, map, 32);
+    h = h.with_trigger_admission(action_limits(2, 0, 2)).unwrap();
+    for name in ["TriggerRemoveAction", "TriggerClearActions"] {
+        assert!(h.native(name, &[]).unwrap_err().contains("unsupported"));
+    }
+}
+
+pub(super) const CONDITION_SESSION_NEUTRAL_DECLARATIONS: &str =
+    "native GetPlayerNeutralPassive takes nothing returns integer
+native GetPlayerNeutralAggressive takes nothing returns integer
+native GetBJMaxPlayers takes nothing returns integer
+native GetBJPlayerNeutralVictim takes nothing returns integer
+native GetBJPlayerNeutralExtra takes nothing returns integer
+";
+
+pub(super) fn publish_condition_session(
+    ctx: Arc<ParsedMapContext>,
+    host: ObjectHost,
+) -> crate::map_script_session::MapScriptSession<crate::map_startup_host::MapStartupHost> {
+    use crate::map_script_session::MapScriptSession;
+    use crate::map_startup_host::MapStartupHost;
+    use crate::neutral_player::{SelectedMapNeutralHost, tests as neutral};
+    let world = SelectedMapNeutralHost::try_new(ctx.clone(), neutral::slots_rule(301, -3, 9), host)
+        .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(ctx.clone(), neutral::extra_rule(301, -3, 9), world)
+            .unwrap();
+    let world =
+        SelectedMapNeutralHost::try_new(ctx.clone(), neutral::victim_rule(301, -3, 9), world)
+            .unwrap();
+    let world = SelectedMapNeutralHost::try_new(
+        ctx.clone(),
+        neutral::bj_max_players_rule(301, -3, 9),
+        world,
+    )
+    .unwrap();
+    let world = SelectedMapNeutralHost::try_new(ctx.clone(), neutral::aggressive_rules(301), world)
+        .unwrap();
+    let world = SelectedMapNeutralHost::try_new(ctx.clone(), neutral::rules(), world).unwrap();
+    let main = ctx.scripts.program().function_id("main").unwrap();
+    let mut session = MapScriptSession::<MapStartupHost>::default();
+    session
+        .replace(
+            ctx,
+            |_| Ok::<_, std::convert::Infallible>(MapStartupHost::timer_session_fixture(world)),
+            &[main],
+        )
+        .unwrap();
+    session
+}
+
+pub(super) const CONDITION_MUTATION_FUNCTIONS: &str = r"
+globals
+trigger T = null
+triggercondition pending = null
+triggercondition current = null
+boolean nested = false
+integer trace = 0
+integer actions = 0
+endglobals
+function yes takes nothing returns boolean
+set trace = trace * 10 + 7
+return true
+endfunction
+function no takes nothing returns boolean
+set trace = trace * 10 + 5
+return false
+endfunction
+function clear takes nothing returns boolean
+set trace = trace * 10 + 4
+call TriggerClearConditions(T)
+return true
+endfunction
+function append takes nothing returns boolean
+set trace = trace * 10 + 9
+call TriggerAddCondition(T, Condition(function yes))
+return true
+endfunction
+function removeNext takes nothing returns boolean
+set trace = trace * 10 + 6
+call TriggerRemoveCondition(T, pending)
+return true
+endfunction
+function removeSelf takes nothing returns boolean
+set trace = trace * 10 + 8
+call TriggerRemoveCondition(T, current)
+return true
+endfunction
+function clearAppend takes nothing returns boolean
+set trace = trace * 10 + 3
+call TriggerClearConditions(T)
+call TriggerAddCondition(T, Condition(function yes))
+return true
+endfunction
+function reenter takes nothing returns boolean
+local boolean result
+set trace = trace * 10 + 1
+if not nested then
+set nested = true
+set result = TriggerEvaluate(T)
+set nested = false
+endif
+return true
+endfunction
+function extraAction takes nothing returns nothing
+set actions = actions + 10
+endfunction
+function clearActions takes nothing returns boolean
+set trace = trace * 10 + 2
+call TriggerClearActions(T)
+return true
+endfunction
+function appendAction takes nothing returns boolean
+set trace = trace * 10 + 3
+call TriggerAddAction(T, function extraAction)
+return true
+endfunction
+function action takes nothing returns nothing
+set actions = actions + 1
+endfunction
+";
+
+pub(super) const CONDITION_MUTATION_CASES: &[(&str, i32, i32)] = &[
+    ("", 0, 1),
+    ("call TriggerAddCondition(T, Condition(function yes))", 7, 1),
+    (
+        "call TriggerAddCondition(T, Condition(function no))\ncall TriggerAddCondition(T, Condition(function yes))",
+        57,
+        0,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function clear))\ncall TriggerAddCondition(T, Condition(function no))",
+        4,
+        0,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function append))\ncall TriggerAddCondition(T, Condition(function no))",
+        957,
+        0,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function append))",
+        9,
+        1,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function clearActions))",
+        2,
+        0,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function appendAction))",
+        3,
+        11,
+    ),
+    (
+        "set current = TriggerAddCondition(T, Condition(function removeSelf))\ncall TriggerAddCondition(T, Condition(function yes))",
+        87,
+        1,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function removeNext))\nset pending = TriggerAddCondition(T, Condition(function no))\ncall TriggerAddCondition(T, Condition(function yes))",
+        6,
+        0,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function removeNext))\ncall TriggerAddCondition(T, Condition(function yes))\nset pending = TriggerAddCondition(T, Condition(function no))",
+        67,
+        1,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function clearAppend))\ncall TriggerAddCondition(T, Condition(function no))",
+        3,
+        0,
+    ),
+    (
+        "call TriggerAddCondition(T, Condition(function reenter))\ncall TriggerAddCondition(T, Condition(function yes))",
+        1177,
+        1,
+    ),
+];
+
+#[test]
+fn published_timer_conditions_follow_live_registrations_and_select_actions_afterward() {
+    use crate::playercolor_host::{ConditionBudget, TriggerRuntimeInput};
+
+    let extras = format!(
+        "{EXTRAS}{CONDITION_SESSION_NEUTRAL_DECLARATIONS}{}",
+        r"
+type boolexpr extends agent
+type conditionfunc extends boolexpr
+type triggercondition extends agent
+type gameevent extends eventid
+constant native ConvertGameEvent takes integer i returns gameevent
+native Condition takes code f returns conditionfunc
+native TriggerAddCondition takes trigger t, boolexpr c returns triggercondition
+native TriggerClearConditions takes trigger t returns nothing
+native TriggerRemoveCondition takes trigger t, triggercondition c returns nothing
+native TriggerEvaluate takes trigger t returns boolean
+native TriggerClearActions takes trigger t returns nothing
+native DestroyTrigger takes trigger t returns nothing
+native TriggerRegisterTimerExpireEvent takes trigger t, timer which returns event
+native TriggerRegisterTimerEvent takes trigger t, real timeout, boolean periodic returns event
+constant native GetTriggeringTrigger takes nothing returns trigger
+constant native GetTriggerEventId takes nothing returns eventid
+native TimerStart takes timer t, real timeout, boolean periodic, code handler returns nothing
+native TimerGetElapsed takes timer t returns real
+native TimerGetRemaining takes timer t returns real
+native TimerGetTimeout takes timer t returns real
+native GetExpiredTimer takes nothing returns timer
+"
+    );
+    let common = common_source(&extras).replace(
+        "\nendglobals\n",
+        "\nconstant gameevent TEST_TIMER = ConvertGameEvent(15)\nendglobals\n",
+    );
+    let functions = CONDITION_MUTATION_FUNCTIONS;
+    for &(setup, trace, actions) in CONDITION_MUTATION_CASES {
+        let map = format!(
+            "{functions}\nfunction main takes nothing returns nothing\nset T = CreateTrigger()\ncall TriggerAddAction(T, function action)\n{setup}\ncall TriggerRegisterTimerEvent(T, 0.03125, false)\nendfunction\n"
+        );
+        let ctx = context(300, &common, &map, "synthetic timer conditions");
+        let inner = EnumHost::checked_selected(
+            ctx.scripts.shared_program(),
+            "synthetic timer conditions",
+            &[
+                "ConvertPlacement",
+                "ConvertPlayerColor",
+                "ConvertRacePref",
+                "ConvertMapControl",
+                "ConvertUnitEvent",
+                "ConvertGameEvent",
+            ],
+            Limits {
+                max_handles: 128,
+                admission_steps: 1000,
+                expression_depth: 64,
+                expression_work: 4096,
+            },
+        )
+        .unwrap();
+        let host = ObjectHost::checked(inner)
+            .unwrap()
+            .with_players(Arc::clone(&ctx), slots_rule(301, -3, 9), budget())
+            .unwrap()
+            .with_trigger_admission(action_limits(8, 0, 8))
+            .unwrap()
+            .with_conditions(ConditionBudget { max_records: 16 })
+            .unwrap()
+            .with_trigger_conditions(16)
+            .unwrap()
+            .with_timer_events(8)
+            .unwrap()
+            .with_timer_runtime(0.)
+            .unwrap()
+            .with_trigger_runtime(TriggerRuntimeInput {
+                initial_enabled: true,
+                timer_event_global: "TEST_TIMER".into(),
+                max_timed_events: 8,
+                max_parked_threads: 0,
+            })
+            .unwrap();
+        let mut session = publish_condition_session(ctx, host);
+        assert_eq!(session.advance_timers(0.125, 8).unwrap(), 1, "{setup}");
+        assert_eq!(session.global("trace"), Some(Value::Int(trace)), "{setup}");
+        assert_eq!(
+            session.global("actions"),
+            Some(Value::Int(actions)),
+            "{setup}"
+        );
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects_mut()
+                .native("GetTriggeringTrigger", &[])
+                .unwrap(),
+            Value::Null
+        );
+    }
+}

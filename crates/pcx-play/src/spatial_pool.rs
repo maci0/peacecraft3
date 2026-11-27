@@ -1083,6 +1083,23 @@ impl PoolOwner {
         self.note(identity, "clear region rectangle", result);
     }
 
+    /// Clear the requested cells even when they came from a different rectangle.
+    pub(crate) fn region_cells_cleared(&mut self, region: HandleId, bounds: [f32; 4]) {
+        if self.refusal.is_some()
+            || !matches!(self.tracked.get(&region.token()), Some(Tracked::Region(_)))
+        {
+            return;
+        }
+        let result = region_cells(
+            bounds,
+            self.geometry.origin,
+            self.geometry.cell_size,
+            self.geometry.size(),
+        )
+        .and_then(|rect| self.live.remove_rectangle(region.token(), rect).map(drop));
+        self.note(region.token(), "clear region cells", result);
+    }
+
     /// Apply the commanded movement contribution of a moving unit. Only a change in
     /// velocity or in the presence of a non-order contributor is applied.
     pub(crate) fn command_velocity(

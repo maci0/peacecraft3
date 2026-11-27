@@ -514,3 +514,19 @@ fn untracked_placements_hold_no_owner() {
     p.hide(id(1)).unwrap();
     assert!(p.spatial().is_none());
 }
+
+#[test]
+fn geometric_region_clear_accepts_a_different_rectangle_and_readdition_survives() {
+    let mut owner = pool();
+    owner.region_added(id(9), [0., 0., 12., 12.]);
+    owner.region_cells_cleared(id(9), [0., 0., 1., 1.]);
+    owner.cleanup(0.25);
+    assert!(owner.chain([0, 0]).unwrap().next().is_none());
+    assert!(owner.chain([1, 1]).unwrap().any(|l| l.identity == 9));
+    owner.region_added(id(9), [0., 0., 1., 1.]);
+    assert!(owner.chain([0, 0]).unwrap().any(|l| l.identity == 9));
+    owner.region_removed(id(9));
+    owner.cleanup(0.5);
+    assert!(owner.chain([0, 0]).unwrap().next().is_none());
+    assert!(owner.chain([1, 1]).unwrap().next().is_none());
+}

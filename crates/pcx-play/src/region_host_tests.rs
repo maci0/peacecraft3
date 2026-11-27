@@ -557,3 +557,428 @@ fn rectangle_additions_reach_the_spatial_owner_once_the_placement_cache_exists()
     );
     assert!(owner.chain([0, 0]).unwrap().next().is_none());
 }
+
+fn location_source() -> String {
+    format!(
+        "{COMMON}\n\
+type location extends agent
+native Location takes real x, real y returns location
+native MoveLocation takes location p, real x, real y returns nothing
+native RemoveLocation takes location p returns nothing
+native IsLocationInRegion takes region g, location p returns boolean
+"
+    )
+}
+
+#[test]
+fn owned_vm_tests_current_location_against_retained_region_bounds() {
+    let script = "function exercise takes nothing returns boolean
+local region g = CreateRegion()
+local rect r = Rect(-4.0, 2.0, 8.0, 10.0)
+local location p = Location(0.0, 4.0)
+local boolean inside
+call RegionAddRect(g, r)
+set inside = IsLocationInRegion(g, p)
+call MoveLocation(p, -20.0, 4.0)
+set inside = inside and not IsLocationInRegion(g, p)
+call MoveRectTo(r, 100.0, 100.0)
+call RemoveRect(r)
+call MoveLocation(p, 0.0, 4.0)
+set inside = inside and IsLocationInRegion(g, p)
+call RemoveLocation(p)
+return inside
+endfunction
+";
+    let mut vm = base(&location_source(), script, 64)
+        .with_regions(limits())
+        .unwrap()
+        .with_locations()
+        .unwrap()
+        .into_vm();
+    assert_eq!(vm.call("exercise", &[]).unwrap(), Value::Bool(true));
+    assert!(
+        vm.host()
+            .native_coverage()
+            .supported
+            .iter()
+            .any(|name| name == "IsLocationInRegion")
+    );
+}
+
+#[test]
+fn location_region_queries_require_live_admitted_locations_and_selected_contracts() {
+    let source = location_source();
+    let mut h = base(&source, "", 64).with_regions(limits()).unwrap();
+    let g = h.native("CreateRegion", &[]).unwrap();
+    assert!(
+        h.native("IsLocationInRegion", &[g.clone(), Value::Null])
+            .unwrap_err()
+            .contains("locations not admitted")
+    );
+    let mut h = h.with_locations().unwrap();
+    let p = h
+        .native("Location", &[Value::Real(1.), Value::Real(2.)])
+        .unwrap();
+    let before = h.inner().handles();
+    assert_eq!(
+        h.native("IsLocationInRegion", &[g.clone(), p.clone()])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    for args in [
+        vec![],
+        vec![g.clone()],
+        vec![g.clone(), g.clone()],
+        vec![Value::Null, p.clone()],
+    ] {
+        let error = h.native("IsLocationInRegion", &args).unwrap_err();
+        assert!(error.contains("IsLocationInRegion"), "{error}");
+    }
+    h.native("RemoveLocation", std::slice::from_ref(&p))
+        .unwrap();
+    assert!(h.native("IsLocationInRegion", &[g, p]).is_err());
+    assert_eq!(h.inner().handles(), before);
+    for bad in [
+        source.replace(
+            "native IsLocationInRegion",
+            "constant native IsLocationInRegion",
+        ),
+        source.replace("location p returns boolean", "rect p returns boolean"),
+    ] {
+        assert!(base(&bad, "", 64).with_regions(limits()).is_err());
+    }
+    let declaration = "native IsLocationInRegion takes region g, location p returns boolean";
+    let foreign = source.replace(declaration, "");
+    let Err(error) = base(&foreign, declaration, 64).with_regions(limits()) else {
+        panic!("foreign location predicate admitted")
+    };
+    assert_eq!(error.failure, Failure::Source);
+}
+
+#[test]
+fn selected_cell_geometry_clears_current_bounds_and_readdition_restores_membership() {
+    let mut h = base(COMMON, "", 64)
+        .with_script_numeric(crate::script_numeric::region_cells::tests::policy(5))
+        .with_world_bounds([-64., -64., 128., 128.])
+        .unwrap()
+        .with_regions(RegionBudget {
+            max_rect_additions: 6,
+            ..limits()
+        })
+        .unwrap();
+    h.enable_region_registration_order().unwrap();
+    let (g, r, _) = inputs(&mut h);
+    h.native(ADD, &[g.clone(), r.clone()]).unwrap();
+    let query = |h: &mut ObjectHost, x, y| {
+        h.native(POINT, &[g.clone(), Value::Real(x), Value::Real(y)])
+            .unwrap()
+    };
+    assert_eq!(query(&mut h, -32., 4.), Value::Bool(true));
+    assert_eq!(query(&mut h, 31.75, 4.), Value::Bool(true));
+    assert_eq!(query(&mut h, 32., 4.), Value::Bool(false));
+    assert_eq!(query(&mut h, 4., -0.25), Value::Bool(false));
+    let clear = h
+        .native(
+            "Rect",
+            &[Value::Int(0), Value::Int(0), Value::Int(1), Value::Int(1)],
+        )
+        .unwrap();
+    h.native(CLEAR, &[g.clone(), clear]).unwrap();
+    assert_eq!(query(&mut h, 4., 4.), Value::Bool(false));
+    assert_eq!(query(&mut h, -1., 4.), Value::Bool(true));
+    h.native(ADD, &[g.clone(), r.clone()]).unwrap();
+    assert_eq!(query(&mut h, 4., 4.), Value::Bool(true));
+    h.native("MoveRectTo", &[r.clone(), Value::Int(80), Value::Int(80)])
+        .unwrap();
+    h.native(CLEAR, &[g.clone(), r]).unwrap();
+    assert_eq!(query(&mut h, 4., 4.), Value::Bool(true));
+    assert_eq!(
+        h.region_cell_edits()
+            .unwrap()
+            .map(|(_, _, added)| added)
+            .collect::<Vec<_>>(),
+        [true, false, true, false]
+    );
+    assert_eq!(h.region_registrations().unwrap().count(), 2);
+    h.native(REMOVE, std::slice::from_ref(&g)).unwrap();
+    assert!(h.native(POINT, &[g, Value::Int(0), Value::Int(0)]).is_err());
+    assert_eq!(h.region_cell_edits().unwrap().count(), 0);
+}
+
+#[test]
+fn selected_cell_edit_budget_refuses_before_clear_and_failed_calls_keep_the_slot() {
+    let mut h = base(COMMON, "", 64)
+        .with_script_numeric(crate::script_numeric::region_cells::tests::policy(5))
+        .with_world_bounds([-64., -64., 128., 128.])
+        .unwrap()
+        .with_regions(RegionBudget {
+            max_rect_additions: 2,
+            ..limits()
+        })
+        .unwrap();
+    let (g, r, t) = inputs(&mut h);
+    h.native(ADD, &[g.clone(), r.clone()]).unwrap();
+    assert!(h.native(CLEAR, &[g.clone(), t]).is_err());
+    h.native(CLEAR, &[g.clone(), r.clone()]).unwrap();
+    assert!(
+        h.native(ADD, &[g.clone(), r])
+            .unwrap_err()
+            .contains("region cell edits")
+    );
+    assert_eq!(
+        h.native(POINT, &[g, Value::Int(0), Value::Int(4)]).unwrap(),
+        Value::Bool(false)
+    );
+    assert_eq!(h.retained_region_rect_requests().unwrap(), 1);
+    assert_eq!(h.region_cell_edits().unwrap().count(), 2);
+}
+
+fn cell_source() -> String {
+    format!(
+        "{}\nnative RegionAddCell takes region g, real x, real y returns nothing\nnative RegionClearCell takes region g, real x, real y returns nothing\nnative RegionAddCellAtLoc takes region g, location p returns nothing\nnative RegionClearCellAtLoc takes region g, location p returns nothing\n",
+        location_source()
+    )
+}
+
+fn cell_host(edits: usize) -> ObjectHost {
+    base(&cell_source(), "", 64)
+        .with_locations()
+        .unwrap()
+        .with_script_numeric(crate::script_numeric::region_cells::tests::policy(5))
+        .with_world_bounds([-64., -64., 128., 128.])
+        .unwrap()
+        .with_regions(RegionBudget {
+            max_rect_additions: edits,
+            ..limits()
+        })
+        .unwrap()
+}
+
+#[test]
+fn region_cells_mix_with_rectangles_and_copy_live_location_points_without_handles() {
+    let mut h = cell_host(8);
+    let g = h.native(CREATE, &[]).unwrap();
+    let p = h
+        .native("Location", &[Value::Real(-32.), Value::Real(-32.)])
+        .unwrap();
+    let before = h.inner().handles();
+    h.native(ADD_CELL_LOCATION, &[g.clone(), p.clone()])
+        .unwrap();
+    let query = |h: &mut ObjectHost, x, y| {
+        h.native(POINT, &[g.clone(), Value::Real(x), Value::Real(y)])
+            .unwrap()
+    };
+    assert_eq!(query(&mut h, -32., -32.), Value::Bool(true));
+    assert_eq!(query(&mut h, -0.25, -0.25), Value::Bool(true));
+    assert_eq!(query(&mut h, 0., -0.25), Value::Bool(false));
+    assert_eq!(query(&mut h, -32.25, -0.25), Value::Bool(false));
+    h.native(
+        "MoveLocation",
+        &[p.clone(), Value::Real(32.), Value::Real(32.)],
+    )
+    .unwrap();
+    h.native(CLEAR_CELL_LOCATION, &[g.clone(), p.clone()])
+        .unwrap();
+    assert_eq!(query(&mut h, -16., -16.), Value::Bool(true));
+    h.native(ADD_CELL_LOCATION, &[g.clone(), p.clone()])
+        .unwrap();
+    assert_eq!(query(&mut h, 63.75, 63.75), Value::Bool(true));
+    h.native(
+        CLEAR_CELL,
+        &[g.clone(), Value::Real(-0.25), Value::Real(-0.25)],
+    )
+    .unwrap();
+    assert_eq!(query(&mut h, -16., -16.), Value::Bool(false));
+    h.native(ADD_CELL, &[g.clone(), Value::Int(-32), Value::Int(-32)])
+        .unwrap();
+    assert_eq!(query(&mut h, -16., -16.), Value::Bool(true));
+    assert_eq!(h.inner().handles(), before);
+    assert_eq!(h.retained_region_rect_requests().unwrap(), 0);
+    let r = h
+        .native(
+            "Rect",
+            &[
+                Value::Int(-32),
+                Value::Int(-32),
+                Value::Int(0),
+                Value::Int(0),
+            ],
+        )
+        .unwrap();
+    h.native(CLEAR, &[g.clone(), r.clone()]).unwrap();
+    assert_eq!(query(&mut h, -16., -16.), Value::Bool(false));
+    assert_eq!(query(&mut h, 48., 48.), Value::Bool(true));
+    h.native(ADD, &[g.clone(), r]).unwrap();
+    assert_eq!(query(&mut h, -16., -16.), Value::Bool(true));
+    h.native(ADD_CELL, &[g.clone(), Value::Int(160), Value::Int(160)])
+        .unwrap();
+    assert_eq!(query(&mut h, 160., 160.), Value::Bool(false));
+    assert_eq!(query(&mut h, 127., 127.), Value::Bool(false));
+    assert_eq!(h.region_cell_edits().unwrap().count(), 8);
+    assert_eq!(h.retained_region_rect_requests().unwrap(), 1);
+}
+
+#[test]
+fn cell_edit_errors_preserve_membership_and_budget_across_all_entrypoints() {
+    let mut h = cell_host(2);
+    let g = h.native(CREATE, &[]).unwrap();
+    let p = h
+        .native("Location", &[Value::Real(1.), Value::Real(1.)])
+        .unwrap();
+    let other = h.native("CreateTrigger", &[]).unwrap();
+    h.native(ADD_CELL, &[g.clone(), Value::Int(1), Value::Int(1)])
+        .unwrap();
+    for name in [ADD_CELL, CLEAR_CELL] {
+        for args in [
+            vec![],
+            vec![g.clone()],
+            vec![Value::Null, Value::Int(0), Value::Int(0)],
+            vec![other.clone(), Value::Int(0), Value::Int(0)],
+            vec![g.clone(), Value::Real(f32::NAN), Value::Int(0)],
+            vec![g.clone(), Value::Int(0), Value::Real(f32::INFINITY)],
+            vec![g.clone(), Value::Null, Value::Int(0)],
+        ] {
+            let error = h.native(name, &args).unwrap_err();
+            assert!(error.contains(name), "{error}");
+        }
+    }
+    for name in [ADD_CELL_LOCATION, CLEAR_CELL_LOCATION] {
+        for args in [
+            vec![],
+            vec![g.clone()],
+            vec![g.clone(), Value::Null],
+            vec![g.clone(), other.clone()],
+            vec![Value::Null, p.clone()],
+            vec![g.clone(), p.clone(), p.clone()],
+        ] {
+            assert!(h.native(name, &args).is_err());
+        }
+    }
+    h.native("RemoveLocation", std::slice::from_ref(&p))
+        .unwrap();
+    for name in [ADD_CELL_LOCATION, CLEAR_CELL_LOCATION] {
+        assert!(h.native(name, &[g.clone(), p.clone()]).is_err());
+    }
+    assert_eq!(h.region_cell_edits().unwrap().count(), 1);
+    assert_eq!(
+        h.native(POINT, &[g.clone(), Value::Int(1), Value::Int(1)])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    h.native(CLEAR_CELL, &[g.clone(), Value::Int(1), Value::Int(1)])
+        .unwrap();
+    assert!(
+        h.native(ADD_CELL, &[g.clone(), Value::Int(1), Value::Int(1)])
+            .unwrap_err()
+            .contains("region cell edits")
+    );
+    assert_eq!(
+        h.native(POINT, &[g.clone(), Value::Int(1), Value::Int(1)])
+            .unwrap(),
+        Value::Bool(false)
+    );
+    h.native(REMOVE, std::slice::from_ref(&g)).unwrap();
+    assert!(
+        h.native(ADD_CELL, &[g, Value::Int(0), Value::Int(0)])
+            .is_err()
+    );
+}
+
+#[test]
+fn cell_edits_require_selected_rules_world_bounds_locations_and_matching_contracts() {
+    let source = cell_source();
+    let mut h = base(&source, "", 64)
+        .with_locations()
+        .unwrap()
+        .with_regions(limits())
+        .unwrap();
+    let g = h.native(CREATE, &[]).unwrap();
+    assert!(
+        h.native(ADD_CELL, &[g, Value::Int(0), Value::Int(0)])
+            .unwrap_err()
+            .contains("source-backed region cell rules required")
+    );
+    let mut h = base(&source, "", 64)
+        .with_script_numeric(crate::script_numeric::region_cells::tests::policy(5))
+        .with_regions(limits())
+        .unwrap();
+    let g = h.native(CREATE, &[]).unwrap();
+    assert!(
+        h.native(ADD_CELL, &[g.clone(), Value::Int(0), Value::Int(0)])
+            .unwrap_err()
+            .contains("source world extent required")
+    );
+    assert!(
+        h.native(ADD_CELL_LOCATION, &[g, Value::Null])
+            .unwrap_err()
+            .contains("locations not admitted")
+    );
+    for name in [ADD_CELL, CLEAR_CELL, ADD_CELL_LOCATION, CLEAR_CELL_LOCATION] {
+        for bad in [
+            source.replace(
+                &format!("native {name} takes"),
+                &format!("constant native {name} takes"),
+            ),
+            source.replace(
+                &format!("native {name} takes region"),
+                &format!("native {name} takes rect"),
+            ),
+        ] {
+            assert!(base(&bad, "", 64).with_regions(limits()).is_err());
+        }
+    }
+    let no_location_query = source.replace(
+        "native IsLocationInRegion takes region g, location p returns boolean",
+        "",
+    );
+    let bad = no_location_query.replace(
+        "type location extends agent",
+        "type location extends handle",
+    );
+    assert!(base(&bad, "", 64).with_regions(limits()).is_err());
+    let declaration = "native RegionAddCell takes region g, real x, real y returns nothing";
+    assert!(
+        base(&source.replace(declaration, ""), declaration, 64)
+            .with_regions(limits())
+            .is_err()
+    );
+}
+
+#[test]
+fn unit_membership_checks_its_loaded_signature_and_source() {
+    let declaration = "native IsUnitInRegion takes region g, unit u returns boolean";
+    let source = format!("{COMMON}\n{declaration}\n");
+    assert!(base(&source, "", 64).with_regions(limits()).is_ok());
+    for bad in [
+        source.replace(
+            declaration,
+            "constant native IsUnitInRegion takes region g, unit u returns boolean",
+        ),
+        source.replace("unit u returns boolean", "widget u returns boolean"),
+    ] {
+        assert!(base(&bad, "", 64).with_regions(limits()).is_err());
+    }
+    assert!(
+        base(COMMON, declaration, 64)
+            .with_regions(limits())
+            .is_err()
+    );
+}
+
+#[test]
+fn region_event_constants_reject_mutable_and_nonconversion_initializers() {
+    for direction in ["ENTER", "LEAVE"] {
+        for declaration in [
+            format!("gameevent EVENT_GAME_{direction}_REGION = ConvertGameEvent(-83)"),
+            format!("constant gameevent EVENT_GAME_{direction}_REGION = null"),
+        ] {
+            let common = format!(
+                "{COMMON}\ntype gameevent extends eventid\nconstant native ConvertGameEvent takes integer i returns gameevent\nglobals\n{declaration}\nendglobals\n"
+            );
+            assert!(
+                base(&common, MAP, 64).with_regions(limits()).is_err(),
+                "{declaration}"
+            );
+        }
+    }
+}

@@ -30,25 +30,35 @@ impl ObjectHost {
         ] {
             Self::contract(&self.inner, name, parameters, result, false, Some("rect"))?;
         }
-        if let Some(native) = self.inner.program.natives().get("MoveRectToLoc") {
-            Self::contract(
-                &self.inner,
-                "MoveRectToLoc",
-                &["rect", "location"],
+        for (name, parameters, result) in [
+            ("MoveRectToLoc", &["rect", "location"][..], "nothing"),
+            ("RectFromLoc", &["location", "location"][..], "rect"),
+            (
+                "SetRectFromLoc",
+                &["rect", "location", "location"][..],
                 "nothing",
-                false,
-                Some("location"),
-            )?;
-            if native.source
-                != self
-                    .inner
-                    .program
-                    .natives()
-                    .get("Rect")
-                    .expect("admitted rectangle declaration")
-                    .source
-            {
-                return Err(self.inner.error("MoveRectToLoc", Failure::Source));
+            ),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(
+                    &self.inner,
+                    name,
+                    parameters,
+                    result,
+                    false,
+                    Some("location"),
+                )?;
+                if native.source
+                    != self
+                        .inner
+                        .program
+                        .natives()
+                        .get("Rect")
+                        .expect("admitted rectangle declaration")
+                        .source
+                {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
             }
         }
         self.rectangles = true;
@@ -121,6 +131,8 @@ impl ObjectHost {
             || !matches!(
                 name,
                 "Rect"
+                    | "RectFromLoc"
+                    | "SetRectFromLoc"
                     | "GetWorldBounds"
                     | "RemoveRect"
                     | "SetRect"
@@ -138,6 +150,50 @@ impl ObjectHost {
         }
         self.inner.program.natives().get(name)?;
         Some(self.rectangle(name, args))
+    }
+
+    fn rectangle_location_bounds(&self, args: &[Value], name: &str) -> Result<[f32; 4], Error> {
+        let fail = |message| self.inner.error(name, Failure::RectState(message));
+        let [minimum, maximum] = args else {
+            return Err(fail("two locations required"));
+        };
+        let [min_x, min_y] = self.location_point(minimum, name)?;
+        let [max_x, max_y] = self.location_point(maximum, name)?;
+        bounds(&[min_x, min_y, max_x, max_y].map(Value::Real))
+            .ok_or_else(|| fail("finite rectangle coordinates required"))
+    }
+
+    fn clamp_rectangle_bounds(&self, coordinates: [f32; 4], name: &str) -> Result<[f32; 4], Error> {
+        let Some(rules) = self.numeric.as_ref().and_then(|n| n.rectangle_clamp()) else {
+            return Ok(coordinates);
+        };
+        let world = self.world_bounds.ok_or_else(|| {
+            self.inner.error(
+                name,
+                Failure::RectState(
+                    "source-derived world extent is required for rectangle clamping",
+                ),
+            )
+        })?;
+        let limits = rules
+            .limits(world)
+            .map_err(|why| self.inner.error(name, Failure::ScriptMath(why)))?;
+        if limits.iter().any(|v| !v.is_finite()) || limits[0] > limits[2] || limits[1] > limits[3] {
+            return Err(self.inner.error(
+                name,
+                Failure::RectState("world extent is smaller than the selected clamp inset"),
+            ));
+        }
+        Ok(std::array::from_fn(|i| {
+            let (low, high) = (limits[i % 2], limits[i % 2 + 2]);
+            if coordinates[i] < low {
+                low
+            } else if coordinates[i] > high {
+                high
+            } else {
+                coordinates[i]
+            }
+        }))
     }
 
     fn rectangle(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
@@ -159,8 +215,13 @@ impl ObjectHost {
                 )
                 .map(Value::Handle);
         }
-        if name == "Rect" {
-            let bounds = bounds(args).ok_or_else(|| fail("ordered finite bounds required"))?;
+        if matches!(name, "Rect" | "RectFromLoc") {
+            let bounds = if name == "RectFromLoc" {
+                self.rectangle_location_bounds(args, name)?
+            } else {
+                bounds(args).ok_or_else(|| fail("finite rectangle coordinates required"))?
+            };
+            let bounds = self.clamp_rectangle_bounds(bounds, name)?;
             return self
                 .inner
                 .allocate(
@@ -182,8 +243,15 @@ impl ObjectHost {
             .map_err(|e| self.inner.error(name, e.failure))?;
         let updated = match (name, rest) {
             ("RemoveRect", []) => None,
-            ("SetRect", values) if values.len() == 4 => {
-                Some(bounds(values).ok_or_else(|| fail("ordered finite bounds required"))?)
+            ("SetRect", values) if values.len() == 4 => Some(self.clamp_rectangle_bounds(
+                bounds(values).ok_or_else(|| fail("finite rectangle coordinates required"))?,
+                name,
+            )?),
+            ("SetRectFromLoc", locations) => {
+                Some(self.clamp_rectangle_bounds(
+                    self.rectangle_location_bounds(locations, name)?,
+                    name,
+                )?)
             }
             ("MoveRectTo" | "MoveRectToLoc", values) => {
                 let [x, y] = match (name, values) {
@@ -197,16 +265,22 @@ impl ObjectHost {
                     ("MoveRectToLoc", [location]) => self.location_point(location, name)?,
                     _ => return Err(fail("arguments do not match the rectangle declaration")),
                 };
-                // Wider intermediates avoid overflow for otherwise representable bounds.
-                let half_x = (f64::from(current[2]) - f64::from(current[0])) * 0.5;
-                let half_y = (f64::from(current[3]) - f64::from(current[1])) * 0.5;
-                let moved = [
-                    f64::from(x) - half_x,
-                    f64::from(y) - half_y,
-                    f64::from(x) + half_x,
-                    f64::from(y) + half_y,
-                ]
-                .map(|v| v as f32);
+                let moved =
+                    if let Some(rules) = self.numeric.as_ref().and_then(|n| n.rectangle_motion()) {
+                        rules
+                            .translate(current, [x, y])
+                            .map_err(|why| self.inner.error(name, Failure::ScriptMath(why)))?
+                    } else {
+                        let half_x = (f64::from(current[2]) - f64::from(current[0])) * 0.5;
+                        let half_y = (f64::from(current[3]) - f64::from(current[1])) * 0.5;
+                        [
+                            f64::from(x) - half_x,
+                            f64::from(y) - half_y,
+                            f64::from(x) + half_x,
+                            f64::from(y) + half_y,
+                        ]
+                        .map(|v| v as f32)
+                    };
                 if moved.iter().any(|v| !v.is_finite()) {
                     return Err(fail("moved bounds exceed real range"));
                 }
@@ -216,15 +290,17 @@ impl ObjectHost {
             ("GetRectMinY", []) => return Ok(Value::Real(current[1])),
             ("GetRectMaxX", []) => return Ok(Value::Real(current[2])),
             ("GetRectMaxY", []) => return Ok(Value::Real(current[3])),
-            ("GetRectCenterX", []) => {
-                return Ok(Value::Real(
-                    ((f64::from(current[0]) + f64::from(current[2])) * 0.5) as f32,
-                ));
-            }
-            ("GetRectCenterY", []) => {
-                return Ok(Value::Real(
-                    ((f64::from(current[1]) + f64::from(current[3])) * 0.5) as f32,
-                ));
+            ("GetRectCenterX" | "GetRectCenterY", []) => {
+                let axis = usize::from(name == "GetRectCenterY");
+                let center =
+                    if let Some(rules) = self.numeric.as_ref().and_then(|n| n.rectangle_motion()) {
+                        rules
+                            .centers(current)
+                            .map_err(|why| self.inner.error(name, Failure::ScriptMath(why)))?[axis]
+                    } else {
+                        ((f64::from(current[axis]) + f64::from(current[axis + 2])) * 0.5) as f32
+                    };
+                return Ok(Value::Real(center));
             }
             _ => return Err(fail("arguments do not match the rectangle declaration")),
         };
@@ -244,7 +320,12 @@ fn bounds(values: &[Value]) -> Option<[f32; 4]> {
     else {
         return None;
     };
-    (a <= c && b <= d).then_some([a, b, c, d])
+    Some([
+        if a < c { a } else { c },
+        if b < d { b } else { d },
+        if a > c { a } else { c },
+        if b > d { b } else { d },
+    ])
 }
 
 #[cfg(test)]

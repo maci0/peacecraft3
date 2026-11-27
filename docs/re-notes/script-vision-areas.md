@@ -23,8 +23,10 @@ rectangle from its enclosing circle and preserve exploration on invalid input.
 These are implementation tests, not original rendered-fog comparisons.
 
 Shared vision now keeps one placement-grid ledger per materialized player.
-`advance_tick` and the campaign runtime sample it after script delivery when
-admission has a placement grid and a classified day/night state. The minimap
+An admitted, unsampled ledger is initialized before the session's first
+mandatory world projection and timer delivery. `advance_tick` and the campaign
+runtime keep sampling after script delivery when admission has a placement grid
+and a classified day/night state. The minimap
 projects that ledger. It does not sample sight itself. Fog and mask switches
 change presentation only. An unchanged source list does not walk cells. The
 pitch is the admitted placement cell size, including a shorter final cell when
@@ -50,8 +52,9 @@ sight height. Sight-changing upgrades and effects are not applied. Script
 queries (`IsVisibleToPlayer`, `IsFoggedToPlayer`, `IsMaskedToPlayer`,
 `IsUnitVisible`, `IsUnitFogged`, `IsUnitMasked`, and the location forms) are
 not implemented; their null-handle policy is unset. Picking still selects
-unseen enemies. Combat acquisition does not consult the ledger. World and actor
-fog do not either. Those callers should use `ObjectHost::vision_cell` rather
+unseen enemies. At that checkpoint combat acquisition, world fog and actor
+fog did not consult the ledger. Current combat acquisition uses admitted shared
+vision and refuses unavailable sight rather than searching through it. Those callers should use `ObjectHost::vision_cell` rather
 than a second circle test. Successful mission reveal calls do not establish
 those features or complete vision fidelity.
 
@@ -99,3 +102,39 @@ and predecessor graph. The source-path and runtime qualification, including the
 remaining tower-radius and explored-history residuals, are recorded in
 [minimap sight integration](campaign-minimap.md#native-sight-lattice-integration-2026-11-04).
 Callers without a selected sight policy retain the labelled legacy approximation.
+
+## Initial sample before mandatory world projection
+
+The unchanged Human01 opening gate found a live, unsampled shared-vision ledger
+at startup. The first mandatory combat projection tried to acquire targets and
+refused at tick 1 with `shared vision has not been sampled`. Sampling only after
+script/timer delivery could not initialize this dependency, because projection
+failed before reaching that sample.
+
+The common session timer path now initializes an already-admitted, unsampled
+ledger after validating the requested clock target and before world projection.
+It reuses the source-derived sampler and its deterministic work limit. It does
+not bypass blocked admission, invent fog settings, disable acquisition checks
+or replace a ready ledger. Later samples stay in their existing post-delivery
+phase. This covers both legacy clock calls and native paced delivery through
+`advance_native_timers`.
+
+The selected-source Human01 gate now checks first-tick readiness, projects the
+rest of the 60-second opening, then repeats it. Both runs reached game time
+60 with identical recorded combat traces, hero life, clock and pause state;
+no exit was requested. The separate authored-Escape gate reached game time 33
+with control and interface restored, both intro progress flags set, and a real
+footman EnterRect callback executed after its diagnostic movement order.
+The script/map remained unchanged. These are recreation integration results,
+not an original-client comparison, a completed chapter or full tick parity.
+
+The pre-fix failure, post-fix logs, source map/image hashes, compiler arguments
+and linked dependency/artifact closure are local in `.scratch/goal-startup-audit/`.
+All checks were headless and muted. Native sight-transition timing, complete
+fog rendering and whole-campaign acceptance remain separate work.
+
+The final validation passed 3,364 library tests with 163 explicit ignores,
+strict library/test Clippy, native and `wasm32-unknown-unknown` library builds,
+formatting and whitespace checks under Rust/Cargo 1.100.0 with
+`RUSTFLAGS=-Dwarnings`. Both selected Human01 integration gates passed using
+the unchanged source map, NoAddon mode and explicit diagnostic seed 1.

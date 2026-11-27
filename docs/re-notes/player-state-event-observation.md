@@ -114,3 +114,58 @@ requested delay and observed 0.250 interval do not establish a scheduling quantu
 to copy into the host. Other wait forms, multiple parked events and arbitrary
 recursion remain separate cases. Local receipts are in ignored
 `.scratch/player-state-sleep-probe/result.json`.
+
+## Condition-list mutations during synchronous gold events
+
+A later Human01-derived probe used the same selected executable hash above.
+Original map initialization was retained, and one self-authored timer callback
+ran 13 serial gold-event cases. Each case reset player zero's gold to zero,
+attached the action before registering `GREATER_THAN 1`, and set gold to two.
+The callback recorded condition trace and action count immediately after
+`SetPlayerState` returned and again at the next controller-timer checkpoint.
+
+All 52 ordered records completed. Every immediate pair equaled its delayed pair,
+and all 13 pairs equaled the earlier one-shot timer-event cohort described in
+[timer condition traversal](script-trigger-admission.md#timer-condition-traversal-and-action-selection).
+A false condition followed by a true condition ran both and suppressed actions.
+Clearing, self/pending/later removal, appending, clear-then-append and nested
+explicit evaluation matched the previously observed registration traversal.
+Clearing actions inside a true predicate suppressed the original action;
+appending an action ran it in the same synchronous event.
+
+The old synchronous path returned immediately on a false condition and retained
+its action list before evaluating predicates. A regression reproduced the first
+mismatch: the false-then-true trace ended after the false callback. Synchronous
+delivery now uses the same live condition cursor as explicit and timer evaluation,
+folds every visited predicate and selects current actions only after conditions
+finish. The event's optional filter remains a separate gate: rejecting it skips
+both conditions and actions. A passing filter starts condition selection after
+that filter returns, so its list mutations are visible.
+
+The shared timer/state fixtures keep the 13 synthetic predicate setups and
+expected trace/action pairs in one test source. The player-state test checks the
+values inside the setter's caller, then verifies an empty queue, no retained
+synchronous frame and restored trigger context. A separate synthetic test injects
+a filter into an issued event to check both rejecting and passing gates. This
+injection tests shared delivery control flow; player-state registration has no
+filter parameter and this is not an additional native ABI claim. Native
+filter-time list mutation was not tested by this gold-state cohort.
+
+Probe inputs, modified map copies, output hashes and isolation receipts remain
+local in `.scratch/goal-native-state-conditions-6/`. The run used private Xvfb,
+one null audio sink and no network or host audio devices. Its stopped container
+was checked for process ID zero. This is controlled Wine observation, not native
+Windows, unchanged-campaign completion or full tick parity. Callback-time trigger
+destruction, subscription-list edits and other resource states remain separate
+qualification work. The common synchronous engine also serves other event
+families; those inherit the cursor change without acquiring independent native
+acceptance from this gold-state probe. Published queued boundary/range/region paths now share the same cursor; their
+independent native spatial-event qualification remains incomplete.
+
+Validation passed 3,342 `pcx-play` library tests with 163 explicit ignores, strict
+library/test Clippy, formatting, whitespace checks, and native and
+`wasm32-unknown-unknown` production library builds. Rust/Cargo 1.100.0 used
+`RUSTFLAGS=-Dwarnings` and a checkout-specific target directory. The private
+`.scratch/goal-state-condition-traversal/` receipts retain the reproduced failure,
+focused checks and final dependency/source/artifact closure. The final checks
+include the source comment updates that distinguish live and snapshot paths.

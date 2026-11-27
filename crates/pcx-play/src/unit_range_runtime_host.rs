@@ -168,7 +168,9 @@ impl ObjectHost {
             .ok_or_else(|| fail(Failure::Budget("range arena scan")))?;
         let mut registrations = Vec::new();
         for (index, entry) in self.inner.arena.iter().enumerate() {
-            if let Entry::RegisteredUnitInRange(record) = entry {
+            if let Entry::RegisteredUnitInRange(record) = entry
+                && !matches!(self.inner.entry(record.trigger)?, Entry::DeadTrigger)
+            {
                 registrations
                     .try_reserve(1)
                     .map_err(|_| fail(Failure::Capacity))?;

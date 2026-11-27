@@ -8,10 +8,131 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` 
 
 Dated checkpoints retain their original test scope and failure frontiers.
 
+- [~] Script region transitions now capture each supported mutation, execute
+  filters before the native returns and defer conditions/actions. Registration
+  seeds immediately; geometry edits and removal are silent. Nine session cases
+  and a filter-failure regression cover the repaired path. Physical movement
+  still needs accepted-span notification integration and native tick acceptance.
+  See [mutation-time region notifications](docs/re-notes/script-regions.md#mutation-time-script-region-notifications).
+
+- [~] Region action event IDs now resolve from selected common-source constants.
+  Three controlled original-client probes reproduce 82, 199 and 289 observation
+  rows with matching shared prefixes. They establish synchronous filtering and
+  deferred conditions/actions, preserved intermediate crossings and no leave
+  solely from hide/death/removal or geometry edits in the sampled cohort. Current
+  final-position polling remains incompatible. See
+  [region notification ordering](docs/re-notes/script-regions.md#region-event-response-identities-and-notification-ordering).
+
 All-menu completion requires every control wired and every source-supported state
 verified against synchronized original full frames. The current gaps are listed in
 [menu acceptance](docs/menu-acceptance.md). Final campaign sign-off follows
 that gate. Dated entries below include earlier progression tests.
+
+- [~] Campaign sessions now initialize admitted shared vision before their
+  first mandatory world projection. The unchanged Human01 opening previously
+  failed at tick 1 when combat queried an unsampled ledger. It now completes
+  two matching 60-second diagnostic runs. The authored-Escape gate also restores
+  control/interface and executes a real footman region callback. This does not
+  establish original-client tick parity or chapter completion. See
+  [initial shared vision](docs/re-notes/script-vision-areas.md#initial-sample-before-mandatory-world-projection).
+
+- [~] Selected rectangle movement and center queries now use image-derived
+  center/delta arithmetic. A matched production replay reproduced all 55 native
+  observation rows, removing 12 prior bit mismatches after large-coordinate
+  round trips. The native does not world-clamp these moves. Region cells and
+  full tick parity remain unresolved. See
+  [rectangle movement](docs/re-notes/script-rectangles.md#source-backed-rectangle-movement-and-centers).
+
+- [~] Finite corners now clamp for `Rect`, `RectFromLoc`, `SetRect` and
+  `SetRectFromLoc` when the selected numeric policy is admitted. The inset is
+  read from the executable's initializer and the extent from source map data.
+  A matched replay reproduced all 39 native observation rows by exact bits.
+  Region cells and exceptional arithmetic remain unqualified. See
+  [source-backed corner clamping](docs/re-notes/script-rectangles.md#source-backed-finite-corner-clamping).
+
+- [~] Published queued, range and region callbacks now share live condition
+  traversal and select actions after the fold. Session regressions cover the
+  13-case mutation cohort, filter rejection and actual live action work costs.
+  Independent native spatial-event acceptance, region cells and exceptional arithmetic
+  remain incomplete. See [boundary callback traversal](docs/re-notes/script-trigger-admission.md#queued-range-and-region-callback-traversal).
+
+- [~] Synchronous delivery now shares live condition traversal and selects
+  actions after the fold. An isolated gold-state probe matched all 13 timer
+  cases in 52 immediate/delayed records. Event filters retain their separate gate.
+  Queued/range/region session integration is now covered above; independent
+  native event qualification remains. See
+  [synchronous gold events](docs/re-notes/player-state-event-observation.md#condition-list-mutations-during-synchronous-gold-events).
+
+- [~] Published timer sessions now share explicit condition traversal and select
+  actions after conditions finish. A 26-row isolated original-client probe
+  qualified 13 one-shot event cases, including clearing/appending actions inside
+  predicates. Synchronous and queued/range/region sessions now share it. See
+  [timer condition traversal](docs/re-notes/script-trigger-admission.md#timer-condition-traversal-and-action-selection).
+
+- [~] Explicit `TriggerEvaluate` now follows pending registration identities
+  rather than a function snapshot. A 40-row isolated original-client run
+  qualified clearing, self/pending/later removal, appending and nested calls.
+  Queued/range/region sessions now share the cursor as well. See
+  [explicit condition traversal](docs/re-notes/script-trigger-admission.md#explicit-condition-traversal).
+
+- [~] Reversed finite rectangle corners now normalize independently for direct
+  and location-backed construction/setters. Two isolated selected-executable
+  probes repeated the same normalization results. Source-backed corner clamping
+  is now implemented;
+  native region membership exposed another mismatch. Explicit callback-time
+  condition traversal is now qualified above. See [native rectangle observations](docs/re-notes/script-rectangles.md#finite-corner-normalization-against-the-selected-executable).
+
+- [~] `RectFromLoc` and `SetRectFromLoc` now copy admitted live location
+  coordinates through the existing finite-coordinate normalization path.
+  `IsLocationInRegion` uses the same selected cell predicate as point queries;
+  unqualified hosts retain continuous bounds.
+  Native exceptional inputs and full tick parity remain unverified. A controlled
+  original-client probe disproved continuous region membership equivalence;
+  the later source-backed rectangle cohort now matches all 84 relevant rows. See [location-backed rectangles](docs/re-notes/script-rectangles.md#location-backed-creation-and-setters)
+  and [location membership](docs/re-notes/script-regions.md#location-based-membership).
+
+- [~] Selected-image region rectangle membership and clearing now use a derived
+  cell grid and ordered geometric edits. Point/location queries and event polling
+  share the predicate; placement startup replays edits in order. All 84 rectangle
+  rows matched first; the complete production probe now matches all 138 rows,
+  including the four cell-edit natives. Broader world-edge behavior and native
+  event timing remain open. See
+  [region geometry](docs/re-notes/slice-regions.md#source-backed-rectangle-cell-edits).
+
+- [~] `IsUnitInRegion` now shares the selected point predicate and retained
+  removal-time unit position. Controlled original-client runs repeated 31 rows
+  and added a one-second deferred sample: hidden/dead units retained membership,
+  immediate removal retained it, and the later removed unit returned false.
+  Null arguments return false. The exact first cleanup frame and complete tick
+  parity remain open. See [unit membership](docs/re-notes/slice-regions.md#unit-membership-and-deferred-removal).
+
+- [~] Removing a subscribed region now releases its filter references and
+  excludes its retired bounds from later polling. Shared live trigger owners
+  continue to receive events from surviving regions. Original-client removal
+  side effects and queued-event cancellation remain unverified. See
+  [region removal](docs/re-notes/script-regions.md#removed-region-subscriptions).
+
+- [~] Destroyed triggers now release their player-unit, range and region filter
+  references. Shared wrappers stay retained by other live owners. Range/region
+  polls skip destroyed owners before world/filter resolution, while existing
+  event-token budgets retain their issued-token counts. Native callback-time
+  subscription changes remain unverified. See
+  [subscription cleanup](docs/re-notes/script-trigger-admission.md#destroyed-trigger-subscription-filters).
+
+- [~] Trigger action lifecycle now supports `TriggerRemoveAction` and
+  `TriggerClearActions` through selected-source declarations. Surviving callbacks
+  retain their order, retired tokens remain bounded and unreused, and cleared
+  registrations leave later explicit execution and timed delivery. Destroying a
+  trigger now releases its action/condition registrations while retaining the
+  already dispatched action tail. Native
+  exceptional inputs and callback-time edits remain unverified. See
+  [action removal](docs/re-notes/script-trigger-admission.md#removing-trigger-actions).
+
+- [~] Trigger condition lifecycle now supports `TriggerRemoveCondition` and
+  `TriggerClearConditions` through selected-source declarations. Retired
+  registrations leave subsequent evaluations and release wrapper references;
+  tokens remain bounded and unreused. Native timing and edits during callbacks
+  remain unverified. See [condition removal](docs/re-notes/script-trigger-admission.md#removing-trigger-conditions).
 
 - [~] Single-player escape-menu Pause is omitted, matching the isolated original
   capture, while its source frame remains available to dependent anchors. The

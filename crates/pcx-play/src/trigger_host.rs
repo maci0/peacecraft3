@@ -55,6 +55,8 @@ const CREATE: &str = "CreateTrigger";
 const REGISTER: &str = "TriggerRegisterUnitEvent";
 const CONVERT: &str = "ConvertUnitEvent";
 const ADD: &str = "TriggerAddAction";
+const REMOVE_ACTION: &str = "TriggerRemoveAction";
+const CLEAR_ACTIONS: &str = "TriggerClearActions";
 const ENABLE: &str = "EnableTrigger";
 const DISABLE: &str = "DisableTrigger";
 const IS_ENABLED: &str = "IsTriggerEnabled";
@@ -66,7 +68,7 @@ pub struct TriggerBudget {
     pub max_triggers: usize,
     /// Retained `TriggerRegisterUnitEvent` event identities.
     pub max_unit_events: usize,
-    /// Retained `TriggerAddAction` identities.
+    /// Live `TriggerAddAction` registrations; retired tokens still occupy the arena.
     pub max_actions: usize,
 }
 
@@ -226,6 +228,20 @@ impl ObjectHost {
             }
             loaded_type(&self.inner, ADD, "triggeraction", "handle", &source)?;
         }
+        for (name, arguments) in [
+            (REMOVE_ACTION, &["trigger", "triggeraction"][..]),
+            (CLEAR_ACTIONS, &["trigger"][..]),
+        ] {
+            if let Some(native) = self.inner.program.natives().get(name) {
+                Self::contract(&self.inner, name, arguments, "nothing", false, None)?;
+                if native.source != source {
+                    return Err(self.inner.error(name, Failure::Source));
+                }
+                if name == REMOVE_ACTION {
+                    loaded_type(&self.inner, name, "triggeraction", "handle", &source)?;
+                }
+            }
+        }
         for (name, result) in [
             (ENABLE, "nothing"),
             (DISABLE, "nothing"),
@@ -358,6 +374,15 @@ impl ObjectHost {
             }
             trigger_conditions::ADD if self.triggers.as_ref()?.condition_limit.is_some() => {
                 Some(self.add_trigger_condition(args))
+            }
+            trigger_conditions::REMOVE | trigger_conditions::CLEAR
+                if self.triggers.as_ref()?.condition_limit.is_some()
+                    && self.inner.program.natives().get(name).is_some() =>
+            {
+                Some(self.remove_trigger_conditions(name, args))
+            }
+            REMOVE_ACTION | CLEAR_ACTIONS if self.inner.program.natives().get(name).is_some() => {
+                Some(self.remove_actions(name, args))
             }
             ADD if self.inner.program.natives().get(ADD).is_some() => Some(self.add_action(args)),
             ENABLE | DISABLE | IS_ENABLED if self.inner.program.natives().get(name).is_some() => {
@@ -495,6 +520,83 @@ impl ObjectHost {
             span: function.span,
             trigger,
         })
+    }
+
+    pub(super) fn retire_trigger_callbacks(&mut self, trigger: HandleId) {
+        let admitted = self.triggers.as_mut().expect("admitted trigger runtime");
+        for entry in &mut self.inner.arena {
+            match entry {
+                Entry::TriggerAction { trigger: owner, .. } if *owner == trigger => {
+                    *entry = Entry::DeadTriggerAction;
+                    admitted.retained_actions -= 1;
+                }
+                Entry::TriggerCondition(record) if record.trigger == trigger => {
+                    *entry = Entry::DeadTriggerCondition;
+                    admitted.retained_conditions -= 1;
+                }
+                Entry::RegisteredPlayerUnitEvent(record) if record.trigger == trigger => {
+                    record.filter = None;
+                }
+                Entry::RegisteredUnitInRange(record) if record.trigger == trigger => {
+                    record.filter = None;
+                }
+                Entry::RegisteredRegionEvent(record) if record.trigger == trigger => {
+                    record.filter = None;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn remove_actions(&mut self, name: &str, args: &[Value]) -> Result<Value, Error> {
+        let fail = |failure| self.inner.error(name, failure);
+        let trigger = match (name, args) {
+            (CLEAR_ACTIONS, [Value::Handle(trigger)])
+            | (REMOVE_ACTION, [Value::Handle(trigger), Value::Handle(_)]) => *trigger,
+            _ => return Err(fail(Failure::Arguments)),
+        };
+        match self
+            .inner
+            .entry(trigger)
+            .map_err(|error| fail(error.failure))?
+        {
+            Entry::Trigger { .. } => {}
+            Entry::DeadTrigger => return Err(fail(Failure::Identity)),
+            _ => return Err(fail(Failure::WrongFamily)),
+        }
+        let removed = if let [_, Value::Handle(action)] = args {
+            match self
+                .inner
+                .entry(*action)
+                .map_err(|error| fail(error.failure))?
+            {
+                Entry::TriggerAction { trigger: owner, .. } if *owner == trigger => {}
+                Entry::TriggerAction { .. } => {
+                    return Err(fail(Failure::TriggerState(
+                        "action belongs to another trigger",
+                    )));
+                }
+                Entry::DeadTriggerAction => return Err(fail(Failure::Identity)),
+                _ => return Err(fail(Failure::WrongFamily)),
+            }
+            *self.inner.entry_mut(*action)? = Entry::DeadTriggerAction;
+            1
+        } else {
+            let mut removed = 0;
+            for entry in &mut self.inner.arena {
+                if matches!(entry, Entry::TriggerAction { trigger: owner, .. } if *owner == trigger)
+                {
+                    *entry = Entry::DeadTriggerAction;
+                    removed += 1;
+                }
+            }
+            removed
+        };
+        self.triggers
+            .as_mut()
+            .expect("admitted dispatch")
+            .retained_actions -= removed;
+        Ok(Value::Null)
     }
 
     fn add_action(&mut self, args: &[Value]) -> Result<Value, Error> {

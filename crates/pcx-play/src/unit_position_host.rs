@@ -650,6 +650,11 @@ impl ObjectHost {
                     .iter()
                     .rev()
                     .find_map(|frame| match frame {
+                        NativeCallback::Region(frame) => frame
+                            .active
+                            .as_ref()
+                            .and_then(|event| event.subject.unit)
+                            .map(Value::Handle),
                         NativeCallback::Rectangle(frame) => {
                             Some(Value::Handle(frame.candidates[frame.next - 1]))
                         }

@@ -183,13 +183,13 @@ pub(super) struct SynchronousFrame {
     callback_depth: usize,
     conditions: Option<SynchronousDelivery>,
 }
-/// Remaining callbacks for the event whose conditions just ran.
-pub(super) struct SynchronousDelivery {
-    pub(super) conditions: Vec<pcx_script::value::FunctionId>,
-    pub(super) actions: Vec<pcx_script::value::FunctionId>,
-    pub(super) next: usize,
+/// A filter gates admission to the live condition traversal.
+pub(super) enum SynchronousDelivery {
+    Filter { trigger: HandleId },
+    Conditions(trigger_runtime::ConditionEvaluation),
 }
 enum NativeCallback {
+    Region(Box<event_delivery::RegionFilterFrame>),
     Widget(widget_enumeration::Enumeration),
     Trigger(trigger_runtime::DirectCall),
     Rectangle(unit_positions::Enumeration),
@@ -956,6 +956,9 @@ impl Host for ObjectHost {
         {
             return Ok(Some(call));
         }
+        if let Some(call) = self.begin_region_unit_call(name, args)? {
+            return Ok(Some(call));
+        }
         self.begin_trigger_call(name, args)
             .map_err(|e| e.to_string())
     }
@@ -968,6 +971,7 @@ impl Host for ObjectHost {
                 .map_err(|e| e.to_string());
         }
         match self.callbacks.last() {
+            Some(NativeCallback::Region(_)) => self.continue_region_filter(value),
             Some(NativeCallback::Widget(_)) => self.continue_widget_call(value),
             Some(NativeCallback::Rectangle(_)) => self.continue_rectangle_call(value),
             Some(NativeCallback::Trigger(_)) => self.continue_trigger_call(value),
@@ -1057,6 +1061,18 @@ impl Host for ObjectHost {
 impl ObjectHost {
     #[cfg_attr(feature = "profile-cpu", tracing::instrument(skip_all, target = "pcx_cpu", name = "script.native", fields(native = name)))]
     fn object_native_with_strings(
+        &mut self,
+        name: &str,
+        args: &[Value],
+        strings: Option<&pcx_script::text::NativeStringLookup<'_>>,
+    ) -> Result<Value, String> {
+        let result = self.dispatch_native_with_strings(name, args, strings)?;
+        self.observe_region_mutation(name, args, &result)
+            .map_err(|e| e.to_string())?;
+        Ok(result)
+    }
+
+    fn dispatch_native_with_strings(
         &mut self,
         name: &str,
         args: &[Value],
@@ -1645,6 +1661,7 @@ mod timer_runtime_tests;
 
 #[path = "trigger_runtime_host.rs"]
 mod trigger_runtime;
+pub(crate) use trigger_runtime::ConditionEvaluation;
 pub use trigger_runtime::{TriggerDelivery, TriggerRuntimeInput};
 
 #[path = "order_registry_host.rs"]

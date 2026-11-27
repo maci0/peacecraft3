@@ -316,6 +316,41 @@ pub fn read(
         dispatch: window(0x4fdf90, 0x4a, true)?,
         expiry_dispatch: window(0x7fc390, 0x16b, true)?,
     };
+    let rectangle_clamp = script_numeric::rectangle_clamp::Binding {
+        image_sha256,
+        point_clamp: window(0x7f4a60, 0x91, true)?,
+        inset_initializer: window(0x4015b0, 16, true)?,
+        corner_calls: [
+            window(0x4a1a53, 18, true)?,
+            window(0x4a4d14, 21, true)?,
+            window(0x4a1bba, 23, true)?,
+            window(0x4a9a27, 21, true)?,
+        ],
+    };
+    let region_cells = script_numeric::region_cells::Binding {
+        image_sha256,
+        point: window(0x8017a0, 0xc8, true)?,
+        rectangle: window(0x801a89, 0xe5, true)?,
+        rounding: window(0x801930, 0x7f, true)?,
+        floor: formatting.floor,
+        truncate: formatting.truncate,
+        cell_coordinates: [window(0x65d350, 0x3a, true)?, window(0x65d390, 0x3a, true)?],
+        cell_edit: window(0x8019b0, 0x90, true)?,
+        cell_rounding: window(0x8018e0, 0x43, true)?,
+        cell_calls: [
+            window(0x4a4e62, 15, true)?,
+            window(0x4a4eb0, 17, true)?,
+            window(0x4a4f42, 15, true)?,
+            window(0x4a4f90, 17, true)?,
+        ],
+    };
+    let rectangle_motion = script_numeric::rectangle_motion::Binding {
+        image_sha256,
+        movement: window(0x4a33a0, 0xea, true)?,
+        movement_calls: [window(0x4a334b, 5, true)?, window(0x4a3396, 5, true)?],
+        center_getters: [window(0x494f40, 0x72, true)?, window(0x494fc0, 0x71, true)?],
+        center_factor: window(0x10db0a8, 4, false)?,
+    };
     let numeric = script_numeric::NumericPolicy::read(
         image,
         script_numeric::Binding {
@@ -341,6 +376,9 @@ pub fn read(
     .and_then(|numeric| numeric.with_formatting(image, &formatting, BUDGET))
     .and_then(|numeric| numeric.with_timer_queries(image, &timer_queries, BUDGET))
     .and_then(|numeric| numeric.with_native_game_clock(image, BUDGET))
+    .and_then(|numeric| numeric.with_rectangle_clamp(image, &rectangle_clamp, BUDGET))
+    .and_then(|numeric| numeric.with_rectangle_motion(image, &rectangle_motion, BUDGET))
+    .and_then(|numeric| numeric.with_region_cells(image, &region_cells, BUDGET))
     .map_err(|e| e.to_string())?;
     let script_strings = string_rules(image, origin.clone())?;
     let script_hash = crate::playercolor_host::ScriptHashPolicy::read(

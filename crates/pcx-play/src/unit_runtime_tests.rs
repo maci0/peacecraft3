@@ -7,6 +7,8 @@ type region extends agent
 type unittype extends handle
 constant native ConvertUnitType takes integer i returns unittype
 native CreateRegion takes nothing returns region
+native RemoveRegion takes region g returns nothing
+native DestroyBoolExpr takes boolexpr f returns nothing
 native RegionAddRect takes region g, rect r returns nothing
 native TriggerRegisterEnterRegion takes trigger t, region g, boolexpr f returns event
 native TriggerRegisterLeaveRegion takes trigger t, region g, boolexpr f returns event
@@ -238,7 +240,7 @@ fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
         panic!("triggers")
     };
     let h = &mut vm.host().inner;
-    // B starts inside: the first poll seeds membership without firing.
+    // B starts inside: registration seeds membership without firing.
     h.poll_region_events(&mut 1000).unwrap();
     assert!(h.take_fired_event().is_none());
     assert_eq!(
@@ -255,15 +257,21 @@ fn region_membership_fires_enter_and_leave_with_the_moving_unit() {
     assert_eq!(h.native("GetEnteringUnit", &[]).unwrap(), Value::Handle(a));
     h.finish_fired_event();
     assert!(h.take_fired_event().is_none());
-    // Removing B leaves the region; removal of a removed unit is a no-op.
+    // Removal does not produce a leave notification in the native cohort.
     h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
     h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
     assert!(h.executed_units().all(|(id, _)| id != b));
     h.poll_region_events(&mut 1000).unwrap();
-    let fired = h.take_fired_event().expect("leave");
+    assert!(h.take_fired_event().is_none());
+    h.native(
+        "SetUnitPosition",
+        &[Value::Handle(a), Value::Real(16.0), Value::Real(16.0)],
+    )
+    .unwrap();
+    let fired = h.take_fired_event().expect("movement leave");
     assert_eq!(fired.trigger, leave);
     h.begin_fired_event(&fired).unwrap().unwrap();
-    assert_eq!(h.native("GetLeavingUnit", &[]).unwrap(), Value::Handle(b));
+    assert_eq!(h.native("GetLeavingUnit", &[]).unwrap(), Value::Handle(a));
     h.finish_fired_event();
 }
 
@@ -726,4 +734,266 @@ fn set_unit_pathing_on_a_removed_unit_changes_nothing() {
     // A live unit is still accepted.
     h.native("SetUnitPathing", &[Value::Handle(a), Value::Bool(false)])
         .unwrap();
+}
+
+#[test]
+fn destroyed_region_subscriptions_do_not_read_a_removed_region() {
+    let (mut vm, _, _) = open();
+    let entering = vm.global("In");
+    let leaving = vm.global("Out");
+    let region = vm.global("G");
+    let h = &mut vm.host().inner;
+    h.poll_region_events(&mut 1000).unwrap();
+    let handles = h.inner().handles();
+    h.native("DestroyTrigger", &[entering]).unwrap();
+    h.native("DestroyTrigger", &[leaving]).unwrap();
+    h.native("RemoveRegion", &[region]).unwrap();
+    assert_eq!(h.poll_region_events(&mut 1000).unwrap(), 0);
+    assert!(h.take_fired_event().is_none());
+    assert_eq!(h.retained_region_events().unwrap(), 2);
+    assert_eq!(h.inner().handles(), handles);
+}
+
+#[test]
+fn removing_a_subscribed_region_preserves_other_regions_and_live_triggers() {
+    let map = MAP
+        .replace("region G=null", "region G=null\nregion K=null")
+        .replace("set G=CreateRegion()", "set G=CreateRegion()\nset K=CreateRegion()")
+        .replace(
+            "call RegionAddRect(G,Rect(48.0,0.0,96.0,32.0))",
+            "call RegionAddRect(G,Rect(48.0,0.0,96.0,32.0))\ncall RegionAddRect(K,Rect(48.0,0.0,96.0,32.0))",
+        )
+        .replace(
+            "call TriggerRegisterLeaveRegion(Out,G,null)",
+            "call TriggerRegisterLeaveRegion(Out,G,null)\ncall TriggerRegisterEnterRegion(In,K,null)\ncall TriggerRegisterLeaveRegion(Out,K,null)",
+        )
+        + "function retire takes nothing returns nothing\ncall RemoveRegion(G)\nendfunction\n";
+    for seed_membership in [false, true] {
+        let (mut vm, a, _) = open_map(&map);
+        if seed_membership {
+            vm.host().inner.poll_region_events(&mut 1000).unwrap();
+        }
+        let handles = vm.host().inner.inner().handles();
+        vm.call("retire", &[]).unwrap();
+        assert_eq!(vm.host().inner.poll_region_events(&mut 1000).unwrap(), 0);
+        assert!(vm.host().inner.take_fired_event().is_none());
+        assert_eq!(vm.host().inner.retained_region_events().unwrap(), 4);
+        assert_eq!(vm.host().inner.inner().handles(), handles);
+        let entering = vm.global("In");
+        assert_eq!(
+            vm.call("walk", &[Value::Real(64.0)]).unwrap(),
+            Value::Bool(true)
+        );
+        let start = vm.host().inner.timer_game_time().unwrap();
+        tick(&mut vm, start + 10.0);
+        let h = &mut vm.host().inner;
+        assert_eq!(h.poll_region_events(&mut 1000).unwrap(), 0);
+        let fired = h.take_fired_event().expect("surviving region entry");
+        assert_eq!(Value::Handle(fired.trigger), entering);
+        h.begin_fired_event(&fired).unwrap().unwrap();
+        assert_eq!(h.native("GetEnteringUnit", &[]).unwrap(), Value::Handle(a));
+        h.finish_fired_event();
+        assert!(h.take_fired_event().is_none());
+    }
+}
+
+#[test]
+fn removed_regions_release_only_their_shared_filter_references() {
+    let map = MAP
+        .replace(
+            "region G=null",
+            "region G=null\nregion K=null\nfilterfunc F=null",
+        )
+        .replace(
+            "set G=CreateRegion()",
+            "set G=CreateRegion()\nset K=CreateRegion()\nset F=Filter(function predicate)",
+        )
+        .replace(
+            "TriggerRegisterEnterRegion(In,G,null)",
+            "TriggerRegisterEnterRegion(In,G,F)",
+        )
+        .replace(
+            "TriggerRegisterLeaveRegion(Out,G,null)",
+            "TriggerRegisterLeaveRegion(Out,G,F)\ncall TriggerRegisterEnterRegion(In,K,F)",
+        )
+        + "function predicate takes nothing returns boolean\nreturn true\nendfunction\nfunction retire_first takes nothing returns nothing\ncall RemoveRegion(G)\nendfunction\nfunction retire_second takes nothing returns nothing\ncall RemoveRegion(K)\nendfunction\nfunction cleanup takes nothing returns nothing\ncall DestroyBoolExpr(F)\nendfunction\n";
+    let (mut vm, _, _) = open_map(&map);
+    vm.host().inner.poll_region_events(&mut 1000).unwrap();
+    let handles = vm.host().inner.inner().handles();
+    vm.call("retire_first", &[]).unwrap();
+    assert_eq!(vm.host().inner.poll_region_events(&mut 1000).unwrap(), 0);
+    assert!(vm.call("cleanup", &[]).is_err());
+    vm.call("retire_second", &[]).unwrap();
+    assert_eq!(vm.host().inner.poll_region_events(&mut 1000).unwrap(), 0);
+    vm.call("cleanup", &[]).unwrap();
+    assert!(vm.host().inner.take_fired_event().is_none());
+    assert_eq!(vm.host().inner.retained_region_events().unwrap(), 3);
+    assert_eq!(vm.host().inner.inner().handles(), handles);
+}
+
+#[test]
+fn region_unit_membership_uses_position_through_hiding_and_the_removal_tick() {
+    let extra = format!(
+        "{}\ntype region extends agent\nnative CreateRegion takes nothing returns region\nnative RegionAddRect takes region g, rect r returns nothing\nnative RegionAddCell takes region g, real x, real y returns nothing\nnative IsPointInRegion takes region g, real x, real y returns boolean\nnative IsUnitInRegion takes region g, unit u returns boolean\nnative TriggerRegisterEnterRegion takes trigger t, region g, boolexpr f returns event\nnative ShowUnit takes unit u, boolean shown returns nothing\nnative RemoveUnit takes unit u returns nothing\n",
+        enumeration::TRIGGERS
+    );
+    let map = "globals\nunit A=null\nunit B=null\nendglobals\nfunction setup takes nothing returns nothing\nset A=CreateUnit(Player(4),'U001',16.0,16.0,0.0)\nset B=CreateUnit(Player(4),'U001',80.0,16.0,0.0)\nendfunction\n";
+    let host = position_host_program(100, 16, map, &extra)
+        .with_script_numeric(crate::script_numeric::region_cells::tests::policy(5))
+        .with_world_bounds([0., 0., 128., 128.])
+        .unwrap()
+        .with_regions(crate::playercolor_host::RegionBudget {
+            max_regions: 2,
+            max_rect_additions: 4,
+            max_events: 1,
+        })
+        .unwrap();
+    let ctx = Arc::clone(host.player_context().unwrap());
+    let mut vm = ctx.scripts.clone().owned_vm(host);
+    vm.init_globals().unwrap();
+    vm.call("setup", &[]).unwrap();
+    let Value::Handle(a) = vm.global("A") else {
+        panic!("unit")
+    };
+    let Value::Handle(b) = vm.global("B") else {
+        panic!("unit")
+    };
+    let h = &mut vm.host().inner;
+    let g = h.native("CreateRegion", &[]).unwrap();
+    let query = |h: &mut ObjectHost| {
+        h.native("IsUnitInRegion", &[g.clone(), Value::Handle(a)])
+            .unwrap()
+    };
+    assert_eq!(query(h), Value::Bool(false));
+    h.native(
+        "RegionAddCell",
+        &[g.clone(), Value::Real(16.), Value::Real(16.)],
+    )
+    .unwrap();
+    assert_eq!(query(h), Value::Bool(true));
+    h.native("ShowUnit", &[Value::Handle(a), Value::Bool(false)])
+        .unwrap();
+    assert_eq!(query(h), Value::Bool(true));
+    h.range_test_position(a, Some([80., 80.]));
+    assert_eq!(query(h), Value::Bool(false));
+    h.native(
+        "RegionAddCell",
+        &[g.clone(), Value::Real(80.), Value::Real(80.)],
+    )
+    .unwrap();
+    assert_eq!(query(h), Value::Bool(true));
+    h.native("RemoveUnit", &[Value::Handle(a)]).unwrap();
+    assert_eq!(query(h), Value::Bool(true));
+    let before = h.inner().handles();
+    for args in [
+        vec![Value::Null, Value::Null],
+        vec![g.clone(), Value::Null],
+        vec![Value::Null, Value::Handle(a)],
+    ] {
+        assert_eq!(
+            h.native("IsUnitInRegion", &args).unwrap(),
+            Value::Bool(false)
+        );
+    }
+    for args in [
+        vec![],
+        vec![g.clone()],
+        vec![g.clone(), g.clone()],
+        vec![Value::Handle(b), Value::Handle(a)],
+        vec![g.clone(), Value::Int(0)],
+    ] {
+        assert!(h.native("IsUnitInRegion", &args).is_err());
+    }
+    h.range_test_position(b, None);
+    assert!(
+        h.native("IsUnitInRegion", &[g.clone(), Value::Handle(b)])
+            .is_err()
+    );
+    h.native("RemoveUnit", &[Value::Handle(b)]).unwrap();
+    assert!(
+        h.native("IsUnitInRegion", &[g.clone(), Value::Handle(b)])
+            .is_err()
+    );
+    assert!(h.next_timer_expiry(1., &mut 1000).unwrap().is_none());
+    assert_eq!(query(h), Value::Bool(false));
+    assert_eq!(
+        h.native("IsPointInRegion", &[g, Value::Real(0.), Value::Real(0.)])
+            .unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(h.inner().handles(), before);
+}
+
+#[test]
+fn a_region_filter_failure_keeps_the_move_and_unwinds_filter_context() {
+    let map = MAP.replace(
+        "TriggerRegisterEnterRegion(In,G,null)",
+        "TriggerRegisterEnterRegion(In,G,Filter(function broken))",
+    ) + r#"
+function broken takes nothing returns boolean
+local integer bad=1/0
+return true
+endfunction
+function fail takes nothing returns nothing
+call SetUnitPosition(A,64.0,16.0)
+endfunction
+"#;
+    let (mut vm, a, _) = open_map(&map);
+    let error = vm.call("fail", &[]).unwrap_err();
+    assert!(error.message.contains("zero"), "{error:?}");
+    let host = &mut vm.host().inner;
+    assert_eq!(host.executed_unit(a).unwrap().position, Some([64., 16.]));
+    assert_eq!(host.native("GetFilterUnit", &[]).unwrap(), Value::Null);
+    assert_eq!(
+        host.native("GetTriggeringTrigger", &[]).unwrap(),
+        Value::Null
+    );
+    assert!(host.take_fired_event().is_none());
+}
+
+#[test]
+fn region_events_keep_both_patrol_crossings_within_one_projection() {
+    for pathing in [true, false] {
+        let (mut vm, unit, _) = open();
+        let (Value::Handle(enter), Value::Handle(leave)) = (vm.global("In"), vm.global("Out"))
+        else {
+            panic!("triggers")
+        };
+        let host = &mut vm.host().inner;
+        host.native(
+            "SetUnitPathing",
+            &[Value::Handle(unit), Value::Bool(pathing)],
+        )
+        .unwrap();
+        let Value::Real(speed) = host
+            .native("GetUnitMoveSpeed", &[Value::Handle(unit)])
+            .unwrap()
+        else {
+            panic!("move speed")
+        };
+        assert_eq!(
+            host.native(
+                "IssuePointOrder",
+                &[
+                    Value::Handle(unit),
+                    Value::Str("delta".into()),
+                    Value::Real(64.0),
+                    Value::Real(16.0),
+                ]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        let until = host.timer_game_time().unwrap() + 100.0 / f64::from(speed);
+        tick(&mut vm, until);
+        let host = &mut vm.host().inner;
+        assert!(host.executed_unit(unit).unwrap().position.unwrap()[0] < 48.0);
+        assert_eq!(host.poll_region_events(&mut 1000).unwrap(), 0);
+        for trigger in [enter, leave] {
+            let event = host.take_fired_event().expect("patrol crossing");
+            assert_eq!(event.trigger, trigger);
+            assert_eq!(event.subject.unit, Some(unit));
+        }
+        assert!(host.take_fired_event().is_none());
+    }
 }

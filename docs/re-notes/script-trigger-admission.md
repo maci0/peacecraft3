@@ -447,3 +447,308 @@ message `"A"`) registered and called neither getter in this run. The next
 refusal was `UnitSetUsesAltIcon` (`Scripts\Blizzard.j:4270`). See the later
 [alternate icon note](unit-alt-icon.md) for the supported unit state and
 remaining presentation gap.
+
+## Removing trigger conditions
+
+`with_trigger_conditions` now validates the optional selected-source declarations
+for `TriggerRemoveCondition(trigger, triggercondition)` and
+`TriggerClearConditions(trigger)`, both returning nothing. Programs that omit
+these declarations retain their existing add-condition support.
+
+Removal retires the registration token on the shared arena. Clear retires all
+live condition registrations owned by the supplied trigger, including repeated
+associations with one wrapper. Subsequent trigger evaluations and event delivery
+omit those records. The live registration count decreases, so the condition
+budget admits replacement records. Shared arena capacity still bounds all tokens,
+including retired ones, and tokens are never reused. The wrapper survives removal
+and may be destroyed separately once no retained registration names it.
+
+Synthetic tests cover the owned VM's add/evaluate/remove/evaluate and
+add/clear/evaluate paths, ownership rejection without mutation, repeated clear,
+stale registrations, shared-wrapper retention, capacity reuse and declaration
+validation. This implements the API's condition-list edits as recreation behavior.
+It does not establish native exceptional-input behavior or native timing. Null,
+wrong-family, stale removal and foreign-owner removal refuse contextually.
+Prepared delivery records retain diagnostic callback snapshots. Published
+sessions now use live registration traversal, as described below.
+Explicit `TriggerEvaluate` now uses the selected runtime's pending-registration
+traversal described below. Queued-event mutation remains unverified.
+
+Validation for this change used Rust/Cargo 1.100.0 with `RUSTFLAGS=-Dwarnings`:
+`cargo test -p pcx-play --lib --locked` passed 3,321 tests with 163 explicit
+ignores. Strict library/test Clippy and the `wasm32-unknown-unknown` library
+build passed. These are synthetic/runtime-library checks, with no original
+client or renderer launched. Local build-source and artifact receipts are in
+`.scratch/goal-runtime-receipts/`.
+
+## Removing trigger actions
+
+Trigger admission now validates optional selected-source declarations for
+`TriggerRemoveAction(trigger, triggeraction)` and
+`TriggerClearActions(trigger)`, both returning nothing. Their presence requires
+matching signatures and the same source as `CreateTrigger`. A remove declaration
+also validates the authored `triggeraction` ancestry. Omitted declarations keep
+these operations unsupported.
+
+Removal retires one registration owned by the supplied live trigger. Clear
+retires all action registrations owned by that trigger, including duplicate
+callbacks. Surviving registrations retain their order. Retired tokens are never
+reused and still count against shared arena capacity. The live action budget
+admits replacements after removal. Read-only action lookup rejects retired
+records, while script aliases retain their declared handle family.
+
+Synthetic VM tests cover removal before `TriggerExecute`, registration after
+removal, repeated clear, independent owners and later timed-event delivery.
+Invalid calls and foreign ownership refuse before mutating records or capacity.
+Null, stale and wrong-family inputs remain explicit refusals. These implement
+condition-list and action-list editing as recreation behavior. Native
+exceptional inputs and edits to already queued events still require
+original-runtime qualification. Explicit condition evaluation now uses the
+traversal described below; dispatched actions continue to own their function list.
+
+`DestroyTrigger` also retires that owner's action and condition registrations.
+This releases their live registration capacity and wrapper references without
+recycling tokens. Previously, destroying a trigger left those references behind,
+so later explicit wrapper cleanup refused and registration budgets stayed full.
+The regression first reproduced that refusal. Its VM execution now checks that
+the already dispatched action tail survives self-destruction, wrapper cleanup
+succeeds, and a second trigger can reuse the released action/condition capacity.
+The later event-filter cleanup below releases remaining subscription wrapper references.
+
+Validation used Rust/Cargo 1.100.0 and `RUSTFLAGS=-Dwarnings`. The full
+`pcx-play` library suite passed 3,326 tests with 163 explicit ignores. Strict
+native library/test Clippy, formatting and the `wasm32-unknown-unknown` library
+build passed. No original client or renderer was launched. Local receipts,
+including failed test attempts and the final dependency/artifact closure, are
+in `.scratch/goal-action-cleanup/`.
+
+
+## Destroyed trigger subscription filters
+
+Destroying a trigger now detaches the retained filter identities from its
+player-unit, range and region subscriptions. Another trigger that shares the
+wrapper continues to retain it. Explicit wrapper destruction succeeds after the
+last owner is destroyed. Event records and their issued tokens remain retained
+under the existing event-budget contract, so neither event counts nor shared
+arena counts decrease. Previously, dead owners kept the wrapper named forever.
+
+Range and region polling omit destroyed owners before resolving filters or
+world data. A removed region belonging only to destroyed triggers therefore
+cannot turn a later poll into a region-family error. Disabled live owners keep
+their existing membership tracking. Previously prepared range entries retain
+resolved callback functions and preserve their context and lifetime recheck.
+These are recreation ownership and polling fixes. Native exceptional inputs and
+callback-time subscription changes remain unqualified.
+
+The ownership matrix covers all three filtered subscription families and two
+owners sharing one wrapper. The range test uses normal script registration,
+checks the refusal while live, successful cleanup after destruction, a prepared
+entry's retained function, suppressed trigger execution and empty later polls.
+The region regression uses real synthetic constructors, destroys both owners,
+removes the region, and verifies that polling is empty with retained counts intact.
+
+Validation used Rust/Cargo 1.100.0 with `RUSTFLAGS=-Dwarnings`. The full
+`pcx-play` library suite passed 3,328 tests with 163 explicit ignores. Strict
+native library/test Clippy, formatting and the `wasm32-unknown-unknown` library
+build passed. Original-client and renderer tests were outside this run. Local
+build-source and artifact receipts are in `.scratch/goal-event-cleanup/`.
+
+## Controlled callback-time observations
+
+Two isolated Wine runs of selected build 9231 (executable SHA-256
+`3f2ed0120d80578bf07e4423296dade1adfb959d59a2d20a7584224559570eed`)
+repeated the following synthetic explicit-call results. Removing the next action
+from the first callback still ran both actions in order. Clearing actions from
+the first callback also preserved the already dispatched tail. This supports the
+current action snapshot for these cases, without qualifying arbitrary additions,
+nested execution, sleeping callbacks or automatic delivery.
+
+Condition snapshots differ. A first condition that cleared all registrations and
+returned true prevented the second callback and made `TriggerEvaluate` return
+false. A follow-up first condition that removed only the next registration also
+prevented that callback and returned false overall. Controls established that an
+empty trigger evaluated true, a single true callback ran and evaluated true, and
+a false callback followed by a true callback ran both in order and evaluated
+false. Ordinary false results therefore do not short-circuit this list.
+
+The selected-image evaluation fold at `0x4fa290` fetches the next list link before
+calling a predicate, treats a missing predicate as false, and continues folding
+rather than stopping at the first false return. The former function-only
+snapshot called removed predicates and omitted newly reachable predicates. The pending-registration traversal below replaces it for
+explicit evaluation. Published queued/range/region sessions now share that cursor
+as described below.
+Private scripts, map copies, traces and disassembly remain in
+`.scratch/goal-native-geometry-reference-2/` and
+`.scratch/goal-native-geometry-reference-3/`. This is controlled modified-map
+observation under Wine, not native Windows or full tick parity.
+
+## Explicit condition traversal
+
+A follow-up 40-row modified-map run repeated the prior 24 observations and
+extended the same selected executable's explicit-call controls. Removing the
+current registration preserved its already selected successor and did not force
+a false result. Removing the pending successor suppressed that callback and all
+later registrations, making the result false. Removing a later registration
+before its predecessor selected it skipped only that registration and preserved
+a true result from surviving callbacks.
+
+Appending from a callback with a live pending successor made the new tail
+reachable during the same evaluation. Appending when no successor was pending
+did not run that new tail until a subsequent evaluation. Clearing and then
+appending while an old successor was pending still ended false without calling
+the appended predicate. Nested explicit evaluation completed both traversals in the observed order. The original-client traces and exact
+probe source are retained in `.scratch/goal-native-condition-reference-4/`;
+the container was stopped and its process ID verified zero after capture.
+
+`TriggerEvaluate` now retains the owner and pending registration's arena index
+instead of copying predicate functions. It selects the successor before calling
+each live predicate. A retired pending registration ends the fold false. For a
+live registration, scanning forward through the shared arena finds the next
+live registration of that same owner, including newly appended records. The
+non-recycling arena preserves these identities, and scans advance monotonically
+within each evaluation. No second registration store or linked-list allocation
+is introduced. False predicate returns continue through the list and accumulate
+with logical AND. Each nested evaluation owns its pending index and previous
+trigger context. Callback errors still unwind through the existing abort path.
+
+A synthetic owned-VM regression runs 13 observed cases, checking the boolean
+result, exact callback trace, nested result and restored trigger context. Actions
+retain their existing thread/snapshot behavior. Timer sessions now use the shared
+cursor as described below. Synchronous, queued and range delivery now share it as well. Independent native
+qualification of other event families remains incomplete.
+Destroying a trigger during a predicate, malformed arguments and native
+exceptional inputs remain unqualified. Region-cell geometry, exceptional arithmetic and full tick parity
+remain incomplete; finite corner clamping is now source-backed.
+
+A second regression grows the live condition list until the existing registration
+budget refuses, checks the exact executed callback count and retained records,
+and verifies context unwinding and recovery by clearing the list and evaluating
+again. Validation passed 3,339 `pcx-play` library tests with 163 explicit ignores,
+strict library/test Clippy, formatting, whitespace checks, the native production
+library build and the `wasm32-unknown-unknown` production library build. Rust/Cargo
+1.100.0 used `RUSTFLAGS=-Dwarnings` and the checkout-specific target directory.
+Source and dependency/artifact receipts remain in
+`.scratch/goal-condition-traversal/`. These checks do not establish full tick parity.
+
+## Timer condition traversal and action selection
+
+A separate 26-row controlled modified-map probe fired 13 one-shot timer events
+in the same selected build 9231 executable. Every event recorded its condition
+trace and resulting action count. Empty and true-only condition lists ran the
+action; false followed by true ran both conditions and suppressed the action.
+Clearing, self-removal, pending/later removal, appending, clear-then-append and
+nested explicit evaluation produced the same traversal traces as the explicit
+probe. These are serial synthetic timer events under isolated Wine, not an
+unchanged campaign or native Windows tick comparison.
+
+Two additional cases qualify when actions are selected. Clearing actions inside
+a true predicate suppressed the original action. Appending an extra action
+inside a true predicate ran both the original action and the appended action
+in that firing. The old timer path prepared both function lists at expiry
+selection, so it missed these changes as well as condition-list mutations.
+
+Explicit evaluation and the published timer session now share one bounded
+`ConditionEvaluation` cursor. It stores the owner, pending arena registration
+and accumulated boolean result. Timer sessions create it when each retained
+owner actually begins, advance it after each predicate, and query the current
+action registrations only after conditions finish successfully. Once selected,
+actions still execute as an existing VM thread with their established snapshot
+and sleep behavior. Public expiry callback vectors remain preparation-time
+diagnostic snapshots; they are not execution lists for this session path.
+Event subscription selection and the direct timer-handler policy are unchanged.
+
+The published-session regression exercises all 13 observed cases through
+`advance_timers`, compares the exact condition trace and action count, and checks
+that trigger context is cleared afterward. The existing explicit traversal and
+registration-budget regressions also cover the shared cursor. Private native
+probe inputs and isolation/output receipts remain in
+`.scratch/goal-native-timer-conditions-5/`; build receipts remain in
+`.scratch/goal-timer-condition-traversal/`. The first session-fixture attempt
+omitted neutral-wrapper declarations and refused during setup; that failure is
+retained separately from the corrected session run.
+
+Synchronous delivery now shares the cursor, qualified by the gold-state probe
+below. Published queued/range/region sessions also use it, with the integration
+checks described below. Independent spatial-event native qualification remains
+incomplete. Periodic-event mutation, callback-time trigger destruction,
+subscription-list changes and cross-trigger interactions also need native
+qualification beyond these one-shot cases. Region geometry and exceptional arithmetic remain unresolved fidelity gaps.
+The finite rectangle movement cohort now has a matched source-backed replay.
+Finite rectangle corner clamping is now source-backed.
+
+Timer-session validation passed 3,340 `pcx-play` library tests with 163 explicit
+ignores, strict library/test Clippy, formatting, whitespace checks, and native
+and `wasm32-unknown-unknown` production library builds. Rust/Cargo 1.100.0 used
+`RUSTFLAGS=-Dwarnings` and the checkout-specific target directory. Dependency
+sources, features and artifact hashes are recorded in the private build closure.
+No full campaign, renderer or complete tick-parity claim follows from these checks.
+
+## Synchronous condition traversal
+
+Gold-state events now use the shared live cursor and fetch actions after the
+condition fold. The original-client cohort completed 52 records covering 13
+cases, including immediate observations before the setter's caller continued.
+See [player-state observation](player-state-event-observation.md#condition-list-mutations-during-synchronous-gold-events)
+for source identity, evidence scope and the reproduced failure.
+
+The synchronous frame stores either a pending filter or a condition cursor.
+It no longer concatenates a filter with copied condition functions or retains
+a pre-evaluation action vector. False filters still end the event immediately;
+false conditions accumulate while remaining live predicates run. Nested callback
+depth routing, action threads, sleeping actions, event context and the existing
+abort path remain in use. Events without callbacks continue through the existing
+queue loop without adding recursive delivery frames. Private validation receipts
+are in `.scratch/goal-state-condition-traversal/`.
+
+## Queued, range and region callback traversal
+
+Published boundary delivery now uses the shared live condition cursor for queued
+events and unit-range entries. Region polling feeds the same queued-event path.
+Filters keep their existing context and gate: a rejected filter skips conditions
+and actions. Condition results accumulate through all visited registrations;
+retired pending registrations terminate false under the selected runtime rule.
+Actions are read after successful condition evaluation and run through the
+existing VM thread path. Prepared `TriggerDelivery` callback vectors remain
+available for inspection and manual consumers, but published sessions do not use
+them as execution lists.
+
+Two regressions first reproduced distinct failures. The queued path stopped
+after a false condition instead of visiting the following true predicate. The
+range path ran the removed second condition after the first cleared its list.
+The published queued, range and region tests now reuse the 13-case timer/state
+mutation cohort. They compare exact callback traces and action counts through
+`advance_queued_events` and `advance_unit_ranges`, rather than simulating those
+loops in tests. Range tests also reject their filters and assert no condition or
+action effects. Region tests seed membership outside a synthetic rectangle,
+move a synthetic unit inside, and check restored filter/trigger context after
+delivery. This checks callback integration, not native region-cell coverage or
+range-entry geometry.
+
+Callback work remains bounded. Each queued entry pays one work unit, each
+executed filter or condition pays one, and selected actions beyond the first
+pay one each. The entry unit covers the first action. When actions run, this
+preserves the former unchanged-list cost of `max(action_count, 1)`. Rejected events no longer reserve
+work for action callbacks that never run. Range entries retain their poll and
+callback charges and pay for the current selected action list. Both paths
+reserve the full action cost before starting that thread, including actions
+appended by predicates. Budget failures retain earlier predicate effects, consume
+the failed queued event, clear context and do not replay it on retry. Boundary
+regressions check zero/one work, false-then-true predicate work, and an appended
+action that exceeds the remaining work.
+
+The callback traversal is derived from the selected executable observations in
+[explicit evaluation](#explicit-condition-traversal),
+[timer events](#timer-condition-traversal-and-action-selection) and
+[synchronous gold events](player-state-event-observation.md#condition-list-mutations-during-synchronous-gold-events).
+No new original-client run was launched for this integration. Independent native
+range/region mutation cohorts, cell geometry, exceptional arithmetic, subscription edits
+and callback-time trigger destruction remain qualification work. Private logs,
+including both reproduced failures, remain in
+`.scratch/goal-queued-condition-traversal/`.
+
+Boundary integration validation passed 3,346 `pcx-play` library tests with 163
+explicit ignores, strict library/test Clippy, formatting, whitespace checks, and
+native and `wasm32-unknown-unknown` production library builds. Rust/Cargo 1.100.0
+used `RUSTFLAGS=-Dwarnings` and the checkout-specific target directory. The
+private dependency/source/artifact closure links these results to this checkout.
+Full campaign, native spatial-event and tick-parity gates remain incomplete.

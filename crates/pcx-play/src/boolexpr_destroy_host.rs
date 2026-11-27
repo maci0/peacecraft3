@@ -3,9 +3,9 @@
 //! with `Identity`. Destroying a dead wrapper refuses too. Handles are never reused.
 //!
 //! A wrapper that a stored registration still names is not freed. The arena keeps the
-//! registration's handle, and the source API can remove some of them (`TriggerRemoveCondition`,
-//! `TriggerClearConditions`). Their host support is not implemented, so removal cannot
-//! release a wrapper here. Engine ownership of a retained wrapper is not verified, so
+//! registration's handle. `TriggerRemoveCondition` and `TriggerClearConditions`
+//! release trigger associations, allowing later wrapper destruction when no other
+//! registration names it. Engine ownership of a retained wrapper is not verified, so
 //! destruction refuses instead of guessing. Queued fired events keep the resolved
 //! callback, not the handle, so they do not block destruction.
 use super::super::{Entry, Error, Failure};

@@ -142,7 +142,7 @@ fn invalid_mutations_are_atomic_and_never_create_infinite_bounds() {
             "SetRect",
             vec![
                 rect.clone(),
-                Value::Int(3),
+                Value::Real(f32::NAN),
                 Value::Int(0),
                 Value::Int(1),
                 Value::Int(2),
@@ -169,7 +169,10 @@ fn invalid_mutations_are_atomic_and_never_create_infinite_bounds() {
             [-f32::MAX, -2.0, f32::MAX, 8.0]
         );
     }
-    assert!(host.native("Rect", &values([2.0, 0.0, 1.0, 3.0])).is_err());
+    assert!(
+        host.native("Rect", &values([f32::NAN, 0.0, 1.0, 3.0]))
+            .is_err()
+    );
     assert!(
         host.native("Rect", &[const { Value::Bool(false) }; 4])
             .is_err()
@@ -252,6 +255,8 @@ fn location_declarations() -> String {
 native Location takes real x, real y returns location\n\
 native MoveLocation takes location point, real x, real y returns nothing\n\
 native RemoveLocation takes location point returns nothing\n\
+native RectFromLoc takes location minimum, location maximum returns rect\n\
+native SetRectFromLoc takes rect area, location minimum, location maximum returns nothing\n\
 native MoveRectToLoc takes rect area, location point returns nothing\n\
 native Rect takes",
     )
@@ -393,4 +398,329 @@ fn world_bounds_need_a_valid_source_extent_and_capacity_before_allocation() {
         .with_world_bounds([-31., -47., 83., 109.])
         .is_err()
     );
+}
+
+#[test]
+fn owned_vm_creates_and_sets_rectangles_from_current_location_values() {
+    let script = "function exercise takes nothing returns boolean
+local location minimum = Location(-4.0, 2.0)
+local location maximum = Location(8.0, 10.0)
+local rect area = RectFromLoc(minimum, maximum)
+local rect shared = area
+local boolean copied
+call MoveLocation(minimum, 30.0, 40.0)
+call MoveLocation(maximum, 50.0, 60.0)
+set copied = GetRectMinX(area) == -4.0 and GetRectMaxY(area) == 10.0
+call SetRectFromLoc(shared, minimum, maximum)
+call RemoveLocation(minimum)
+call RemoveLocation(maximum)
+return copied and GetRectMinX(area) == 30.0 and GetRectMinY(area) == 40.0 and GetRectMaxX(area) == 50.0 and GetRectMaxY(area) == 60.0
+endfunction
+";
+    let mut vm = host_from(&location_declarations(), script, 16)
+        .with_rectangles()
+        .unwrap()
+        .with_locations()
+        .unwrap()
+        .into_vm();
+    assert_eq!(vm.call("exercise", &[]).unwrap(), Value::Bool(true));
+    let coverage = vm.host().native_coverage();
+    for name in ["RectFromLoc", "SetRectFromLoc"] {
+        assert!(coverage.supported.iter().any(|entry| entry == name));
+        assert!(!coverage.unsupported.iter().any(|entry| entry == name));
+    }
+}
+
+#[test]
+fn location_rectangle_failures_preserve_bounds_and_arena_capacity() {
+    let mut h = host_from(&location_declarations(), "", 16)
+        .with_rectangles()
+        .unwrap();
+    assert!(
+        h.native("RectFromLoc", &[Value::Null, Value::Null])
+            .unwrap_err()
+            .contains("locations not admitted")
+    );
+    let mut h = h.with_locations().unwrap();
+    let area = create(&mut h, [-3., -2., 3., 2.]);
+    let a = h
+        .native("Location", &[Value::Real(4.), Value::Real(2.)])
+        .unwrap();
+    let b = h
+        .native("Location", &[Value::Real(8.), Value::Real(10.)])
+        .unwrap();
+    let before = h.inner().handles();
+    for args in [
+        vec![],
+        vec![a.clone()],
+        vec![a.clone(), area.clone()],
+        vec![Value::Null, b.clone()],
+    ] {
+        assert!(h.native("RectFromLoc", &args).is_err());
+        let mut setter = vec![area.clone()];
+        setter.extend(args);
+        assert!(h.native("SetRectFromLoc", &setter).is_err());
+        assert_eq!(h.inner().handles(), before);
+        assert_eq!(read(&mut h, "GetRectMinX", &area), Value::Real(-3.));
+        assert_eq!(read(&mut h, "GetRectMaxY", &area), Value::Real(2.));
+    }
+    h.native("RemoveLocation", std::slice::from_ref(&b))
+        .unwrap();
+    assert!(
+        h.native("SetRectFromLoc", &[area.clone(), a.clone(), b.clone()])
+            .is_err()
+    );
+    assert!(h.native("RectFromLoc", &[a.clone(), b.clone()]).is_err());
+    h.native("RemoveRect", std::slice::from_ref(&area)).unwrap();
+    assert!(h.native("SetRectFromLoc", &[area, a, b]).is_err());
+    assert_eq!(h.inner().handles(), before);
+}
+
+#[test]
+fn location_rectangle_contracts_and_creation_limits_are_enforced() {
+    let declarations = location_declarations();
+    for (name, declaration) in [
+        (
+            "RectFromLoc",
+            "native RectFromLoc takes location minimum, location maximum returns rect",
+        ),
+        (
+            "SetRectFromLoc",
+            "native SetRectFromLoc takes rect area, location minimum, location maximum returns nothing",
+        ),
+    ] {
+        let wrong = declarations.replace(declaration, &format!("constant {declaration}"));
+        assert!(host_from(&wrong, "", 16).with_rectangles().is_err());
+        let foreign = declarations.replace(declaration, "");
+        let Err(error) = host_from(&foreign, declaration, 16).with_rectangles() else {
+            panic!("foreign location rectangle native admitted")
+        };
+        assert_eq!(error.native, name);
+        assert_eq!(error.failure, super::Failure::Source);
+        let mut unadmitted = host();
+        assert!(
+            unadmitted
+                .native(name, &[])
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
+    let mut h = host_from(&declarations, "", 3)
+        .with_rectangles()
+        .unwrap()
+        .with_locations()
+        .unwrap();
+    let a = h
+        .native("Location", &[Value::Real(1.), Value::Real(2.)])
+        .unwrap();
+    let b = h
+        .native("Location", &[Value::Real(3.), Value::Real(4.)])
+        .unwrap();
+    let area = h.native("RectFromLoc", &[a.clone(), b.clone()]).unwrap();
+    let before = h.inner().handles();
+    assert!(h.native("RectFromLoc", &[a.clone(), b.clone()]).is_err());
+    h.native("SetRectFromLoc", &[area, a, b]).unwrap();
+    assert_eq!(h.inner().handles(), before);
+}
+
+#[test]
+fn rectangle_creation_and_setters_normalize_each_corner_axis() {
+    let mut h = host_from(&location_declarations(), "", 32)
+        .with_rectangles()
+        .unwrap()
+        .with_locations()
+        .unwrap();
+    for corners in [
+        [-4., 2., 8., 10.],
+        [8., 10., -4., 2.],
+        [-4., 10., 8., 2.],
+        [8., 2., -4., 10.],
+    ] {
+        let direct = create(&mut h, corners);
+        let a = h.native("Location", &values(corners)[..2]).unwrap();
+        let b = h.native("Location", &values(corners)[2..]).unwrap();
+        let located = h.native("RectFromLoc", &[a.clone(), b.clone()]).unwrap();
+        let target = create(&mut h, [0.; 4]);
+        let alias = target.clone();
+        let before = h.inner().handles();
+        let mut args = vec![target.clone()];
+        args.extend(values(corners));
+        h.native("SetRect", &args).unwrap();
+        assert_eq!(read(&mut h, "GetRectMinX", &alias), Value::Real(-4.));
+        assert_eq!(read(&mut h, "GetRectMaxY", &alias), Value::Real(10.));
+        h.native("SetRectFromLoc", &[target.clone(), a, b]).unwrap();
+        assert_eq!(h.inner().handles(), before);
+        for rect in [direct, located, target] {
+            for (name, expected) in [
+                ("GetRectMinX", -4.),
+                ("GetRectMinY", 2.),
+                ("GetRectMaxX", 8.),
+                ("GetRectMaxY", 10.),
+            ] {
+                assert_eq!(read(&mut h, name, &rect), Value::Real(expected));
+            }
+        }
+    }
+}
+
+#[test]
+fn equal_rectangle_coordinates_keep_the_second_corners_bits() {
+    for (first, second) in [(0., -0.), (-0., 0.)] {
+        let actual = super::bounds(&values([first, first, second, second])).unwrap();
+        assert_eq!(actual.map(f32::to_bits), [second.to_bits(); 4]);
+    }
+}
+
+#[test]
+fn selected_world_clamping_covers_both_constructors_and_setters_without_mutating_locations() {
+    for inset in [3, 7] {
+        let declarations = format!(
+            "{}native GetWorldBounds takes nothing returns rect\nnative GetLocationX takes location l returns real\nnative GetLocationY takes location l returns real\n",
+            location_declarations()
+        );
+        let mut h = host_from(&declarations, "", 16)
+            .with_rectangles()
+            .unwrap()
+            .with_locations()
+            .unwrap()
+            .with_world_bounds([-20., -30., 100., 80.])
+            .unwrap()
+            .with_script_numeric(crate::script_numeric::rectangle_clamp::tests::policy(inset));
+        let low = h
+            .native("Location", &values([-50., -60., 0., 0.])[..2])
+            .unwrap();
+        let high = h
+            .native("Location", &values([150., 160., 0., 0.])[..2])
+            .unwrap();
+        let direct = create(&mut h, [150., 160., -50., -60.]);
+        let located = h
+            .native("RectFromLoc", &[high.clone(), low.clone()])
+            .unwrap();
+        let expected = [-20., -30., 100. - f32::from(inset), 80. - f32::from(inset)];
+        let Value::Handle(id) = direct.clone() else {
+            panic!("rect")
+        };
+        assert_eq!(h.rectangle_bounds(id).unwrap(), expected);
+        let Value::Handle(id) = located.clone() else {
+            panic!("rect")
+        };
+        assert_eq!(h.rectangle_bounds(id).unwrap(), expected);
+        let mut setter = vec![direct.clone()];
+        setter.extend(values([-50., -60., 150., 160.]));
+        h.native("SetRect", &setter).unwrap();
+        h.native(
+            "SetRectFromLoc",
+            &[located.clone(), low.clone(), high.clone()],
+        )
+        .unwrap();
+        for rect in [direct, located] {
+            assert_eq!(read(&mut h, "GetRectMinX", &rect), Value::Real(expected[0]));
+            assert_eq!(read(&mut h, "GetRectMaxY", &rect), Value::Real(expected[3]));
+        }
+        assert_eq!(h.native("GetLocationX", &[low]).unwrap(), Value::Real(-50.));
+        assert_eq!(
+            h.native("GetLocationY", &[high]).unwrap(),
+            Value::Real(160.)
+        );
+        let world = h.native("GetWorldBounds", &[]).unwrap();
+        assert_eq!(read(&mut h, "GetRectMaxX", &world), Value::Real(100.));
+        assert_eq!(read(&mut h, "GetRectMaxY", &world), Value::Real(80.));
+    }
+}
+
+#[test]
+fn selected_rectangle_clamping_requires_an_adequate_world_extent_before_allocation_or_mutation() {
+    let mut h = host();
+    let area = create(&mut h, [-2., -3., 4., 5.]);
+    let before = h.inner().handles();
+    h = h.with_script_numeric(crate::script_numeric::rectangle_clamp::tests::policy(7));
+    for admit_world in [false, true] {
+        if admit_world {
+            h = h.with_world_bounds([-1., -1., 1., 1.]).unwrap();
+        }
+        assert!(h.native("Rect", &values([0.; 4])).is_err());
+        let mut args = vec![area.clone()];
+        args.extend(values([0.; 4]));
+        assert!(h.native("SetRect", &args).is_err());
+        assert_eq!(h.inner().handles(), before);
+        assert_eq!(read(&mut h, "GetRectMinX", &area), Value::Real(-2.));
+        assert_eq!(read(&mut h, "GetRectMaxY", &area), Value::Real(5.));
+    }
+}
+
+#[test]
+fn selected_rectangle_motion_preserves_native_large_coordinate_round_trip_and_aliases() {
+    let declarations = format!(
+        "{}native GetLocationX takes location l returns real\n",
+        location_declarations()
+    );
+    let mut h = host_from(&declarations, "", 16)
+        .with_rectangles()
+        .unwrap()
+        .with_locations()
+        .unwrap()
+        .with_script_numeric(crate::script_numeric::rectangle_motion::tests::policy(0.5));
+    let direct = create(&mut h, [-4., 2., 8., 10.]);
+    let located = create(&mut h, [-4., 2., 8., 10.]);
+    let alias = direct.clone();
+    let target = h
+        .native(
+            "Location",
+            &[Value::Real(10000000.), Value::Real(10000000.)],
+        )
+        .unwrap();
+    let before = h.inner().handles();
+    h.native(
+        "MoveRectTo",
+        &[
+            direct.clone(),
+            Value::Real(10000000.),
+            Value::Real(10000000.),
+        ],
+    )
+    .unwrap();
+    h.native("MoveRectToLoc", &[located.clone(), target.clone()])
+        .unwrap();
+    h.native("MoveRectTo", &[alias, Value::Real(1.25), Value::Real(2.75)])
+        .unwrap();
+    h.native(
+        "MoveLocation",
+        &[target.clone(), Value::Real(1.25), Value::Real(2.75)],
+    )
+    .unwrap();
+    h.native("MoveRectToLoc", &[located.clone(), target.clone()])
+        .unwrap();
+    assert_eq!(h.inner().handles(), before);
+    for rect in [direct, located] {
+        for (name, expected) in [
+            ("GetRectMinX", -6.),
+            ("GetRectMinY", -1.),
+            ("GetRectMaxX", 6.),
+            ("GetRectMaxY", 7.),
+            ("GetRectCenterX", 0.),
+            ("GetRectCenterY", 3.),
+        ] {
+            assert_eq!(read(&mut h, name, &rect), Value::Real(expected));
+        }
+    }
+    assert_eq!(
+        h.native("GetLocationX", &[target]).unwrap(),
+        Value::Real(1.25)
+    );
+}
+
+#[test]
+fn selected_rectangle_motion_refuses_unsupported_arithmetic_before_mutation() {
+    let mut h =
+        host().with_script_numeric(crate::script_numeric::rectangle_motion::tests::policy(0.5));
+    let rect = create(&mut h, [f32::MAX, 0., f32::MAX, 2.]);
+    assert!(
+        h.native(
+            "MoveRectTo",
+            &[rect.clone(), Value::Real(0.), Value::Real(0.)]
+        )
+        .is_err()
+    );
+    assert_eq!(read(&mut h, "GetRectMinX", &rect), Value::Real(f32::MAX));
+    assert_eq!(read(&mut h, "GetRectMaxY", &rect), Value::Real(2.));
 }

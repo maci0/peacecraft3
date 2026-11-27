@@ -80,8 +80,13 @@ struct TimerDelivery {
 enum TimerDeliveryPhase {
     MandatoryProjection,
     Trigger,
-    Conditions { next: usize, accepted: bool },
-    Actions { accepted: bool },
+    Conditions {
+        evaluation: crate::playercolor_host::ConditionEvaluation,
+        value: bool,
+    },
+    Actions {
+        accepted: bool,
+    },
     Handler,
     Complete,
 }
@@ -618,6 +623,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .ok_or(ScriptSessionError::NoSession)?
             .objects()
             .validate_timer_target(until)?;
+        let objects = self.host().ok_or(ScriptSessionError::NoSession)?.objects();
+        if objects.shared_vision_admitted() && objects.vision_revision().is_none() {
+            self.sample_admitted_vision()?;
+        }
         let mut delivered = 0;
         loop {
             self.host()
@@ -634,6 +643,10 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                     .ok_or(ScriptSessionError::NoSession)?
                     .objects()
                     .has_queued_mirror_events()
+                || self.host().is_some_and(|host| {
+                    host.objects().pending_native_physics().is_some()
+                        && host.objects().has_queued_region_events()
+                })
             {
                 let events = match self.advance_queued_events(*budget) {
                     Ok(events) => events,
@@ -958,41 +971,54 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                         .objects_mut()
                         .begin_timer_trigger(&delivery.expiry, trigger)?
                     {
+                        let owner = delivery.expiry.triggers()[trigger].trigger;
+                        let evaluation = active
+                            .vm
+                            .host()
+                            .inner
+                            .objects_mut()
+                            .trigger_condition_evaluation(owner)?;
                         self.timer_delivery_mut().phase = TimerDeliveryPhase::Conditions {
-                            next: 0,
-                            accepted: true,
+                            evaluation,
+                            value: true,
                         };
                     } else {
                         self.timer_delivery_mut().trigger += 1;
                     }
                 }
-                TimerDeliveryPhase::Conditions { next, accepted } => {
-                    let id = delivery.expiry.triggers()[trigger]
-                        .conditions
-                        .get(next)
-                        .copied();
+                TimerDeliveryPhase::Conditions {
+                    mut evaluation,
+                    value,
+                } => {
+                    let id = evaluation.advance(active.vm.host().inner.objects(), value)?;
                     if let Some(id) = id {
                         let ticket = self.callback_ticket(id)?;
                         let value = self.call_callback(&ticket, &[])?;
                         let Value::Bool(value) = value else {
                             return Err(TimerSessionError::ConditionResult { id });
                         };
-                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Conditions {
-                            next: next + 1,
-                            accepted: accepted & value,
-                        };
+                        self.timer_delivery_mut().phase =
+                            TimerDeliveryPhase::Conditions { evaluation, value };
                     } else {
-                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Actions { accepted };
+                        self.timer_delivery_mut().phase = TimerDeliveryPhase::Actions {
+                            accepted: evaluation.accepted,
+                        };
                     }
                 }
                 TimerDeliveryPhase::Actions { accepted } => {
                     if accepted {
-                        let actions = &delivery.expiry.triggers()[trigger].actions;
-                        for &id in actions {
+                        let owner = delivery.expiry.triggers()[trigger].trigger;
+                        let actions = active
+                            .vm
+                            .host()
+                            .inner
+                            .objects()
+                            .trigger_actions(owner, "timer trigger actions")?;
+                        for &id in &actions {
                             function_name(&active.context, id)?;
                         }
                         let first = actions.first().copied();
-                        active.vm.run_thread(actions).map_err(|error| {
+                        active.vm.run_thread(&actions).map_err(|error| {
                             execution_failure(&active.context, &mut active.vm, first, error)
                         })?;
                     }
@@ -1053,25 +1079,22 @@ fn drain_unit_ranges(
             let Some(trigger) = vm.host().inner.objects_mut().begin_unit_range_trigger()? else {
                 return Ok(false);
             };
-            let mut conditions_accepted = true;
-            for id in trigger.conditions {
-                let Value::Bool(accepted) = call_range_callback(context, vm, &mut work, id)? else {
-                    return Err(TimerSessionError::ConditionResult { id });
-                };
-                conditions_accepted &= accepted;
-            }
-            if !conditions_accepted {
+            if !evaluate_event_conditions(context, vm, trigger.trigger, &mut work)? {
                 return Ok(false);
             }
+            let actions = vm
+                .host()
+                .inner
+                .objects()
+                .trigger_actions(trigger.trigger, "range trigger actions")?;
             work = work
-                .checked_sub(trigger.actions.len())
+                .checked_sub(actions.len())
                 .ok_or(TimerSessionError::RangeBudget)?;
-            for &id in &trigger.actions {
+            for &id in &actions {
                 function_name(context, id)?;
             }
-            vm.run_thread(&trigger.actions).map_err(|error| {
-                execution_failure(context, vm, trigger.actions.first().copied(), error)
-            })?;
+            vm.run_thread(&actions)
+                .map_err(|error| execution_failure(context, vm, actions.first().copied(), error))?;
             Ok(true)
         })();
         vm.host().inner.objects_mut().finish_unit_range_entry();
@@ -1121,7 +1144,9 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
             .map(|events| delivered + events)
     }
 
-    /// Deliver already queued UI/script callbacks without polling world geometry or time.
+    /// Deliver queued callbacks without polling world geometry or time.
+    /// Work pays once per event, per filter/condition call, and per action after the first.
+    /// Prior callback effects remain on failure; the failed event is consumed and context clears.
     #[cfg_attr(
         feature = "profile-cpu",
         tracing::instrument(skip_all, target = "pcx_cpu", name = "simulation.events")
@@ -1130,7 +1155,66 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
         self.check_pending_projection()?;
         let active = self.active.as_mut().ok_or(ScriptSessionError::NoSession)?;
         let mut delivered = 0;
-        while let Some(fired) = active.vm.host().inner.objects_mut().take_fired_event() {
+        let mut ready = std::collections::VecDeque::new();
+        while let Some((fired, entry_paid, prepared)) = ready.pop_front().or_else(|| {
+            active
+                .vm
+                .host()
+                .inner
+                .objects_mut()
+                .take_fired_event()
+                .map(|event| (event, false, false))
+        }) {
+            if fired.region && !prepared {
+                let filtered = (|| -> Result<(), TimerSessionError> {
+                    let mut pending = Some(fired);
+                    while let Some(mut fired) = pending {
+                        let paid = fired.filter.is_some();
+                        if paid {
+                            work = work.checked_sub(1).ok_or(TimerSessionError::RangeBudget)?;
+                            let id = active
+                                .vm
+                                .host()
+                                .inner
+                                .objects_mut()
+                                .begin_queued_region_filter(fired)?;
+                            let result =
+                                call_range_callback(&active.context, &mut active.vm, &mut work, id);
+                            let retained = active
+                                .vm
+                                .host()
+                                .inner
+                                .objects_mut()
+                                .finish_queued_region_filter();
+                            let value = result?;
+                            fired = retained.expect("completed region predicate");
+                            let Value::Bool(accepted) = value else {
+                                return Err(TimerSessionError::ConditionResult { id });
+                            };
+                            if !accepted {
+                                pending = active.vm.host().inner.objects_mut().take_region_event();
+                                continue;
+                            }
+                            fired.filter = None;
+                        }
+                        ready.push_back((fired, paid, true));
+                        pending = active.vm.host().inner.objects_mut().take_region_event();
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = filtered {
+                    for (event, _, _) in ready.drain(..).rev() {
+                        active
+                            .vm
+                            .host()
+                            .inner
+                            .objects_mut()
+                            .restore_fired_event(event);
+                    }
+                    return Err(error);
+                }
+                continue;
+            }
             let Some(trigger) = active
                 .vm
                 .host()
@@ -1141,10 +1225,11 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                 continue;
             };
             let result = (|| -> Result<bool, TimerSessionError> {
-                work = work
-                    .checked_sub(trigger.actions.len().max(1))
-                    .ok_or(TimerSessionError::RangeBudget)?;
-                for id in fired.filter.into_iter().chain(trigger.conditions) {
+                // One entry credit also pays for the first action if this event runs any.
+                if !entry_paid {
+                    work = work.checked_sub(1).ok_or(TimerSessionError::RangeBudget)?;
+                }
+                if let Some(id) = fired.filter {
                     let Value::Bool(accepted) =
                         call_range_callback(&active.context, &mut active.vm, &mut work, id)?
                     else {
@@ -1154,23 +1239,76 @@ impl MapScriptSession<crate::map_startup_host::MapStartupHost> {
                         return Ok(false);
                     }
                 }
-                for &id in &trigger.actions {
+                if !evaluate_event_conditions(
+                    &active.context,
+                    &mut active.vm,
+                    trigger.trigger,
+                    &mut work,
+                )? {
+                    return Ok(false);
+                }
+                let actions = active
+                    .vm
+                    .host()
+                    .inner
+                    .objects()
+                    .trigger_actions(trigger.trigger, "queued trigger actions")?;
+                work = work
+                    .checked_sub(actions.len().saturating_sub(1))
+                    .ok_or(TimerSessionError::RangeBudget)?;
+                for &id in &actions {
                     function_name(&active.context, id)?;
                 }
-                active.vm.run_thread(&trigger.actions).map_err(|error| {
+                active.vm.run_thread(&actions).map_err(|error| {
                     execution_failure(
                         &active.context,
                         &mut active.vm,
-                        trigger.actions.first().copied(),
+                        actions.first().copied(),
                         error,
                     )
                 })?;
                 Ok(true)
             })();
             active.vm.host().inner.objects_mut().finish_fired_event();
-            delivered += usize::from(result?);
+            match result {
+                Ok(accepted) => delivered += usize::from(accepted),
+                Err(error) => {
+                    for (event, _, _) in ready.drain(..).rev() {
+                        active
+                            .vm
+                            .host()
+                            .inner
+                            .objects_mut()
+                            .restore_fired_event(event);
+                    }
+                    return Err(error);
+                }
+            }
         }
         Ok(delivered)
+    }
+}
+
+fn evaluate_event_conditions(
+    context: &Arc<ParsedMapContext>,
+    vm: &mut OwnedVm<OwnedLocalizedHost<crate::map_startup_host::MapStartupHost>>,
+    trigger: pcx_script::HandleId,
+    work: &mut usize,
+) -> Result<bool, TimerSessionError> {
+    let mut evaluation = vm
+        .host()
+        .inner
+        .objects()
+        .trigger_condition_evaluation(trigger)?;
+    let mut value = true;
+    loop {
+        let Some(id) = evaluation.advance(vm.host().inner.objects(), value)? else {
+            return Ok(evaluation.accepted);
+        };
+        let Value::Bool(accepted) = call_range_callback(context, vm, work, id)? else {
+            return Err(TimerSessionError::ConditionResult { id });
+        };
+        value = accepted;
     }
 }
 

@@ -24,14 +24,48 @@ pub(super) struct State {
 
 pub(super) struct DirectCall {
     previous: Option<HandleId>,
-    callbacks: Vec<FunctionId>,
-    next: usize,
-    evaluate: bool,
-    accepted: bool,
+    evaluation: ConditionEvaluation,
 }
 
-/// Callback snapshot from one arena. The session executes it in its existing VM.
-/// shortcut: callback-list edits apply on the next firing; qualify mid-firing edits before extending this policy.
+/// Pending registration selected before a predicate runs, not a function snapshot.
+#[derive(Clone, Copy)]
+pub(crate) struct ConditionEvaluation {
+    trigger: HandleId,
+    next: Option<usize>,
+    pub(crate) accepted: bool,
+}
+
+impl ConditionEvaluation {
+    pub(crate) fn trigger(&self) -> HandleId {
+        self.trigger
+    }
+
+    /// Pass true initially and each completed predicate's value thereafter.
+    pub(crate) fn advance(
+        &mut self,
+        host: &ObjectHost,
+        value: bool,
+    ) -> Result<Option<FunctionId>, Error> {
+        self.accepted &= value;
+        let Some(index) = self.next else {
+            return Ok(None);
+        };
+        if matches!(
+            host.inner.arena.get(index),
+            Some(Entry::DeadTriggerCondition)
+        ) {
+            self.accepted = false;
+            self.next = None;
+            return Ok(None);
+        }
+        let function = host.trigger_condition_function(index, "trigger condition evaluation")?;
+        self.next = host.next_trigger_condition(self.trigger, index + 1);
+        Ok(Some(function))
+    }
+}
+
+/// Preparation-time callbacks for inspection or manual delivery.
+/// Published timer, synchronous, queued and range delivery reselect live callbacks.
 #[derive(Debug)]
 pub struct TriggerDelivery {
     pub trigger: HandleId,
@@ -194,6 +228,7 @@ impl ObjectHost {
                 self.trigger_enabled(*trigger)
                     .map_err(|e| self.inner.error(name, e.failure))?;
                 *self.inner.entry_mut(*trigger)? = Entry::DeadTrigger;
+                self.retire_trigger_callbacks(*trigger);
                 Ok(Value::Null)
             })()),
             "GetTriggeringTrigger" | "GetTriggerEventId" => Some(if args.is_empty() {
@@ -376,32 +411,11 @@ impl ObjectHost {
         };
         // Explicit calls validate identity but do not depend on automatic-event enablement.
         self.trigger_enabled(*trigger)?;
-        let evaluate = name == "TriggerEvaluate";
-        // shortcut: list edits become visible on the next call; qualify mid-call edits before extending this policy.
-        let mut callbacks = Vec::new();
-        for entry in &self.inner.arena {
-            let function = match entry {
-                Entry::TriggerCondition(record) if evaluate && record.trigger == *trigger => {
-                    match self.inner.entry(record.condition)? {
-                        Entry::Condition { .. } => {
-                            self.condition_callback(record.condition)?.function
-                        }
-                        Entry::Filter { .. } => self.filter_callback(record.condition)?.function,
-                        _ => return Err(self.inner.error(name, Failure::WrongFamily)),
-                    }
-                }
-                Entry::TriggerAction {
-                    trigger: owner,
-                    function,
-                } if !evaluate && *owner == *trigger => *function,
-                _ => continue,
-            };
-            callbacks
-                .try_reserve(1)
-                .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-            callbacks.push(function);
-        }
-        if !evaluate && !callbacks.is_empty() {
+        if name == "TriggerExecute" {
+            let callbacks = self.trigger_actions(*trigger, name)?;
+            if callbacks.is_empty() {
+                return Ok(Some(pcx_script::ScriptCall::Return(Value::Null)));
+            }
             // Actions run as one new thread; a sleep parks it and the caller continues.
             self.enter_spawned_thread();
             self.trigger_runtime
@@ -410,14 +424,12 @@ impl ObjectHost {
                 .active = Some(*trigger);
             return Ok(Some(pcx_script::ScriptCall::Spawn(callbacks)));
         }
-        let state = self.trigger_runtime.as_mut().expect("checked runtime");
-        if callbacks.is_empty() {
-            return Ok(Some(pcx_script::ScriptCall::Return(if evaluate {
-                Value::Bool(true)
-            } else {
-                Value::Null
-            })));
-        }
+        let mut evaluation = self.trigger_condition_evaluation(*trigger)?;
+        let Some(function) = evaluation.advance(self, true)? else {
+            return Ok(Some(pcx_script::ScriptCall::Return(Value::Bool(
+                evaluation.accepted,
+            ))));
+        };
         if self.callbacks.len() >= pcx_script::eval::MAX_CALL_DEPTH as usize {
             return Err(self
                 .inner
@@ -426,16 +438,70 @@ impl ObjectHost {
         self.callbacks
             .try_reserve(1)
             .map_err(|_| self.inner.error(name, Failure::Capacity))?;
-        let first = callbacks[0];
+        let state = self.trigger_runtime.as_mut().expect("checked runtime");
         self.callbacks.push(NativeCallback::Trigger(DirectCall {
             previous: state.active,
-            callbacks,
-            next: 1,
-            evaluate,
-            accepted: true,
+            evaluation,
         }));
         state.active = Some(*trigger);
-        Ok(Some(pcx_script::ScriptCall::Call(first)))
+        Ok(Some(pcx_script::ScriptCall::Call(function)))
+    }
+
+    pub(crate) fn trigger_condition_evaluation(
+        &self,
+        trigger: HandleId,
+    ) -> Result<ConditionEvaluation, Error> {
+        self.trigger_enabled(trigger)?;
+        Ok(ConditionEvaluation {
+            trigger,
+            next: self.next_trigger_condition(trigger, 0),
+            accepted: true,
+        })
+    }
+
+    pub(crate) fn trigger_actions(
+        &self,
+        trigger: HandleId,
+        name: &str,
+    ) -> Result<Vec<FunctionId>, Error> {
+        let mut actions = Vec::new();
+        for entry in &self.inner.arena {
+            if let Entry::TriggerAction {
+                trigger: owner,
+                function,
+            } = entry
+                && *owner == trigger
+            {
+                actions
+                    .try_reserve(1)
+                    .map_err(|_| self.inner.error(name, Failure::Capacity))?;
+                actions.push(*function);
+            }
+        }
+        Ok(actions)
+    }
+
+    fn next_trigger_condition(&self, trigger: HandleId, start: usize) -> Option<usize> {
+        self.inner
+            .arena
+            .iter()
+            .enumerate()
+            .skip(start)
+            .find_map(|(index, entry)| {
+                matches!(entry, Entry::TriggerCondition(record) if record.trigger == trigger)
+                    .then_some(index)
+            })
+    }
+
+    fn trigger_condition_function(&self, index: usize, name: &str) -> Result<FunctionId, Error> {
+        let Some(Entry::TriggerCondition(record)) = self.inner.arena.get(index) else {
+            return Err(self.inner.error(name, Failure::Identity));
+        };
+        match self.inner.entry(record.condition)? {
+            Entry::Condition { .. } => Ok(self.condition_callback(record.condition)?.function),
+            Entry::Filter { .. } => Ok(self.filter_callback(record.condition)?.function),
+            _ => Err(self.inner.error(name, Failure::WrongFamily)),
+        }
     }
 
     pub(super) fn continue_trigger_call(
@@ -443,37 +509,39 @@ impl ObjectHost {
         value: Value,
     ) -> Result<pcx_script::ScriptCall, Error> {
         let name = "trigger callback";
-        let state = self
-            .trigger_runtime
-            .as_mut()
-            .ok_or_else(|| self.inner.error(name, Failure::TriggerState("no runtime")))?;
-        let Some(NativeCallback::Trigger(frame)) = self.callbacks.last_mut() else {
+        if self.trigger_runtime.is_none() {
+            return Err(self.inner.error(name, Failure::TriggerState("no runtime")));
+        }
+        let Value::Bool(accepted) = value else {
+            return Err(self.inner.error(
+                name,
+                Failure::TriggerState("condition did not return boolean"),
+            ));
+        };
+        let Some(NativeCallback::Trigger(frame)) = self.callbacks.last() else {
             return Err(self
                 .inner
                 .error(name, Failure::TriggerState("no active call")));
         };
-        if frame.evaluate {
-            let Value::Bool(accepted) = value else {
-                return Err(self.inner.error(
-                    name,
-                    Failure::TriggerState("condition did not return boolean"),
-                ));
-            };
-            frame.accepted &= accepted;
-        }
-        if let Some(&next) = frame.callbacks.get(frame.next) {
-            frame.next += 1;
-            return Ok(pcx_script::ScriptCall::Call(next));
+        let mut evaluation = frame.evaluation;
+        let next = evaluation.advance(self, accepted)?;
+        let Some(NativeCallback::Trigger(frame)) = self.callbacks.last_mut() else {
+            unreachable!("active trigger call");
+        };
+        frame.evaluation = evaluation;
+        if let Some(function) = next {
+            return Ok(pcx_script::ScriptCall::Call(function));
         }
         let Some(NativeCallback::Trigger(frame)) = self.callbacks.pop() else {
             unreachable!("active trigger call");
         };
-        state.active = frame.previous;
-        Ok(pcx_script::ScriptCall::Return(if frame.evaluate {
-            Value::Bool(frame.accepted)
-        } else {
-            Value::Null
-        }))
+        self.trigger_runtime
+            .as_mut()
+            .expect("checked runtime")
+            .active = frame.previous;
+        Ok(pcx_script::ScriptCall::Return(Value::Bool(
+            frame.evaluation.accepted,
+        )))
     }
 
     pub(super) fn abort_native_callbacks(&mut self) {

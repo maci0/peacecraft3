@@ -319,8 +319,18 @@ fn selected_campaign_opening_trace_repeats_without_player_input() {
             .map(|(id, unit)| (id, unit.definition.rawcode, unit.vitals.unwrap().life))
             .expect("local source hero");
         objects.enable_combat_trace(8192);
+        startup.step_clock(1).expect("first combat projection");
+        assert!(
+            startup
+                .session
+                .host()
+                .unwrap()
+                .objects()
+                .vision_readiness()
+                .is_ok()
+        );
         startup
-            .step_clock(3840)
+            .step_clock(3839)
             .expect("bounded opening projection");
         let passive = startup.session.global("ALLIANCE_PASSIVE").unwrap();
         let objects = startup.session.host().unwrap().objects();

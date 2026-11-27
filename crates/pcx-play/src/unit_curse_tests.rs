@@ -826,6 +826,23 @@ fn heading_session_with_script(
         ..Config::default()
     });
     host.admit_unit_curses().unwrap();
+    if host
+        .player_context()
+        .unwrap()
+        .scripts
+        .program()
+        .natives()
+        .get("CreateRegion")
+        .is_some()
+    {
+        host = host
+            .with_regions(crate::playercolor_host::RegionBudget {
+                max_regions: 1,
+                max_rect_additions: 1,
+                max_events: 1,
+            })
+            .unwrap();
+    }
     let context = Arc::clone(host.player_context().unwrap());
     let world =
         SelectedMapNeutralHost::try_new(context.clone(), neutral::slots_rule(301, -3, 9), host)
@@ -4364,6 +4381,193 @@ fn counter_explicit_target_orders_keep_registered_ids_and_retire_on_stop_death_o
             if loss != "death" {
                 assert_eq!(objects.current_unit_order(caster).unwrap(), 0);
             }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires PCX_WAR3_EXE; selected arithmetic with synthetic units and physics cadence"]
+fn physical_region_filter_stops_motion_before_the_next_physics_update() {
+    const SCRIPT: &str = r#"
+native GetPlayerNeutralPassive takes nothing returns integer
+native GetPlayerNeutralAggressive takes nothing returns integer
+native GetBJMaxPlayers takes nothing returns integer
+native GetBJPlayerNeutralVictim takes nothing returns integer
+native GetBJPlayerNeutralExtra takes nothing returns integer
+native SetUnitPathing takes unit u, boolean on returns nothing
+native RegionUnsupported takes nothing returns nothing
+type region extends agent
+native CreateRegion takes nothing returns region
+native RegionAddRect takes region g, rect r returns nothing
+native TriggerRegisterEnterRegion takes trigger t, region g, boolexpr f returns event
+globals
+boolean RegionFault=false
+boolean RegionStopBefore=false
+integer RegionFilters=0
+integer RegionActions=0
+real RegionStopX=0.0
+real RegionBeforePhysics=-1.0
+real RegionBetweenPhysics=-1.0
+endglobals
+function RegionStop takes nothing returns boolean
+if GetFilterUnit()!=H then
+return false
+endif
+set RegionFilters=RegionFilters+1
+set RegionStopX=GetUnitX(H)
+if RegionFault then
+call RegionUnsupported()
+endif
+call IssueImmediateOrder(H,"beta")
+return true
+endfunction
+function RegionAction takes nothing returns nothing
+set RegionActions=RegionActions+1
+endfunction
+function HeadingWatch takes nothing returns nothing
+local region g=CreateRegion()
+local trigger t=CreateTrigger()
+call RegionAddRect(g,Rect(24.0,0.0,56.0,32.0))
+call TriggerRegisterEnterRegion(t,g,Filter(function RegionStop))
+call TriggerAddAction(t,function RegionAction)
+call SetUnitPathing(H,false)
+endfunction
+function RegionArmStopBefore takes nothing returns nothing
+set RegionStopBefore=true
+endfunction
+function RegionFaultOn takes nothing returns nothing
+set RegionFault=true
+endfunction
+function RegionObserveBefore takes nothing returns nothing
+set RegionBeforePhysics=GetUnitX(H)
+if RegionStopBefore then
+call IssueImmediateOrder(H,"beta")
+endif
+endfunction
+function RegionObserveBetween takes nothing returns nothing
+set RegionBetweenPhysics=GetUnitX(H)
+endfunction
+function RegionMove takes nothing returns boolean
+call TimerStart(CreateTimer(),0.0625,false,function RegionObserveBefore)
+call TimerStart(CreateTimer(),0.1875,false,function RegionObserveBetween)
+return IssuePointOrder(H,"gamma",112.0,16.0)
+endfunction
+"#;
+    for (fault, early_stop) in [(false, false), (true, false), (false, true)] {
+        let (mut session, unit, _) =
+            heading_session_with_script(SCRIPT, Some("0"), Some("0"), "fly", |host| host);
+        if early_stop {
+            let arm = session
+                .context()
+                .unwrap()
+                .scripts
+                .program()
+                .function_id("RegionArmStopBefore")
+                .unwrap();
+            session.call_function(arm, &[]).unwrap();
+        }
+        if fault {
+            let arm = session
+                .context()
+                .unwrap()
+                .scripts
+                .program()
+                .function_id("RegionFaultOn")
+                .unwrap();
+            session.call_function(arm, &[]).unwrap();
+        }
+        let move_order = session
+            .context()
+            .unwrap()
+            .scripts
+            .program()
+            .function_id("RegionMove")
+            .unwrap();
+        let initial = session
+            .host()
+            .unwrap()
+            .objects()
+            .executed_unit(unit)
+            .unwrap()
+            .position
+            .unwrap()[0];
+        assert_eq!(
+            session.call_function(move_order, &[]).unwrap(),
+            Value::Bool(true)
+        );
+        crate::campaign_host::advance_paced_tick(
+            &mut session,
+            std::time::Duration::from_micros(62500),
+            0.,
+            100,
+        )
+        .unwrap();
+        assert!(!session.host().unwrap().objects().has_queued_region_events());
+        assert_eq!(session.global("RegionFilters"), Some(Value::Int(0)));
+        let result = crate::campaign_host::advance_paced_tick(
+            &mut session,
+            std::time::Duration::from_secs(1),
+            0.,
+            100,
+        );
+        let Value::Real(before) = session.global("RegionBeforePhysics").unwrap() else {
+            panic!("timer coordinate")
+        };
+        assert!(before > initial);
+        assert_eq!(session.global("RegionFilters"), Some(Value::Int(1)));
+        let Value::Real(stopped) = session.global("RegionStopX").unwrap() else {
+            panic!("stop coordinate")
+        };
+        assert!((24.0..=56.0).contains(&stopped));
+        assert_eq!(
+            session
+                .host()
+                .unwrap()
+                .objects()
+                .executed_unit(unit)
+                .unwrap()
+                .position
+                .unwrap()[0],
+            stopped
+        );
+        if fault {
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("RegionUnsupported"), "{error}");
+            assert_eq!(session.global("RegionActions"), Some(Value::Int(0)));
+            assert!(
+                session
+                    .host()
+                    .unwrap()
+                    .objects()
+                    .pending_native_physics()
+                    .is_some()
+            );
+            assert!(
+                crate::campaign_host::advance_paced_tick(
+                    &mut session,
+                    std::time::Duration::from_secs(1),
+                    0.,
+                    100,
+                )
+                .is_err()
+            );
+            assert_eq!(session.global("RegionFilters"), Some(Value::Int(1)));
+        } else {
+            result.unwrap();
+            assert_eq!(
+                session.global("RegionBetweenPhysics"),
+                Some(Value::Real(stopped))
+            );
+            assert_eq!(session.global("RegionActions"), Some(Value::Int(1)));
+            assert_eq!(
+                session
+                    .host()
+                    .unwrap()
+                    .objects()
+                    .current_unit_order(unit)
+                    .unwrap(),
+                0
+            );
         }
     }
 }
